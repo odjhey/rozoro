@@ -73,15 +73,26 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 |---|---|
 | **Start** a task (blessed) | `rzr-start.sh <id> --body <file> --cwd <repo> [rzr-spawn flags]` — renders a durable brief, spawns, and links the session in one unskippable step |
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
-| **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
+| **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
+| **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* conversation (via `claude --resume`) as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
-| **Stop / reap** | `rzr-teardown.sh <id>` — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
+| **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
 | **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
+
+**Never conflate DATA and CONTROL.** `rzr-send.sh` is free text the crew reads
+and reasons about — a prompt or follow-up. `rzr-control.sh` is a lifecycle
+action from a closed verb list that the harness *executes* directly — it never
+passes through the agent as something to interpret. Sending a lifecycle command
+as chat text (hoping the agent "reads" it and stops) is the failure this split
+prevents. `rzr-control.sh` also fails closed: an unresolved task id or a pane
+that's already gone is refused loudly rather than guessed at, and every verb
+verifies its own postcondition (e.g. `interrupt` confirms the agent actually
+left `working`) instead of trusting the send call's exit code alone.
 
 ## Picking a crew
 
@@ -246,7 +257,8 @@ nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this 
 
 - Spawning in a repo the crew hasn't trusted shows Claude Code's trust dialog;
   `rzr-spawn` reports the pane `blocked`. Accept it once with
-  `rzr-send.sh <id> --key Enter`, then re-deliver the prompt.
+  `rzr-control.sh <id> key enter` (a key press is CONTROL, not chat text), then
+  re-deliver the prompt.
 - One live agent per unique name — always give each task a distinct `<id>`.
 - Only `claude` is fully wired for model/effort/rules; `codex`/`copilot`/`pi` are
   mapped from known invocations but unverified. An unmapped harness fails loudly.
