@@ -1,132 +1,177 @@
 # rozoro
 
 A deliberately tiny agent-session orchestrator over the [herdr](https://herdr.dev)
-terminal backend. It is a stripped-down demonstrator of the four mechanics at the
-core of firstmate, nothing more:
+terminal backend. A **driver** (the "control tower" — usually a powerful model in
+its own session) uses rozoro to **spawn, watch, message, and reap** a fleet of
+agent sessions. Each **task** is one herdr **tab** holding one **pane** running
+one agent. All state lives on disk under `$ROZORO_HOME` (default `~/.rozoro`), so
+killing the driver loses nothing — the next command reconciles from disk.
 
-1. **spawn sessions as tabs**
-2. **event-driven updates** (no polling)
-3. **send to sessions**
-4. **lockfile** (single-orchestrator safety)
+The core mechanics:
 
-Each **task** is one herdr **tab** holding one **pane** running one agent. All
-state lives on disk under `state/`, so killing the orchestrator loses nothing —
-the next command reconciles from `state/<id>.meta`.
+1. **spawn sessions as tabs** — one crew agent per tab, from a reusable preset
+2. **event-driven updates** — a push subscriber to herdr's status stream, no polling
+3. **send to sessions** — submit a follow-up, or drop keys to interrupt
+4. **lockfile** — single-driver safety around the spawn mutation
 
-This is a scratch harness for exploring the mechanism. It is NOT firstmate: no
-worktrees, no delivery modes, no supervision policy, no merge authority. Grow
-those in only if you decide to.
+## rozoro is a spawner, not a manager (the design boundary)
+
+rozoro is intentionally dumb. It does **not** know about worktrees, PR
+resolution, delivery, or merge authority — and it never will. Those are
+**repo-specific** and belong to the **spawned agent**, which loads the target
+repo's own rules (`AGENTS.md`, skills, `CLAUDE.md`) from its `--cwd`. rozoro
+spawns "Resolve issue #NNN" and stays out of the way; the crew agent — and any
+harness-native subagents it spawns — does everything domain-specific.
+
+Consequently:
+
+- **Task prompts are passed verbatim.** rozoro never edits what you tell a crew
+  to do. The only thing it injects is a preset's standing `rules`, and only as an
+  *appended system prompt*, never into the task.
+- **The intelligence is the driver's.** "Read the PRs, pick a model by
+  complexity, assign, judge done" is the driver session using rozoro + `gh` as
+  tools. rozoro is the hands.
 
 ## Requirements
 
-- `herdr` 0.8.x on `PATH`, with a running server, and you running **inside** a
-  herdr session (so new tabs land in your workspace). Verify: `herdr tab list`.
+- `herdr` 0.8.x on `PATH`, a running server, and you running **inside** a herdr
+  session (so new tabs land in your workspace). Verify: `herdr tab list`.
 - `jq`
-- `bash` (the scripts are bash; your interactive shell can be anything)
+- `python3` (stdlib only) — for the event-stream watcher
+- `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
 
 ## The tools (`bin/`)
 
-| Command | Criterion | What it does |
+| Command | What it does |
+|---|---|
+| `fl-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
+| `fl-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
+| `fl-send.sh <id> <text>` | `herdr agent prompt` (submit); also `--key <name>` / `--text <literal>` for interrupts and unsubmitted composition; `--wait` blocks until settled |
+| `fl-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
+| `fl-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
+| `fl-list.sh` | known tasks + live agent state |
+| `fl-teardown.sh <id>` | close the tab, remove the record |
+
+`fl-lib.sh` is the shared library (paths, herdr invocation, meta, status,
+presets, lock); it is sourced, not run. `herdr-eventwait.py` is the raw-socket
+subscriber `fl-watch.sh` drives.
+
+## Crewmember presets
+
+A **preset** bundles *how* a crew agent is booted — harness, model, effort,
+permission mode, and standing `rules` — never *what* its task is. Presets are one
+JSON file per name under `$ROZORO_HOME/crew/<name>.json`:
+
+```json
+{
+  "harness": "claude",
+  "model": "sonnet",
+  "permission_mode": "auto",
+  "effort": "",
+  "rules": ["Open a draft PR and stop; never push."]
+}
+```
+
+- The built-in **`default`** (sonnet claude, `auto` permission, no rules) is
+  written on first use and reproduces `claude --model sonnet --permission-mode auto`.
+- Spawn from one with `fl-spawn.sh <id> --crew <name> …`.
+- **Precedence** for harness/model/effort/permission-mode: explicit flag > preset
+  > default. `rules` come only from the preset.
+- `rules` are **crew-behavioral** (e.g. "never push"), deliberately distinct from
+  **repo** rules, which the agent auto-loads from `--cwd`.
+
+**Harness mapping** (preset fields → the underlying binary's flags, via herdr's
+`agent start … -- <arg>` passthrough):
+
+| harness | maps to | notes |
 |---|---|---|
-| `fl-spawn.sh <id> [opts]` | 1 spawn as tab | `herdr tab create` → `herdr agent start` → optional first prompt; records `state/<id>.meta` |
-| `fl-watch.sh [--once] [id…]` | 2 event-driven | blocks on herdr's native `agent wait`, prints one line per state change, re-arms; zero polling |
-| `fl-send.sh <id> <text>` | 3 send | `herdr agent prompt` (submit); also `--key <name>` and `--text <literal>` |
-| `fl-lock.sh status\|acquire` | 4 lockfile | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
-| `fl-list.sh` | — | known tasks + live agent state |
-| `fl-teardown.sh <id>` | — | close the tab, remove the record |
+| `claude` | `--model --effort --permission-mode --append-system-prompt` | verified on this machine |
+| `codex`  | `--yolo --model <m>` | wired from the known invocation; not verified here |
+| `copilot`| `--model <m> --mode autopilot --allow-all` | wired; not verified here |
+| `pi`     | *(no flags)* | `pi` takes none; model/effort/rules ignored |
 
-`fl-lib.sh` is the shared library (paths, herdr invocation, meta, lock, status);
-it is sourced, not run.
+Only `claude` supports `effort` and `rules`; other harnesses warn and ignore
+them. An unmapped harness fails loudly rather than launching with wrong flags.
 
-### How each mechanism maps to herdr 0.8.2
+## Instructing rozoro (the control tower)
+
+The driver's whole vocabulary is small:
+
+| Trigger | Call |
+|---|---|
+| **Start** a task | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` |
+| **Steer / interrupt** | `fl-send.sh <id> "<text>"` · `fl-send.sh <id> --key Escape` |
+| **Stop** | `fl-teardown.sh <id>` |
+| *(sense, not trigger)* | `fl-watch.sh` · `fl-list.sh` · `fl_status_get` (disk `state/<id>.status`) |
+
+Put `bin/` on `PATH` (or drive it via the bundled skill) so the driver session
+can reach these from anywhere. Read crew state from the on-disk
+`state/<id>.status` (the watcher keeps it current) rather than blocking on
+`fl-watch`.
+
+## How each mechanism maps to herdr 0.8.2
 
 - **spawn/tab** — `herdr tab create --cwd … --label … --no-focus [--workspace <ws>]`
-  returns `.result.root_pane.pane_id` and `.result.tab.tab_id`. New tabs default
-  to the orchestrator's own workspace (`$HERDR_WORKSPACE_ID`) so they are sibling
-  tabs you can click to. The agent is then brought up with
-  `herdr agent start <kind> --kind <kind> --pane <id>`, which waits for interactive
-  readiness.
-- **event-driven** — `herdr agent wait <pane> --until <state>…` blocks until the
-  pane's agent reaches one of the named states, pushed from herdr's control
-  socket. `fl-watch.sh` arms it as an **edge detector**: "wait until state ≠
-  current" (`--until` every state except the current one), so it never returns
-  immediately and never busy-waits. On each event it prints and re-arms.
+  returns `.result.root_pane.pane_id` and `.result.tab.tab_id`; new tabs default
+  to the driver's own workspace so they are sibling tabs you can click to. The
+  agent comes up with `herdr agent start <id> --kind <harness> --pane <p> -- <profile args…>`.
+  The agent **name is the task id** (unique) — herdr rejects a reused live name,
+  so naming every crew after the harness would cap the fleet at one. `tab create`
+  can return before the pane's shell is ready, so `agent start` is retried on the
+  transient `agent_pane_busy`.
+- **event-driven** — `fl-watch.sh` subscribes to herdr's native
+  `pane.agent_status_changed` push stream over the control socket (via
+  `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
+  nothing to spin. Each edge is deduped against `state/<id>.status`; only real
+  changes are printed and persisted.
 - **send** — `herdr agent prompt <pane> <text>` types and submits atomically, and
   is rejected up front if the agent is blocked. `--key` / `--text` drop to
-  `pane send-keys` / `pane send-text` for interrupts and unsubmitted composition.
-- **lock** — atomic `mkdir state/.lock`, holder pid recorded; a holder whose pid
-  is dead is reclaimed on the next acquire so a crash never wedges the home.
-  `fl-spawn.sh` holds it around the create-tab/write-meta mutation.
+  `pane send-keys` / `pane send-text`.
+- **lock** — atomic `mkdir state/.lock`, holder pid recorded; a dead holder is
+  reclaimed on the next acquire. `fl-spawn.sh` holds it around the
+  create-tab/write-meta mutation.
 
 ## Configuration (env)
 
-- `ROZORO_HOME` / `FL_HOME` — orchestrator home (default: `~/.rozoro`). State goes
-  in `$ROZORO_HOME/state`, so it lives outside any checkout and survives a
-  restart. `ROZORO_HOME` wins; `FL_HOME` is the legacy name.
-- `FL_WORKSPACE` — herdr workspace for new tabs (default: `$HERDR_WORKSPACE_ID`).
+- `ROZORO_HOME` / `FL_HOME` — home (default `~/.rozoro`). Holds `state/` (task
+  meta, status, locks) and `crew/` (presets). `ROZORO_HOME` wins; `FL_HOME` is
+  the legacy name.
+- `FL_WORKSPACE` — herdr workspace for new tabs (default `$HERDR_WORKSPACE_ID`).
 - `FL_SESSION` — herdr `--session` name (default: the single local server).
 
-## Try it (acceptance walk-through)
-
-Run from inside a herdr session. `export FL_HOME=$(pwd)` first.
-
-**Plumbing only, no agent** (verifies spawn-tab + send + teardown mechanically):
+## Try it
 
 ```sh
-export FL_HOME=$(pwd)
-bin/fl-spawn.sh demo --no-agent           # a new tab labeled "demo" appears
-bin/fl-list.sh                            # demo … shell …
-bin/fl-send.sh demo --text 'echo hi'      # types into the tab (not submitted)
-bin/fl-teardown.sh demo                   # closes the tab, clears state
-```
+# 1. spawn a crew from the default preset (sonnet claude, auto permission):
+bin/fl-spawn.sh t1 --cwd /some/repo --prompt 'List the files in this repo, then stop.'
 
-**Full end-to-end with a real agent** (verifies the event-driven path):
+# …or override the model for a harder task:
+bin/fl-spawn.sh t2 --cwd /some/repo --model opus --prompt 'Resolve issue #42.'
 
-```sh
-export FL_HOME=$(pwd)
-# 1. spawn a real agent in a tab, with a first task:
-bin/fl-spawn.sh t1 --harness claude --cwd /some/repo \
-  --prompt 'list the files in this repo, then stop'
+# 2. watch the fleet event-driven (blocks, prints on each real transition):
+bin/fl-watch.sh t1 t2
+#    06:01:03  t1  working
+#    06:01:07  t1  done
 
-# 2. in another shell, watch it event-driven (blocks, prints on each transition):
-bin/fl-watch.sh t1
-#    e.g.  05:40:01  t1  working
-#          05:40:07  t1  idle       <- agent finished the turn
+# 3. send a follow-up; --wait blocks until it settles:
+bin/fl-send.sh t1 'Now count the lines in README.' --wait
 
-# 3. send a follow-up; --wait blocks until it settles again:
-bin/fl-send.sh t1 'now count the lines in README' --wait
-
-# 4. clean up:
+# 4. inspect presets / reap:
+bin/fl-crew.sh list
 bin/fl-teardown.sh t1
 ```
 
-**Lock (criterion 4):**
+## Verified on herdr 0.8.2 (macOS)
 
-```sh
-bin/fl-lock.sh status                     # free
-bin/fl-lock.sh acquire                    # hold it (Enter to release)
-# ...in another shell while it's held:
-bin/fl-lock.sh status                     # held by pid N since …
-bin/fl-spawn.sh x --no-agent              # waits up to 30s, then refuses if still held
-```
-
-## Verified vs. not
-
-Built and mechanically verified on herdr 0.8.2 (macOS):
-
-- ✅ tab create + pane/tab id parsing, meta on disk
-- ✅ `fl-send.sh --text` delivery into a pane
-- ✅ `fl-list.sh` state (`shell` vs `gone`)
-- ✅ `fl-teardown.sh` tab close
+- ✅ tab create + pane/tab id parsing, meta on disk; `agent start` with per-preset
+  passthrough (`-- --model/--effort/--permission-mode/--append-system-prompt`)
+- ✅ unique-name spawn → multiple live crew concurrently
+- ✅ push-stream watcher: real `working`/`idle`/`done` edges, deduped, no flood,
+  clean process teardown; concurrent multi-pane attribution
+- ✅ `fl-send.sh --text` delivery and `--wait` settle
+- ✅ presets: default reproduces sonnet+auto; `--model opus` override boots Opus
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
+- ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
-Left for the trying agent to exercise (needs a real agent, deliberately not run
-here):
-
-- ⏳ `herdr agent start <kind>` bringing up a real agent (arg shape assumed
-  `<name> --kind <kind> --pane <id>`; confirm against `herdr agent start --help`)
-- ⏳ `fl-watch.sh` transitions on a live agent (`working`↔`idle`/`done`/`blocked`)
-- ⏳ `fl-send.sh … --wait` settle behavior
-
-If `agent start` needs a different argument shape, that's the one line to adjust
-in `bin/fl-spawn.sh` (the `fl_herdr agent start …` call).
+Not verified here: `codex` (not installed), `copilot`, `pi` harness launches —
+their flag mappings are wired from known invocations but untested on this machine.
