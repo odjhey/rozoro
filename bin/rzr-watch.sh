@@ -12,8 +12,9 @@
 # older design re-armed `agent wait --until`, which is LEVEL-triggered and
 # returned instantly while a pane sat in a transient `unknown` state - a busy
 # wait. The push stream removes that failure mode by construction.) Each edge is
-# deduped against the last status on disk and only real changes are printed and
-# persisted to state/<id>.status, so the driver can reconcile crew state.
+# deduped against this watcher's OWN last-seen status (per-process, so overlapping
+# watchers on the same id don't suppress each other's --once break) and only real
+# changes are printed and mirrored to state/<id>.status for the driver to read.
 #
 # Wake line format (TAB-separated):
 #   <iso-time>  <id>  <status>     status in: idle working done blocked unknown gone
@@ -43,12 +44,16 @@ SOCK=$(rzr_socket_path)
 [ -n "$SOCK" ] && [ -S "$SOCK" ] || rzr_die "could not resolve herdr control socket (is the server running?)"
 
 # Parallel indexed arrays (bash-3.2 safe; no associative arrays): the watched
-# panes to subscribe to, and the id each pane maps back to when an edge arrives.
-declare -a IDS=() PANES=()
-id_for_pane() {  # <pane> -> id, or fail
+# panes to subscribe to, the id each pane maps back to when an edge arrives, and
+# this process's own last-seen status per pane (SEEN). SEEN is the dedup key for
+# printing and for the --once break: it is PER-PROCESS, so a sibling watcher
+# advancing the shared on-disk status can never suppress this process's break
+# (see the event loop below).
+declare -a IDS=() PANES=() SEEN=()
+idx_for_pane() {  # <pane> -> index into IDS/PANES/SEEN, or fail
   local i=0
   while [ "$i" -lt "${#PANES[@]}" ]; do
-    [ "${PANES[$i]}" = "$1" ] && { printf '%s' "${IDS[$i]}"; return 0; }
+    [ "${PANES[$i]}" = "$1" ] && { printf '%s' "$i"; return 0; }
     i=$((i + 1))
   done
   return 1
@@ -68,7 +73,7 @@ for id in "${WANT[@]}"; do
   case "$s" in
     gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2; continue ;;
   esac
-  IDS+=("$id"); PANES+=("$p")
+  IDS+=("$id"); PANES+=("$p"); SEEN+=("$s")
 done
 [ "${#PANES[@]}" -gt 0 ] || rzr_die "no live tasks to watch"
 
@@ -92,15 +97,23 @@ IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (s
 [ "$ack" = "@subscribed" ] || rzr_die "unexpected event subscriber output: $ack"
 
 # Event loop: block on the next pushed edge, print+persist only REAL changes.
-# A `<pane> <ws> <status> <agent>` line whose status equals the last one on disk
-# is a no-op (dedup key = disk status); print nothing, churn nothing. When the
-# subscriber exits (socket closed / all panes gone) the read returns EOF and we
-# stop.
+# A `<pane> <ws> <status> <agent>` line whose status equals THIS PROCESS's last
+# seen status for that pane (SEEN) is a no-op; print nothing, churn nothing. The
+# dedup key is deliberately per-process, NOT the shared on-disk status: with
+# overlapping watchers on the same id, the first to process an edge would flip
+# the disk file and (under --once) exit, and every sibling reading that already-
+# advanced disk value would see st==prev, `continue`, and block forever waiting
+# for a next edge that never comes. Keying on SEEN lets each watcher recognize
+# and break on the same real edge independently. We still mirror every real edge
+# to state/<id>.status (an idempotent, last-writer-wins token) so the driver can
+# reconcile crew state. When the subscriber exits (socket closed / all panes
+# gone) the read returns EOF and we stop.
 while IFS=$'\t' read -r pane ws st agent <&3; do
-  id=$(id_for_pane "$pane") || continue
-  prev=$(rzr_status_get "$id" 2>/dev/null || true)
-  [ "$st" = "$prev" ] && continue
+  i=$(idx_for_pane "$pane") || continue
+  [ "$st" = "${SEEN[$i]}" ] && continue
+  id="${IDS[$i]}"
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
+  SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
   [ "$ONCE" -eq 1 ] && break
 done
