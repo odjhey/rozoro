@@ -11,7 +11,9 @@ The core mechanics:
 
 1. **spawn sessions as tabs** — one crew agent per tab, from a reusable preset
 2. **event-driven updates** — a push subscriber to herdr's status stream, no polling
-3. **send to sessions** — submit a follow-up, or drop keys to interrupt
+3. **send to sessions** — a DATA-plane follow-up the agent reads, or a
+   CONTROL-plane verb (interrupt, cancel, a key press, stop, restart) the
+   harness executes — never conflated
 4. **lockfile** — single-driver safety around the spawn mutation
 
 ## What rozoro is for
@@ -115,13 +117,14 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `rzr-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
-| `rzr-send.sh <id> <text>` | `herdr agent prompt` (submit); also `--key <name>` / `--text <literal>` for interrupts and unsubmitted composition; `--wait` blocks until settled |
+| `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
+| `rzr-control.sh <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped task's *exact* conversation as a fresh tab via `claude --resume` (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
 | `rzr-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `rzr-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `rzr-list.sh` | known tasks + live agent state |
 | `rzr-doctor.sh` | preflight: deps (`herdr`/`jq`/`python3`), herdr server reachable, `bin/` on PATH, default preset — exits non-zero on a missing hard dep |
-| `rzr-teardown.sh <id>` | close the tab, remove the record (the `tasks/<id>/` folder survives) |
+| `rzr-teardown.sh <id> [--force]` | close the tab, remove the record (the `tasks/<id>/` folder survives); refuses if the recorded `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits) unless `--force` |
 
 `rzr-lib.sh` is the shared library (paths, herdr invocation, meta, status,
 presets, lock); it is sourced, not run. `herdr-eventwait.py` is the raw-socket
@@ -135,6 +138,11 @@ non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each tur
 crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
 and context accumulates across `rzr-send` rounds), and `session.json` (the resume
 link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
+
+That covers the task *record*; teardown separately guards the crew's actual
+work: it refuses to close a task whose recorded `cwd` has uncommitted,
+untracked, or unpushed changes, so a crew's real output is never discarded
+silently (`--force` overrides).
 
 ## Crewmember presets
 
@@ -180,10 +188,21 @@ The driver's whole vocabulary is small:
 | Trigger | Call |
 |---|---|
 | **Start** a task | `rzr-start.sh <id> --body <file> --cwd <repo> [--crew <preset>] [--model opus]` |
-| **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
+| **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
+| **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` |
-| **Stop** | `rzr-teardown.sh <id>` |
+| **Stop** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`; refuses on unlanded work in the crew's `cwd`, `--force` to discard anyway) |
 | *(sense, not trigger)* | `rzr-status.sh <id>` (handoff verdict) · `rzr-watch.sh` · `rzr-list.sh` · `rzr_status_get` (disk `state/<id>.status`) |
+
+**DATA vs CONTROL, and why it's split.** A crew must receive two clearly
+distinct kinds of message, never conflated: DATA is free text the agent reads
+and reasons about (`rzr-send.sh`); CONTROL is a lifecycle action from a closed
+verb list that the harness *executes* (`rzr-control.sh`) — never text the agent
+might interpret as chat. The failure this prevents: a lifecycle command
+arriving as chat the agent "reads" instead of the harness carrying out. Control
+verbs also fail closed on target resolution (an unresolved task/pane is refused
+loudly, never guessed at) and verify their own postcondition rather than
+trusting a herdr call's exit code alone.
 
 Put `bin/` on `PATH` (or drive it via the bundled skill) so the driver session
 can reach these from anywhere. Read crew state from the on-disk
@@ -233,12 +252,17 @@ rozoro status issue-42        # done → verify the result, then reap
 rozoro teardown issue-42      #   (tasks/issue-42/ survives teardown)
 ```
 
-**Steer or interrupt a live crew** — a follow-up is submitted; `--key Escape`
-interrupts a runaway turn:
+**Steer a live crew (DATA)** — a follow-up is submitted as text the agent reads:
 
 ```sh
 rozoro send issue-57 "Skip the refactor — smallest fix that closes the issue."
-rozoro send issue-57 --key Escape
+```
+
+**Interrupt a runaway turn (CONTROL)** — executed, never handed to the agent as
+chat; verifies the agent actually left `working` before reporting success:
+
+```sh
+rozoro control issue-57 interrupt
 ```
 
 **Dispatch a scout (investigation only, no PR)** — knowledge, not a change:
@@ -298,9 +322,17 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
   nothing to spin. Each edge is deduped against `state/<id>.status`; only real
   changes are printed and persisted.
-- **send** — `herdr agent prompt <pane> <text>` types and submits atomically, and
-  is rejected up front if the agent is blocked. `--key` / `--text` drop to
-  `pane send-keys` / `pane send-text`.
+- **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
+  atomically, and is rejected up front if the agent is blocked.
+- **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
+  `herdr agent send-keys <pane> <key>` (esc / ctrl+c / any named key); `stop`
+  reuses `rzr-teardown.sh`; `restart` composes teardown + `rzr-spawn.sh` under
+  the same id. Every verb confirms its result with
+  `herdr agent wait <pane> --until <states> --timeout <ms>` rather than trusting
+  the send's exit code alone. `restart` deliberately passes `--force` to
+  teardown's unlanded-work guard: teardown only drops the tab + state record,
+  never the working tree, so restart re-spawns into the *same* cwd with any
+  prior work still on disk — nothing is lost by skipping the guard here.
 - **lock** — atomic `mkdir state/.lock`, holder pid recorded; a dead holder is
   reclaimed on the next acquire. `rzr-spawn.sh` holds it around the
   create-tab/write-meta mutation.
@@ -327,8 +359,11 @@ bin/rzr-watch.sh t1 t2
 #    06:01:03  t1  working
 #    06:01:07  t1  done
 
-# 3. send a follow-up; --wait blocks until it settles:
+# 3. send a follow-up (DATA); --wait blocks until it settles:
 bin/rzr-send.sh t1 'Now count the lines in README.' --wait
+
+# 3b. …or interrupt a runaway turn (CONTROL) — executed, never read as chat:
+bin/rzr-control.sh t1 interrupt
 
 # 4. inspect presets / reap:
 bin/rzr-crew.sh list
@@ -342,7 +377,9 @@ bin/rzr-teardown.sh t1
 - ✅ unique-name spawn → multiple live crew concurrently
 - ✅ push-stream watcher: real `working`/`idle`/`done` edges, deduped, no flood,
   clean process teardown; concurrent multi-pane attribution
-- ✅ `rzr-send.sh --text` delivery and `--wait` settle
+- ✅ `rzr-send.sh` (DATA) delivery and `--wait` settle
+- ✅ `rzr-control.sh` (CONTROL) `interrupt`/`cancel`/`key`/`stop`/`restart`, each
+  against a live throwaway task, each verifying its own postcondition
 - ✅ presets: default reproduces sonnet+auto; `--model opus` override boots Opus
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
