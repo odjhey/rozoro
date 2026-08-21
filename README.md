@@ -121,7 +121,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `rzr-list.sh` | known tasks + live agent state |
 | `rzr-doctor.sh` | preflight: deps (`herdr`/`jq`/`python3`), herdr server reachable, `bin/` on PATH, default preset — exits non-zero on a missing hard dep |
-| `rzr-teardown.sh <id>` | close the tab, remove the record (the `tasks/<id>/` folder survives) |
+| `rzr-teardown.sh <id> [--force]` | close the tab, remove the record (the `tasks/<id>/` folder survives); refuses if the recorded `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits) unless `--force` |
 
 `rzr-lib.sh` is the shared library (paths, herdr invocation, meta, status,
 presets, lock); it is sourced, not run. `herdr-eventwait.py` is the raw-socket
@@ -135,6 +135,11 @@ non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each tur
 crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
 and context accumulates across `rzr-send` rounds), and `session.json` (the resume
 link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
+
+That covers the task *record*; teardown separately guards the crew's actual
+work: it refuses to close a task whose recorded `cwd` has uncommitted,
+untracked, or unpushed changes, so a crew's real output is never discarded
+silently (`--force` overrides).
 
 ## Crewmember presets
 
@@ -182,7 +187,7 @@ The driver's whole vocabulary is small:
 | **Start** a task | `rzr-start.sh <id> --body <file> --cwd <repo> [--crew <preset>] [--model opus]` |
 | **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` |
-| **Stop** | `rzr-teardown.sh <id>` |
+| **Stop** | `rzr-teardown.sh <id>` (refuses on unlanded work in the crew's `cwd`; `--force` to discard anyway) |
 | *(sense, not trigger)* | `rzr-status.sh <id>` (handoff verdict) · `rzr-watch.sh` · `rzr-list.sh` · `rzr_status_get` (disk `state/<id>.status`) |
 
 Put `bin/` on `PATH` (or drive it via the bundled skill) so the driver session

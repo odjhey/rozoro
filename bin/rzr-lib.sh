@@ -242,6 +242,24 @@ rzr_agent_status() {  # <pane>
   if rzr_herdr pane get "$1" >/dev/null 2>&1; then echo shell; else echo gone; fi
 }
 
+# --- unlanded-work guard (teardown safety) ---------------------------------
+# A crew's --cwd may hold work teardown would otherwise discard silently:
+# uncommitted/untracked changes, or commits with no pushed upstream. One reason
+# per line on stdout; nothing printed means clean, not a git repo, or gone.
+rzr_unlanded_reasons() {  # <cwd>
+  local cwd="$1" upstream ahead
+  [ -d "$cwd" ] || return 0
+  git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  [ -n "$(git -C "$cwd" status --porcelain 2>/dev/null)" ] && echo "uncommitted or untracked changes"
+  if upstream=$(git -C "$cwd" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
+    ahead=$(git -C "$cwd" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+    [ "$ahead" -gt 0 ] && echo "$ahead unpushed commit(s) (ahead of $upstream)"
+  else
+    git -C "$cwd" rev-parse HEAD >/dev/null 2>&1 && echo "no upstream tracking branch (commits may be unpushed)"
+  fi
+  return 0
+}
+
 # --- home lock (atomic mkdir, stale-pid reclaim) ---------------------------
 # Serializes mutating operations (spawn) so two orchestrators never race on the
 # same home. Read-only tools (list, watch) do not take it.

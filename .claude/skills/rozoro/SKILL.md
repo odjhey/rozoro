@@ -75,7 +75,7 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* conversation (via `claude --resume`) as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
-| **Stop / reap** | `rzr-teardown.sh <id>` |
+| **Stop / reap** | `rzr-teardown.sh <id>` — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
 | **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
@@ -203,6 +203,12 @@ answer itself, but whether the answer already exists.
      accepted (landed/merged, or the user explicitly signs off), or the user says
      to drop it. When unsure whether more is coming, leave it idle — an idle crew
      costs nothing; a prematurely reaped one costs a cold re-spawn.
+   - **Teardown itself refuses on unlanded work.** If the crew's `cwd` still has
+     uncommitted/untracked changes or unpushed commits, `rzr-teardown.sh` exits
+     with an error instead of closing the tab — the standard behavior only
+     verifying `done` on the handoff should not accidentally cover. Land the
+     work (or have the crew do so) and retry; `--force` is the explicit override
+     for a deliberate discard, not the default path.
 
    The `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
    even a reaped task is recoverable — but recovery is strictly worse than a crew
