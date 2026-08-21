@@ -1,3 +1,3 @@
 # Repository guidelines
 
-- Keep Git worktrees under `./.worktrees/`.
+- Keep Git worktrees for this repo under `./.worktrees/`.
