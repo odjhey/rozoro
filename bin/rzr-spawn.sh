@@ -8,16 +8,17 @@
 #               [--no-agent]
 #
 #   <id>        short task slug; names state/<id>.meta and the tab label
-#   --crew      crewmember preset to boot from (default: "default" = sonnet
-#               claude, auto permission, no rules). See rzr-crew.sh.
+#   --crew      crewmember preset to boot from (default: "default" =
+#               gpt-5.6-sol codex, high effort, auto permission, no rules).
+#               See rzr-crew.sh.
 #   --cwd       working directory for the tab (default: current dir). The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     tab label shown in herdr (default: the id)
-#   --harness   agent kind (overrides preset). Only `claude` is wired for
-#               model/effort/rules today; other kinds error until mapped.
-#   --model     model for the crew, e.g. sonnet|opus (overrides preset)
+#   --harness   agent kind (overrides preset). Claude and Codex are wired for
+#               model/effort; other kinds have more limited mappings.
+#   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
 #   --effort    reasoning effort: low|medium|high|xhigh|max (overrides preset)
-#   --permission-mode  claude permission mode, e.g. auto (overrides preset)
+#   --permission-mode  autonomous permission signal, e.g. auto (overrides preset)
 #   --prompt    initial task, submitted VERBATIM once the agent is ready
 #   --brief     file whose contents become the initial prompt (also verbatim)
 #   --no-agent  create the tab + pane at a bare shell only (no agent)

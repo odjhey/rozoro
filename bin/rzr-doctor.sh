@@ -6,8 +6,9 @@
 #
 # rozoro creates its own dirs lazily ($ROZORO_HOME/{state,crew,tasks}), so there
 # is nothing to "install" - this only verifies the preconditions a fresh machine
-# needs: the herdr/jq/python3 binaries, a reachable herdr server, bin/ on PATH,
-# and a visible default crew preset. Exits non-zero if a hard dep is missing.
+# needs: the herdr/jq/python3/codex binaries, a reachable herdr server, bin/ on
+# PATH, and a visible default crew preset. Exits non-zero if a hard dep is
+# missing.
 #
 # It does NOT source rzr-lib.sh up front: rzr-lib hard-fails when herdr/jq are
 # absent, which is exactly the case a doctor must report gracefully.
@@ -25,7 +26,7 @@ echo "  home: $RZR_HOME"
 echo "  bin:  $BIN"
 
 echo "dependencies:"
-for c in herdr jq python3; do
+for c in herdr jq python3 codex; do
   if command -v "$c" >/dev/null 2>&1; then pass "$c ($(command -v "$c"))"
   else fail "$c not found on PATH"; fi
 done

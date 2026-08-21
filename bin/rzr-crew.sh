@@ -9,8 +9,8 @@
 # A preset bundles HOW a crew agent is booted (harness, model, effort,
 # permission mode, standing rules) - never WHAT its task is. Presets are plain
 # JSON files under $ROZORO_HOME/crew/<name>.json; create or edit them by hand.
-# The built-in `default` (sonnet claude, auto permission, no rules) is written
-# on first use. See rzr-spawn.sh --crew.
+# The built-in `default` (gpt-5.6-sol codex, high effort, auto permission, no
+# rules) is written on first use. See rzr-spawn.sh --crew.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 

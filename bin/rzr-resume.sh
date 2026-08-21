@@ -7,25 +7,25 @@
 #
 #   <id>        a task previously started (its tasks/<id>/session.json must exist)
 #   --cwd       working dir for the tab (default: the cwd recorded at link time)
-#   --permission-mode  claude permission mode for the resumed run (default: auto)
-#   --model     model override for the resumed run (default: claude's own)
+#   --permission-mode  autonomous permission signal for the run (default: auto)
+#   --model     model override for the resumed run (default: session's own)
 #   --label     tab label (default: the id)
 #   --prompt    a follow-up delivered VERBATIM once the resumed agent is ready
 #   --brief     file whose contents become that follow-up (also verbatim)
 #
 # Why this exists: a `done` crew that was reaped still holds its whole
-# conversation on disk (the Claude transcript linked in tasks/<id>/session.json).
+# conversation on disk (the harness transcript linked in tasks/<id>/session.json).
 # When follow-up arrives, re-spawning a NEW crew starts cold — it has to rebuild
-# context from handoff.md. `resume` instead relaunches `claude --resume <uuid>`
-# in a new pane, so the crew picks up with full memory of what it already did.
+# context from handoff.md. `resume` instead relaunches the recorded Claude or
+# Codex session in a new pane, so the crew picks up with full memory.
 #
 # Prefer NOT closing over closing-and-resuming: if the crew is still live, use
 # rzr-send.sh (same live context) rather than tearing down and resuming. This
 # verb is for the case where teardown already happened.
 #
-# Only `claude` is supported (resume is a claude feature). The task must NOT be
-# currently tracked — a live agent already owns the unique name; resume is for a
-# reaped task whose name is free again.
+# Claude and Codex sessions are supported. The task must NOT be currently tracked
+# — a live agent already owns the unique name; resume is for a reaped task whose
+# name is free again.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -56,7 +56,10 @@ SESS="$(rzr_task_dir "$ID")/session.json"
 UUID="$(jq -r '.session_id // empty' "$SESS" 2>/dev/null)"
 [ -n "$UUID" ] || rzr_die "$SESS has no session_id — cannot resume; start '$ID' fresh instead"
 HARNESS="$(jq -r '.harness // "claude"' "$SESS" 2>/dev/null)"
-[ "$HARNESS" = "claude" ] || rzr_die "resume supports only claude (this task is '$HARNESS'); relaunch it your own way"
+case "$HARNESS" in
+  claude|codex) ;;
+  *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
+esac
 CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
@@ -66,14 +69,10 @@ if [ -n "$BRIEF" ]; then
   PROMPT="$(cat "$BRIEF")"
 fi
 
-# `claude --resume` bakes in the ORIGINAL system prompt and does NOT re-apply
-# --append-system-prompt[-file] (verified), so the handoff protocol the fresh
-# crew got as a system prompt is not in force on resume. Its only surviving copy
-# is a stale user turn buried in the transcript, which the crew reliably ignores
-# — that's why a resumed crew answers but writes no handoff block, leaving
-# `rozoro status` blind. The user prompt is the one channel resume DOES honor, so
-# re-inject the protocol as a preamble to the follow-up (the follow-up itself is
-# preserved verbatim after the delimiter).
+# Re-inject the handoff protocol as a preamble to the follow-up. This is required
+# for Claude because `claude --resume` does not re-apply its original system
+# prompt, and keeps the contract explicit for Codex resumes too. The follow-up
+# itself remains verbatim after the delimiter.
 if [ -n "$PROMPT" ]; then
   rzr_render_handoff_protocol "$ID"
   HANDOFF="$(rzr_handoff_protocol_path "$ID")"
@@ -107,7 +106,7 @@ do_resume() {
   rzr_meta_set "$ID" workspace "${ws:-}"
   rzr_meta_set "$ID" cwd "$CWD"
   rzr_meta_set "$ID" crew "resumed"
-  rzr_meta_set "$ID" harness "claude"
+  rzr_meta_set "$ID" harness "$HARNESS"
   rzr_meta_set "$ID" model "${MODEL:-}"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   rzr_meta_set "$ID" session "$UUID"
@@ -115,12 +114,22 @@ do_resume() {
 
   echo "rzr: resuming '$ID' (session $UUID) -> tab ${tab:-?} pane $pane (cwd $CWD)"
 
-  # Passthrough to the underlying `claude`: resume the transcript, keep rozoro's
-  # standing auto-permission posture, and re-apply a model only if asked.
-  local -a pass=(--resume "$UUID")
-  [ -n "$PERMMODE" ] && pass+=(--permission-mode "$PERMMODE")
-  [ -n "$MODEL" ] && pass+=(--model "$MODEL")
-  local -a start=(agent start "$ID" --kind claude --pane "$pane" -- "${pass[@]}")
+  # Resume the transcript, keep rozoro's standing autonomous-permission posture,
+  # and re-apply a model only if asked.
+  local -a pass=() start=()
+  case "$HARNESS" in
+    claude)
+      pass=(--resume "$UUID")
+      [ -n "$PERMMODE" ] && pass+=(--permission-mode "$PERMMODE")
+      [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      ;;
+    codex)
+      pass=(resume "$UUID")
+      [ -n "$PERMMODE" ] && pass+=(--yolo)
+      [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      ;;
+  esac
+  start=(agent start "$ID" --kind "$HARNESS" --pane "$pane" -- "${pass[@]}")
 
   # Same transient-busy retry as spawn: `tab create` can return before the shell
   # is ready.
@@ -134,7 +143,7 @@ do_resume() {
   done
   if [ "$rc" -ne 0 ]; then
     rzr_meta_set "$ID" agent_start failed
-    rzr_die "herdr agent start (claude --resume) failed in pane $pane: $sout; the tab exists - inspect it, then 'rzr-teardown.sh $ID' or retry"
+    rzr_die "herdr agent start ($HARNESS resume) failed in pane $pane: $sout; the tab exists - inspect it, then 'rzr-teardown.sh $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
 

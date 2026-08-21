@@ -102,18 +102,25 @@ RZR_CREW="$RZR_HOME/crew"
 rzr_crew_path() { printf '%s/%s.json' "$RZR_CREW" "$1"; }
 rzr_crew_exists() { [ -f "$(rzr_crew_path "$1")" ]; }
 
-# Create the built-in `default` preset on first use: sonnet claude, no rules
-# (so the default crew is pure verbatim - nothing injected).
+# Create the built-in `default` preset on first use: gpt-5.6-sol codex at high
+# reasoning effort, with no rules. Migrate only the exact legacy built-in
+# sonnet preset; any user-customized default remains untouched.
 rzr_crew_ensure_default() {
   mkdir -p "$RZR_CREW"
   local f; f=$(rzr_crew_path default)
-  [ -f "$f" ] && return 0
+  if [ -f "$f" ]; then
+    jq -e '
+      type == "object" and length == 5 and
+      .harness == "claude" and .model == "sonnet" and
+      .permission_mode == "auto" and .effort == "" and .rules == []
+    ' "$f" >/dev/null 2>&1 || return 0
+  fi
   cat > "$f" <<'JSON'
 {
-  "harness": "claude",
-  "model": "sonnet",
+  "harness": "codex",
+  "model": "gpt-5.6-sol",
   "permission_mode": "auto",
-  "effort": "",
+  "effort": "high",
   "rules": []
 }
 JSON
@@ -139,18 +146,17 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 #
 # `permmode` is a generic "run autonomously" signal: when non-empty, claude
 # passes its literal value (--permission-mode <v>), codex uses --yolo, and
-# copilot uses --mode autopilot --allow-all. `effort` and the system prompt are
-# only expressible for claude today; other harnesses ignore them (rzr-spawn folds
-# the protocol into the delivered prompt for those, since they have no system
-# prompt channel).
+# copilot uses --mode autopilot --allow-all. `effort` maps to a native flag for
+# claude and to Codex's model_reasoning_effort config override. Harnesses without
+# a system-prompt channel get the protocol folded into the delivered prompt.
 #
 # The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
 # preset rules), delivered via --append-system-prompt-file. claude rejects
 # --append-system-prompt together with --append-system-prompt-file, so the two
 # must already be combined into this one file (rzr-spawn does that).
 #
-# Verified on this machine: claude. Wired from the operator's known invocations
-# but NOT verified here: codex (not installed), copilot, pi.
+# Verified on this machine: claude and Codex argument parsing. Wired from the
+# operator's known invocations but NOT verified here: copilot, pi.
 rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file>
   local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5"
   case "$harness" in
@@ -160,9 +166,10 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$permmode" ] && printf '%s\0%s\0' --permission-mode "$permmode"
       [ -n "$sysfile" ]  && printf '%s\0%s\0' --append-system-prompt-file "$sysfile"
       ;;
-    codex)  # codex --yolo --model <m> "prompt"
+    codex)  # codex --yolo --model <m> --config model_reasoning_effort=<e> "prompt"
       [ -n "$permmode" ] && printf '%s\0' --yolo
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
+      [ -n "$effort" ]   && printf '%s\0%s\0' --config "model_reasoning_effort=$effort"
       ;;
     copilot)  # copilot --model <m> --mode autopilot --allow-all "prompt"
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
