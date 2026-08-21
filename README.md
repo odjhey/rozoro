@@ -112,7 +112,8 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `rzr-render.sh <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
 | `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` (`claude --resume <id>`) via marker-grep; idempotent |
-| `rzr-status.sh <id>` | read the latest handoff `verdict` + whether a new block appeared (done vs needs-action; miss-detector) |
+| `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
+| `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `rzr-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
 | `rzr-send.sh <id> <text>` | `herdr agent prompt` (submit); also `--key <name>` / `--text <literal>` for interrupts and unsubmitted composition; `--wait` blocks until settled |
 | `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped task's *exact* conversation as a fresh tab via `claude --resume` (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |

@@ -76,7 +76,8 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 | **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* conversation (via `claude --resume`) as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `rzr-teardown.sh <id>` |
-| **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (the done-vs-needs-action signal; the miss-detector) |
+| **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
+| **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
 | **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
@@ -174,9 +175,13 @@ answer itself, but whether the answer already exists.
 4. On each edge, run `rzr-status.sh <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
    answer via `rzr-send.sh`; a `[same]`/no-new-block on an idle edge means the crew
-   ended a turn without reporting (e.g. backgrounded work) — nudge it. **`done` is
-   an invitation to review, not a signal to reap** — a done crew sits idle at ~0
-   cost, so leave it alive (see step 6).
+   ended a turn without reporting (e.g. backgrounded work) — nudge it. Status also
+   prints any **unresolved OPEN items** (an earlier `needs-action`/`blocked`/`failed`
+   or an unanswered `inputs-needed`): a `done` verdict with an OPEN list means the
+   crew finished *this* turn but an earlier question is still hanging — handle it,
+   then `rzr-ack.sh <id>` so it stops resurfacing. **`done` is an invitation to
+   review, not a signal to reap** — a done crew sits idle at ~0 cost, so leave it
+   alive (see step 6).
 5. Steer any crew that needs it with `rzr-send.sh`; the user can also click the tab
    and type directly. Also call `rzr-link.sh <id> <cwd>` here if the birth-time link
    was not yet captured (idempotent).
@@ -214,15 +219,22 @@ record that makes teardown non-lossy:
   a block before ending *every* turn, each carrying a `verdict:` line
   (`done | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
   tell "done" from "needs more input", and it accumulates across multiple `rzr-send`
-  rounds so context is never lost.
+  rounds so context is never lost. Because it is append-only, reading only the last
+  block would let a later `done` bury an earlier open question — so `rzr-status`
+  scans *all* blocks and keeps surfacing any OPEN item until you `rzr-ack` it (the
+  ack cursor `.acked-blocks` is separate from the miss-detector's `.seen-blocks` and
+  advances only on an explicit ack).
 - `session.json` — the resume link (`claude --resume <session_id>`), captured by
   `rzr-link` via marker-grep (concurrency-safe, unlike "newest file" when crews share
   a `--cwd`).
 
-The protocol is delivered *in the brief* (harness-neutral — no preset rules needed),
-but a turn-1 instruction decays, so the reliability comes from the loop: detect the
-miss with `rzr-status` (no new block on an idle edge) and nudge with `rzr-send`. The
-folder lives in `$ROZORO_HOME` (data), never in this repo (code).
+The protocol is delivered as the claude crew's **system prompt** (rendered per task
+to `tasks/<id>/handoff-protocol.md`, passed via `--append-system-prompt-file`; on
+resume it's re-injected into the follow-up prompt, since `claude --resume` doesn't
+re-apply system-prompt flags). A standing system rule is more durable than a turn-1
+instruction, but reliability still comes from the loop: detect a miss with
+`rzr-status` (no new block on an idle edge), surface buried opens the same way, and
+nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this repo.
 
 ## Gotchas
 
