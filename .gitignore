@@ -1,2 +1,6 @@
 # runtime state - task metadata, locks, event pipes
 state/
+
+# python bytecode cache
+__pycache__/
+*.pyc

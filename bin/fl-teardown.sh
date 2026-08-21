@@ -21,5 +21,5 @@ if [ "$KEEP" -eq 0 ] && [ -n "$TAB" ]; then
     && echo "fl: closed tab $TAB" \
     || echo "fl: warning: could not close tab $TAB (already gone?)" >&2
 fi
-rm -f "$(fl_meta_path "$ID")"
+rm -f "$(fl_meta_path "$ID")" "$(fl_status_path "$ID")"
 echo "fl: removed task '$ID'"

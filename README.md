@@ -1,4 +1,4 @@
-# firstmate-light
+# rozoro
 
 A deliberately tiny agent-session orchestrator over the [herdr](https://herdr.dev)
 terminal backend. It is a stripped-down demonstrator of the four mechanics at the
@@ -60,7 +60,9 @@ it is sourced, not run.
 
 ## Configuration (env)
 
-- `FL_HOME` — orchestrator home (default: the repo root). State goes in `$FL_HOME/state`.
+- `ROZORO_HOME` / `FL_HOME` — orchestrator home (default: `~/.rozoro`). State goes
+  in `$ROZORO_HOME/state`, so it lives outside any checkout and survives a
+  restart. `ROZORO_HOME` wins; `FL_HOME` is the legacy name.
 - `FL_WORKSPACE` — herdr workspace for new tabs (default: `$HERDR_WORKSPACE_ID`).
 - `FL_SESSION` — herdr `--session` name (default: the single local server).
 

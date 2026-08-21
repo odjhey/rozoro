@@ -17,7 +17,10 @@ set -euo pipefail
 
 FL_LIB_SRC="${BASH_SOURCE[0]}"
 FL_BIN="$(cd "$(dirname "$FL_LIB_SRC")" && pwd)"
-FL_HOME="${FL_HOME:-$(cd "$FL_BIN/.." && pwd)}"
+# Home for all on-disk state. Defaults to ~/.rozoro so the driver's state lives
+# outside any one checkout and survives a restart. Precedence: ROZORO_HOME (the
+# rozoro name) > FL_HOME (legacy) > default.
+FL_HOME="${ROZORO_HOME:-${FL_HOME:-$HOME/.rozoro}}"
 FL_STATE="$FL_HOME/state"
 mkdir -p "$FL_STATE"
 
@@ -41,6 +44,23 @@ fl_herdr() {  # <herdr args...>
 # herdr workspace so every task tab is a sibling you can click to (the flat
 # "tabs" layout). Override with FL_WORKSPACE.
 fl_workspace() { printf '%s' "${FL_WORKSPACE:-${HERDR_WORKSPACE_ID:-}}"; }
+
+# Path to the herdr control socket (for the native pane.agent_status_changed
+# push stream that fl-watch consumes). Resolves the named session's socket, or
+# the single local server's when FL_SESSION is unset.
+fl_socket_path() {
+  if [ -n "${FL_SESSION:-}" ]; then
+    herdr session list --json 2>/dev/null \
+      | jq -r --arg n "$FL_SESSION" '.sessions[]? | select(.name==$n) | .socket_path // empty' 2>/dev/null | head -1
+  else
+    herdr session list --json 2>/dev/null \
+      | jq -r '.sessions[0].socket_path // empty' 2>/dev/null | head -1
+  fi
+}
+
+# The raw-socket event subscriber (wire transport for fl-watch). Ships alongside
+# the bin/ scripts; requires python3 (stdlib only).
+fl_eventwait_py() { printf '%s/herdr-eventwait.py' "$FL_BIN"; }
 
 # --- task metadata (KEY=VALUE, one per line) -------------------------------
 fl_meta_path() { printf '%s/%s.meta' "$FL_STATE" "$1"; }
@@ -70,6 +90,27 @@ fl_task_ids() {  # list known task ids
 
 fl_pane_of() {  # <id> -> pane id, or fail
   fl_meta_get "$1" pane || fl_die "task '$1' has no recorded pane (spawn it first)"
+}
+
+# --- observed status (single token, on disk, atomic) -----------------------
+# The last agent status a watcher saw for a task, mirrored to disk so the DRIVER
+# can reconcile crew state without attaching its own watcher (fl_status_get).
+# Under the single-driver model there is one writer per file; the write is
+# atomic (temp + mv) and the value is an idempotent token, so even overlapping
+# watchers converge (last-writer-wins) with no torn reads and no lock needed.
+# This replaces the in-process associative-array state the watcher used to hold
+# (which also made it require bash 4+; disk state is bash-3.2 safe).
+fl_status_path() { printf '%s/%s.status' "$FL_STATE" "$1"; }
+
+fl_status_set() {  # <id> <status>
+  local f tmp; f=$(fl_status_path "$1"); tmp="$f.tmp.$$"
+  printf '%s\n' "$2" > "$tmp" && mv "$tmp" "$f"
+}
+
+fl_status_get() {  # <id> -> last observed status, or fail if never seen
+  local f; f=$(fl_status_path "$1")
+  [ -f "$f" ] || return 1
+  head -n 1 "$f"
 }
 
 # Live agent status of a pane. One of: idle working done blocked unknown
