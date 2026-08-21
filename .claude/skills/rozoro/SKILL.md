@@ -31,18 +31,21 @@ skills, `CLAUDE.md`) from its `--cwd`. So:
 
 ## Setup
 
-The tools live in `rozoro/bin` (this repo). Either add it to `PATH` or call by
-absolute path. Requires `herdr` (running server, and you inside a herdr session),
-`jq`, and `python3`. Verify the backend with `herdr tab list`.
+The `fl-*.sh` tools ship in their **own** repo's `bin/` (e.g. `~/proj/rozoro/bin`)
+— **not** inside this skill folder. On a set-up machine that `bin/` is already on
+`$PATH`, so you can call the scripts by bare name; otherwise add it to `PATH` or
+call by absolute path. Confirm with `command -v fl-spawn.sh`. Still requires
+`herdr` (running server, and you inside a herdr session), `jq`, and `python3`.
+Verify the backend with `herdr tab list`.
 
 ## Trigger vocabulary
 
 | Intent | Command |
 |---|---|
-| **Start** a task | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` |
+| **Start** a task | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>` for a multi-line prompt — write the body to a file, no shell escaping) |
 | **Steer / interrupt** | `fl-send.sh <id> "<text>"` · `fl-send.sh <id> --key Escape` |
 | **Stop / reap** | `fl-teardown.sh <id>` |
-| **Sense** (don't block) | read `state/<id>.status`, or `fl-list.sh`; `fl-watch.sh` for live edges |
+| **Sense** (don't block) | `fl-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `fl-list.sh` to poll · read `state/<id>.status` (written BY fl-watch) |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
@@ -68,10 +71,19 @@ Precedence: explicit flag > preset > default.
    a unique id, the repo `--cwd`, and the model/preset.
 2. `fl-spawn.sh` each task with a **verbatim, self-contained** prompt, e.g.
    `--prompt "Resolve issue #123."` The crew will follow that repo's own rules.
-3. **Do not block.** Poll `state/<id>.status` (the watcher keeps it current) or
-   run `fl-watch.sh <ids…>` in a background pane. `done`/`idle` means the agent
-   *ended a turn* — not that the task is correct or landed; inspect the result
-   (the pane, the repo, `gh`) before declaring success.
+   For any prompt that is long, multi-line, or contains quotes/backticks/`$`,
+   write the body to a file (the scratchpad, a tmp dir, or under
+   `$ROZORO_HOME`) and pass `--brief <file>` instead of `--prompt` — fl-spawn
+   reads the file verbatim, so you avoid wrangling shell escaping.
+3. **Do not sit in a poll loop.** Run `fl-watch.sh --once <ids>` as a
+   **background task** — it blocks on herdr's native `pane.agent_status_changed`
+   PUSH stream at ~0% CPU and returns (waking you, the driver) only on a real
+   edge; reconcile, then re-arm another `--once` if the crew is still live.
+   `fl-list.sh` polling is the fallback when no background waiter is available.
+   `state/<id>.status` is **produced by** `fl-watch` — it is not maintained by an
+   always-on daemon, and the file is absent until a watcher has run. Either way,
+   `done`/`idle` means the agent *ended a turn* — not that the task is correct or
+   landed; inspect the result (the pane, the repo, `gh`) before declaring success.
 4. Steer any crew that needs it with `fl-send.sh`; the user can also click the tab
    and type directly.
 5. `fl-teardown.sh <id>` when a task is finished and its result is captured.
@@ -87,3 +99,8 @@ Precedence: explicit flag > preset > default.
 - Concurrent crew in the **same** checkout will clobber each other — worktree
   isolation is the *crew's* job (via repo rules), so prefer repos/tasks whose
   rules handle it, or spawn against separate checkouts.
+- A crew can self-background its own long-running command (e.g. a `sleep`, a
+  build) and **end its turn early** — the edge to `done` fires before the work
+  is actually finished. The footer showing `1 shell`/`1 monitor` is the tell:
+  read the pane and steer with `fl-send.sh` to make it finish; don't assume
+  `done` means complete.
