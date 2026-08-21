@@ -192,22 +192,20 @@ can reach these from anywhere. Read crew state from the on-disk
 ### Launching the driver
 
 The driver is just a capable agent session with the rozoro skill in reach and a
-system prompt that keeps it in the control tower. Launch it **inside a herdr
-session**, from a repo whose skills path ships the skill (this repo's
-`.claude/skills/rozoro/` does):
+system prompt that keeps it in the control tower. That prompt is versioned in this
+repo at [`templates/watchtower.md`](templates/watchtower.md) — maintain it there,
+not inline. Launch the driver **inside a herdr session**, from a repo whose skills
+path ships the skill (this repo's `.claude/skills/rozoro/` does):
 
 ```sh
-claude --append-system-prompt "You are a rozoro control tower — the driver for a \
-fleet of coding agents. You orchestrate; you do not implement. Never edit code or \
-solve a task yourself: for any repo work, spawn a crew agent via the rozoro skill \
-and let it investigate and deliver. Dispatch eagerly — decide an id, the repo \
-(--cwd), and the task shape, then hand the work over on the default crew unless I \
-name another. Watch, steer, and reap the crew; report plain outcomes."
+claude --append-system-prompt-file templates/watchtower.md
 ```
 
-Keep the prompt short — the rozoro skill carries the detailed loop. The one idea
-it must anchor is the boundary: **the driver spawns and judges; the crew does the
-domain work.** (rozoro-the-tool is the dumb spawner; the driver is the judgment.)
+Editing `templates/watchtower.md` and committing it is how you evolve the driver's
+standing behavior; every watchtower booted from the file inherits the change. Keep
+it short — the rozoro skill carries the detailed loop. The one idea it must anchor
+is the boundary: **the driver spawns and judges; the crew does the domain work.**
+(rozoro-the-tool is the dumb spawner; the driver is the judgment.)
 
 ## Examples
 
