@@ -40,6 +40,22 @@ Consequently:
 - `python3` (stdlib only) — for the event-stream watcher
 - `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
 
+## Install
+
+There is nothing to build and no dir to create — `$ROZORO_HOME` (default
+`~/.rozoro`) and its `state/`, `crew/`, `tasks/` subdirs are created lazily on
+first use. To set up a machine:
+
+```sh
+git clone git@github.com:odjhey/rozoro.git
+export PATH="$PWD/rozoro/bin:$PATH"     # add to your shell rc to persist
+rozoro/bin/fl-doctor.sh                 # verify deps, herdr server, PATH, preset
+```
+
+`fl-doctor.sh` is the preflight — it checks the binaries, that the herdr server
+answers, that `bin/` is on PATH, and seeds the default crew preset. Green means
+you can `fl-start.sh` a task.
+
 ## The tools (`bin/`)
 
 | Command | What it does |
@@ -54,6 +70,7 @@ Consequently:
 | `fl-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `fl-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `fl-list.sh` | known tasks + live agent state |
+| `fl-doctor.sh` | preflight: deps (`herdr`/`jq`/`python3`), herdr server reachable, `bin/` on PATH, default preset — exits non-zero on a missing hard dep |
 | `fl-teardown.sh <id>` | close the tab, remove the record (the `tasks/<id>/` folder survives) |
 
 `fl-lib.sh` is the shared library (paths, herdr invocation, meta, status,
