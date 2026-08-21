@@ -102,40 +102,56 @@ RZR_CREW="$RZR_HOME/crew"
 rzr_crew_path() { printf '%s/%s.json' "$RZR_CREW" "$1"; }
 rzr_crew_exists() { [ -f "$(rzr_crew_path "$1")" ]; }
 
-# Create the built-in `default` preset on first use: gpt-5.6-sol codex at high
-# reasoning effort, with no rules. Migrate only the exact legacy built-in
-# sonnet preset; any user-customized default remains untouched.
-rzr_crew_ensure_default() {
-  mkdir -p "$RZR_CREW"
-  local f; f=$(rzr_crew_path default)
-  if [ -f "$f" ]; then
-    jq -e '
-      type == "object" and length == 5 and
-      .harness == "claude" and .model == "sonnet" and
-      .permission_mode == "auto" and .effort == "" and .rules == []
-    ' "$f" >/dev/null 2>&1 || return 0
-  fi
-  cat > "$f" <<'JSON'
+# The personal default file is authoritative when present. If it is absent,
+# resolve `default` to an in-memory fallback without creating or changing any
+# file under $RZR_HOME. Claude is the no-flag fallback; an explicit Codex harness
+# gets the lower-cost gpt-5.6-sol/low profile.
+rzr_crew_builtin_default() {
+  case "${1:-claude}" in
+    claude) cat <<'JSON'
 {
-  "harness": "codex",
-  "model": "gpt-5.6-sol",
+  "harness": "claude",
+  "model": "sonnet",
   "permission_mode": "auto",
-  "effort": "high",
+  "effort": "",
   "rules": []
 }
 JSON
+      ;;
+    codex) cat <<'JSON'
+{
+  "harness": "codex",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "",
+  "effort": "low",
+  "rules": []
+}
+JSON
+      ;;
+    *) jq -n --arg harness "$1" '{harness: $harness, model: "", permission_mode: "auto", effort: "", rules: []}' ;;
+  esac
+}
+
+rzr_crew_builtin_field() {  # <harness> <field>
+  rzr_crew_builtin_default "$1" | jq -r --arg k "$2" '.[$k] // empty'
+}
+
+rzr_crew_resolves() { rzr_crew_exists "$1" || [ "$1" = default ]; }
+
+rzr_crew_json() {  # <preset> -> configured JSON or built-in default JSON
+  local f; f=$(rzr_crew_path "$1")
+  if [ -f "$f" ]; then cat "$f"
+  elif [ "$1" = default ]; then rzr_crew_builtin_default claude
+  else return 1
+  fi
 }
 
 rzr_crew_field() {  # <preset> <field> -> value, or empty
-  local f; f=$(rzr_crew_path "$1")
-  [ -f "$f" ] || return 1
-  jq -r --arg k "$2" '.[$k] // empty' "$f" 2>/dev/null
+  rzr_crew_json "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null
 }
 
 rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
-  local f; f=$(rzr_crew_path "$1")
-  [ -f "$f" ] || return 1
-  jq -r '(.rules // []) | join("\n")' "$f" 2>/dev/null
+  rzr_crew_json "$1" | jq -r '(.rules // []) | join("\n")' 2>/dev/null
 }
 
 # Map a resolved profile to the launch args a harness expects AFTER the `--` in

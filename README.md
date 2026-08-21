@@ -98,7 +98,7 @@ rozoro doctor                           # verify deps, herdr server, PATH, prese
 ```
 
 `rozoro doctor` is the preflight — it checks the binaries, that the herdr server
-answers, that `bin/` is on PATH, and seeds the default crew preset. Green means
+answers, that `bin/` is on PATH, and the resolved default harness. Green means
 you can `rozoro start` a task.
 
 Two ways to call every command: the friendly dispatcher `rozoro <verb>` (or the
@@ -148,24 +148,27 @@ silently (`--force` overrides).
 
 A **preset** bundles *how* a crew agent is booted — harness, model, effort,
 permission mode, and standing `rules` — never *what* its task is. Presets are one
-JSON file per name under `$ROZORO_HOME/crew/<name>.json`:
+JSON file per name under `$ROZORO_HOME/crew/<name>.json`. For example, the
+personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 
 ```json
 {
-  "harness": "claude",
-  "model": "sonnet",
-  "permission_mode": "auto",
-  "effort": "",
-  "rules": ["Open a draft PR and stop; never push."]
+  "harness": "codex",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "",
+  "effort": "high",
+  "rules": []
 }
 ```
 
-- The built-in **`default`** (gpt-5.6-sol Codex, `high` effort, `auto`
-  permission, no rules) is written on first use. An untouched legacy Sonnet
-  default is migrated automatically; customized defaults are preserved.
+- `$ROZORO_HOME/crew/default.json` is authoritative when present. Rozoro never
+  creates, migrates, or rewrites it.
+- If that file is absent, the hardcoded fallback is Claude/Sonnet/`auto`.
+  Passing `--harness codex` instead selects gpt-5.6-sol/`low` with the harness's
+  normal permission behavior.
 - Spawn from one with `rzr-spawn.sh <id> --crew <name> …`.
 - **Precedence** for harness/model/effort/permission-mode: explicit flag > preset
-  > default. `rules` come only from the preset.
+  file > hardcoded harness fallback. `rules` come only from the preset file.
 - `rules` are **crew-behavioral** (e.g. "never push"), deliberately distinct from
   **repo** rules, which the agent auto-loads from `--cwd`.
 
@@ -351,11 +354,11 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 ## Try it
 
 ```sh
-# 1. spawn a crew from the default preset (gpt-5.6-sol codex, high effort):
+# 1. spawn from $ROZORO_HOME/crew/default.json (if configured):
 bin/rzr-spawn.sh t1 --cwd /some/repo --prompt 'List the files in this repo, then stop.'
 
-# …or override the model when you explicitly want one:
-bin/rzr-spawn.sh t2 --cwd /some/repo --model gpt-5.6-terra --prompt 'Resolve issue #42.'
+# With no default.json, explicitly select the Codex low fallback:
+bin/rzr-spawn.sh t2 --cwd /some/repo --harness codex --prompt 'Resolve issue #42.'
 
 # 2. watch the fleet event-driven (blocks, prints on each real transition):
 bin/rzr-watch.sh t1 t2
@@ -383,7 +386,7 @@ bin/rzr-teardown.sh t1
 - ✅ `rzr-send.sh` (DATA) delivery and `--wait` settle
 - ✅ `rzr-control.sh` (CONTROL) `interrupt`/`cancel`/`key`/`stop`/`restart`, each
   against a live throwaway task, each verifying its own postcondition
-- ✅ presets: default selects gpt-5.6-sol+high; explicit model overrides win
+- ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 

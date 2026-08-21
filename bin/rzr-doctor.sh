@@ -6,9 +6,8 @@
 #
 # rozoro creates its own dirs lazily ($ROZORO_HOME/{state,crew,tasks}), so there
 # is nothing to "install" - this only verifies the preconditions a fresh machine
-# needs: the herdr/jq/python3/codex binaries, a reachable herdr server, bin/ on
-# PATH, and a visible default crew preset. Exits non-zero if a hard dep is
-# missing.
+# needs: the base binaries, the resolved default harness, a reachable herdr
+# server, and bin/ on PATH. Exits non-zero if a hard dependency is missing.
 #
 # It does NOT source rzr-lib.sh up front: rzr-lib hard-fails when herdr/jq are
 # absent, which is exactly the case a doctor must report gracefully.
@@ -26,7 +25,7 @@ echo "  home: $RZR_HOME"
 echo "  bin:  $BIN"
 
 echo "dependencies:"
-for c in herdr jq python3 codex; do
+for c in herdr jq python3; do
   if command -v "$c" >/dev/null 2>&1; then pass "$c ($(command -v "$c"))"
   else fail "$c not found on PATH"; fi
 done
@@ -47,9 +46,14 @@ echo "default crew preset:"
 if command -v jq >/dev/null 2>&1 && command -v herdr >/dev/null 2>&1; then
   . "$BIN/rzr-lib.sh"           # safe now: both hard deps present
   set +e                       # rzr-lib turns on -e; undo it so checks still summarize
-  rzr_crew_ensure_default
-  if rzr_crew_exists default; then pass "present ($(rzr_crew_path default))"
-  else fail "could not create default preset under $RZR_HOME/crew"; fi
+  if rzr_crew_exists default; then pass "configured ($(rzr_crew_path default))"
+  else pass "using built-in fallback (no $(rzr_crew_path default))"; fi
+  default_harness="$(rzr_crew_field default harness)"
+  if [ -n "$default_harness" ] && command -v "$default_harness" >/dev/null 2>&1; then
+    pass "default harness $default_harness ($(command -v "$default_harness"))"
+  else
+    fail "default harness '${default_harness:-unknown}' not found on PATH"
+  fi
 else warn "skipped (needs jq + herdr)"; fi
 
 echo

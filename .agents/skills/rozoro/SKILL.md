@@ -63,9 +63,9 @@ path. Every command has two forms: the dispatcher `rozoro <verb>` (or short `rzr
 <verb>`) and the underlying `rzr-<verb>.sh` script — `rozoro start …` ≡ `rzr-start.sh
 …`. This doc uses the `rzr-*.sh` form; substitute the dispatcher freely. Still
 requires `herdr` (running server, and you inside a herdr session), `jq`, and
-`python3`. Run `rozoro doctor` to verify everything at once (deps, herdr server
-reachable, `bin/` on PATH, default preset) — it seeds nothing you must pre-create,
-since `$ROZORO_HOME` and its subdirs self-create on first use.
+`python3`. Run `rozoro doctor` to verify everything at once (deps, herdr server,
+`bin/` on PATH, and the resolved default harness). It does not create or rewrite
+the optional `$ROZORO_HOME/crew/default.json`.
 
 ## Trigger vocabulary
 
@@ -104,8 +104,10 @@ a standing preference). Inspect presets with `rzr-crew.sh list`.
 Crew presets bundle *how* an agent boots (harness, model, permission mode, effort,
 standing rules) — never the task.
 
-- Default preset = **gpt-5.6-sol Codex, `high` effort, `auto` permission**. This
-  is the right choice for routine *and* hard work unless told otherwise.
+- `$ROZORO_HOME/crew/default.json` is authoritative when present. The recommended
+  personal default is **gpt-5.6-sol Codex at `high` effort**.
+- Without that file, the hardcoded default is Claude/Sonnet/`auto`; an explicit
+  `--harness codex` selects gpt-5.6-sol/`low` with normal permissions.
 - User asked for another model → override: `rzr-spawn.sh <id> --model <model> --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
@@ -113,7 +115,7 @@ standing rules) — never the task.
   system prompt; other harnesses receive them in the delivered prompt.
   Repo-specific rules stay in the repo, not the preset.
 
-Precedence: explicit flag > preset > default.
+Precedence: explicit flag > preset file > hardcoded harness fallback.
 
 ## Intake: decide policy, delegate discovery
 

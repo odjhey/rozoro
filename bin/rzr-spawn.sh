@@ -8,9 +8,9 @@
 #               [--no-agent]
 #
 #   <id>        short task slug; names state/<id>.meta and the tab label
-#   --crew      crewmember preset to boot from (default: "default" =
-#               gpt-5.6-sol codex, high effort, auto permission, no rules).
-#               See rzr-crew.sh.
+#   --crew      crewmember preset to boot from (default: "default" reads
+#               $ROZORO_HOME/crew/default.json when present; otherwise Claude
+#               Sonnet, or gpt-5.6-sol/low with --harness codex). See rzr-crew.sh.
 #   --cwd       working directory for the tab (default: current dir). The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     tab label shown in herdr (default: the id)
@@ -24,10 +24,10 @@
 #   --no-agent  create the tab + pane at a bare shell only (no agent)
 #
 # Precedence for harness/model/effort/permission-mode: explicit flag > preset >
-# built-in default. The claude system prompt is the rendered handoff protocol
-# plus any preset `rules`, delivered via --append-system-prompt-file; the task
-# prompt itself is passed verbatim (harnesses lacking a system-prompt channel
-# instead get the protocol folded into the prompt — see below).
+# built-in harness fallback. The claude system prompt is the rendered handoff
+# protocol plus any preset `rules`, delivered via --append-system-prompt-file;
+# the task prompt itself is passed verbatim (harnesses lacking a system-prompt
+# channel instead get the protocol folded into the prompt — see below).
 #
 # Mechanism: one herdr `tab create` (a clickable tab in the orchestrator's own
 # workspace), then `agent start` to bring up the agent in that tab's pane, then
@@ -65,14 +65,23 @@ fi
 
 rzr_task_exists "$ID" && rzr_die "task '$ID' already exists (state/$ID.meta); pick another id or tear it down"
 
-# --- resolve the crew profile (flag > preset > default) --------------------
-rzr_crew_ensure_default
-rzr_crew_exists "$CREW" || rzr_die "unknown crew preset '$CREW' (see: rzr-crew.sh list)"
-HARNESS="${HARNESS_OV:-$(rzr_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
-MODEL="${MODEL_OV:-$(rzr_crew_field "$CREW" model)}"
-EFFORT="${EFFORT_OV:-$(rzr_crew_field "$CREW" effort)}"
-PERMMODE="${PERMMODE_OV:-$(rzr_crew_field "$CREW" permission_mode)}"
-RULES="$(rzr_crew_rules "$CREW")"
+# --- resolve the crew profile (flag > preset > built-in harness fallback) --
+rzr_crew_resolves "$CREW" || rzr_die "unknown crew preset '$CREW' (see: rzr-crew.sh list)"
+if rzr_crew_exists "$CREW"; then
+  HARNESS="${HARNESS_OV:-$(rzr_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
+  MODEL="${MODEL_OV:-$(rzr_crew_field "$CREW" model)}"
+  EFFORT="${EFFORT_OV:-$(rzr_crew_field "$CREW" effort)}"
+  PERMMODE="${PERMMODE_OV:-$(rzr_crew_field "$CREW" permission_mode)}"
+  RULES="$(rzr_crew_rules "$CREW")"
+else
+  # Only the virtual `default` reaches here. Choose a coherent fallback profile
+  # from the selected harness instead of mixing one harness with another's model.
+  HARNESS="${HARNESS_OV:-claude}"
+  MODEL="${MODEL_OV:-$(rzr_crew_builtin_field "$HARNESS" model)}"
+  EFFORT="${EFFORT_OV:-$(rzr_crew_builtin_field "$HARNESS" effort)}"
+  PERMMODE="${PERMMODE_OV:-$(rzr_crew_builtin_field "$HARNESS" permission_mode)}"
+  RULES=""
+fi
 case "$HARNESS" in
   claude|codex|copilot|pi) ;;
   *) rzr_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to rzr_harness_args in rzr-lib.sh" ;;
