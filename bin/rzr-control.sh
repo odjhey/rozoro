@@ -52,7 +52,7 @@ case "$VERB" in
   interrupt)
     rzr_require_live_pane
     rzr_herdr agent send-keys "$PANE" esc >/dev/null 2>&1 || rzr_die "send-keys esc failed on '$ID'"
-    if rzr_wait_status "$PANE" idle blocked done; then
+    if rzr_wait_status "$PANE" idle blocked "done"; then
       echo "rzr: interrupted '$ID' - agent left 'working' (verified: $(rzr_agent_status "$PANE"))"
     else
       echo "rzr: sent interrupt to '$ID' but could not verify it left 'working' within 10s" >&2
@@ -61,7 +61,7 @@ case "$VERB" in
   cancel)
     rzr_require_live_pane
     rzr_herdr agent send-keys "$PANE" ctrl+c >/dev/null 2>&1 || rzr_die "send-keys ctrl+c failed on '$ID'"
-    if rzr_wait_status "$PANE" idle blocked done; then
+    if rzr_wait_status "$PANE" idle blocked "done"; then
       echo "rzr: canceled '$ID' - agent left 'working' (verified: $(rzr_agent_status "$PANE"))"
     else
       echo "rzr: sent cancel to '$ID' but could not verify it left 'working' within 10s" >&2

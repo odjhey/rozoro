@@ -329,7 +329,10 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   reuses `rzr-teardown.sh`; `restart` composes teardown + `rzr-spawn.sh` under
   the same id. Every verb confirms its result with
   `herdr agent wait <pane> --until <states> --timeout <ms>` rather than trusting
-  the send's exit code alone.
+  the send's exit code alone. `restart` deliberately passes `--force` to
+  teardown's unlanded-work guard: teardown only drops the tab + state record,
+  never the working tree, so restart re-spawns into the *same* cwd with any
+  prior work still on disk — nothing is lost by skipping the guard here.
 - **lock** — atomic `mkdir state/.lock`, holder pid recorded; a dead holder is
   reclaimed on the next acquire. `rzr-spawn.sh` holds it around the
   create-tab/write-meta mutation.
