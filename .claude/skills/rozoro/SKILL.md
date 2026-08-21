@@ -34,9 +34,11 @@ skills, `CLAUDE.md`) from its `--cwd`. So:
 The `fl-*.sh` tools ship in their **own** repo's `bin/` (e.g. `~/proj/rozoro/bin`)
 — **not** inside this skill folder. On a set-up machine that `bin/` is already on
 `$PATH`, so you can call the scripts by bare name; otherwise add it to `PATH` or
-call by absolute path. Confirm with `command -v fl-spawn.sh`. Still requires
-`herdr` (running server, and you inside a herdr session), `jq`, and `python3`.
-Verify the backend with `herdr tab list`.
+call by absolute path. Still requires `herdr` (running server, and you inside a
+herdr session), `jq`, and `python3`. Run `fl-doctor.sh` to verify everything at
+once (deps, herdr server reachable, `bin/` on PATH, default preset) — it seeds
+nothing you must pre-create, since `$ROZORO_HOME` and its subdirs self-create on
+first use.
 
 ## Trigger vocabulary
 
