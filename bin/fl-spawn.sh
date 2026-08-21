@@ -81,8 +81,12 @@ do_spawn() {
     return 0
   fi
 
-  # Bring the agent up in the pane and wait for interactive readiness.
-  if ! fl_herdr agent start "$HARNESS" --kind "$HARNESS" --pane "$pane" >/dev/null 2>&1; then
+  # Bring the agent up in the pane and wait for interactive readiness. The agent
+  # NAME must be UNIQUE per herdr session: herdr rejects a second `agent start`
+  # that reuses a live name (agent_name_taken), so naming every crew "$HARNESS"
+  # would cap the whole fleet at one live agent. Use the task id as the name
+  # (--kind stays the harness); everything else addresses the agent by pane.
+  if ! fl_herdr agent start "$ID" --kind "$HARNESS" --pane "$pane" >/dev/null 2>&1; then
     fl_meta_set "$ID" agent_start failed
     fl_die "herdr agent start ($HARNESS) failed in pane $pane; the tab exists - inspect it, then 'fl-teardown.sh $ID' or retry"
   fi
