@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Raw AF_UNIX subscriber for herdr's native pane.agent_status_changed stream.
 
-The WIRE TRANSPORT for rozoro's push-based watcher (bin/fl-watch.sh). It knows
+The WIRE TRANSPORT for rozoro's push-based watcher (bin/rzr-watch.sh). It knows
 nothing about rozoro's policy: it opens ONE connection to the herdr control
 socket, subscribes to pane.agent_status_changed for the given panes (ALL
 statuses, so working/idle/done/blocked edges are all seen), and prints one
@@ -31,7 +31,7 @@ Exit status:
   2  bad arguments, could not connect, or could not send the subscribe request.
   3  the subscribe request did not return a subscription_started ack.
   4  the server closed the stream or a receive operation failed.
-A non-zero exit tells fl-watch the push path is unavailable this run.
+A non-zero exit tells rzr-watch the push path is unavailable this run.
 """
 import json
 import socket
@@ -153,7 +153,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv))
     except BrokenPipeError:
-        # fl-watch stopped reading (e.g. --once found its edge and killed us).
+        # rzr-watch stopped reading (e.g. --once found its edge and killed us).
         sys.exit(0)
     except KeyboardInterrupt:
         sys.exit(0)

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# fl-spawn.sh - spawn a task as a herdr TAB running an agent.
+# rzr-spawn.sh - spawn a task as a herdr TAB running an agent.
 #
 # Usage:
-#   fl-spawn.sh <id> [--crew <preset>] [--cwd <dir>] [--label <text>]
+#   rzr-spawn.sh <id> [--crew <preset>] [--cwd <dir>] [--label <text>]
 #               [--harness <kind>] [--model <m>] [--effort <e>]
 #               [--permission-mode <mode>] [--prompt <text> | --brief <file>]
 #               [--no-agent]
 #
 #   <id>        short task slug; names state/<id>.meta and the tab label
 #   --crew      crewmember preset to boot from (default: "default" = sonnet
-#               claude, auto permission, no rules). See fl-crew.sh.
+#               claude, auto permission, no rules). See rzr-crew.sh.
 #   --cwd       working directory for the tab (default: current dir). The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     tab label shown in herdr (default: the id)
@@ -31,7 +31,7 @@
 # an optional `agent prompt` to deliver the first instruction. The pane id is
 # recorded as the task's authority in state/<id>.meta.
 set -euo pipefail
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fl-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 ID="" ; CWD="$PWD" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
 CREW="default" ; HARNESS_OV="" ; MODEL_OV="" ; EFFORT_OV="" ; PERMMODE_OV=""
@@ -48,41 +48,41 @@ while [ $# -gt 0 ]; do
     --brief)   BRIEF="$2"; shift 2 ;;
     --no-agent) NO_AGENT=1; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
-    -*) fl_die "unknown flag: $1" ;;
-    *)  [ -z "$ID" ] && ID="$1" && shift || fl_die "unexpected arg: $1" ;;
+    -*) rzr_die "unknown flag: $1" ;;
+    *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
   esac
 done
-[ -n "$ID" ] || fl_die "need a task id (fl-spawn.sh <id> ...)"
+[ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"
 [ -n "$LABEL" ] || LABEL="$ID"
-CWD="$(cd "$CWD" && pwd)" || fl_die "bad --cwd"
+CWD="$(cd "$CWD" && pwd)" || rzr_die "bad --cwd"
 if [ -n "$BRIEF" ]; then
-  [ -f "$BRIEF" ] || fl_die "no brief file at $BRIEF"
+  [ -f "$BRIEF" ] || rzr_die "no brief file at $BRIEF"
   PROMPT="$(cat "$BRIEF")"
 fi
 
-fl_task_exists "$ID" && fl_die "task '$ID' already exists (state/$ID.meta); pick another id or tear it down"
+rzr_task_exists "$ID" && rzr_die "task '$ID' already exists (state/$ID.meta); pick another id or tear it down"
 
 # --- resolve the crew profile (flag > preset > default) --------------------
-fl_crew_ensure_default
-fl_crew_exists "$CREW" || fl_die "unknown crew preset '$CREW' (see: fl-crew.sh list)"
-HARNESS="${HARNESS_OV:-$(fl_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
-MODEL="${MODEL_OV:-$(fl_crew_field "$CREW" model)}"
-EFFORT="${EFFORT_OV:-$(fl_crew_field "$CREW" effort)}"
-PERMMODE="${PERMMODE_OV:-$(fl_crew_field "$CREW" permission_mode)}"
-RULES="$(fl_crew_rules "$CREW")"
+rzr_crew_ensure_default
+rzr_crew_exists "$CREW" || rzr_die "unknown crew preset '$CREW' (see: rzr-crew.sh list)"
+HARNESS="${HARNESS_OV:-$(rzr_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
+MODEL="${MODEL_OV:-$(rzr_crew_field "$CREW" model)}"
+EFFORT="${EFFORT_OV:-$(rzr_crew_field "$CREW" effort)}"
+PERMMODE="${PERMMODE_OV:-$(rzr_crew_field "$CREW" permission_mode)}"
+RULES="$(rzr_crew_rules "$CREW")"
 case "$HARNESS" in
   claude|codex|copilot|pi) ;;
-  *) fl_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to fl_harness_args in fl-lib.sh" ;;
+  *) rzr_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to rzr_harness_args in rzr-lib.sh" ;;
 esac
 
 # --- the mutation: serialize spawns behind the home lock -------------------
 do_spawn() {
-  local ws; ws="$(fl_workspace)"
+  local ws; ws="$(rzr_workspace)"
   local create_args=(tab create --cwd "$CWD" --label "$LABEL" --no-focus)
   [ -n "$ws" ] && create_args+=(--workspace "$ws")
 
   local out
-  out=$(fl_herdr "${create_args[@]}") || fl_die "herdr tab create failed"
+  out=$(rzr_herdr "${create_args[@]}") || rzr_die "herdr tab create failed"
 
   # Parse the pane + tab ids from whatever shape herdr returns.
   local pane tab
@@ -92,24 +92,24 @@ do_spawn() {
   tab=$(printf '%s' "$out" | jq -r '
       .result.tab.tab_id // .result.tab_id // .result.root_pane.tab_id //
       .tab_id // empty' 2>/dev/null)
-  [ -n "$pane" ] || fl_die "could not parse pane id from tab create output: $out"
+  [ -n "$pane" ] || rzr_die "could not parse pane id from tab create output: $out"
 
-  fl_meta_set "$ID" id "$ID"
-  fl_meta_set "$ID" pane "$pane"
-  fl_meta_set "$ID" tab "${tab:-}"
-  fl_meta_set "$ID" workspace "${ws:-}"
-  fl_meta_set "$ID" cwd "$CWD"
-  fl_meta_set "$ID" crew "$CREW"
-  fl_meta_set "$ID" harness "$HARNESS"
-  fl_meta_set "$ID" model "${MODEL:-}"
-  fl_meta_set "$ID" effort "${EFFORT:-}"
-  fl_meta_set "$ID" permission_mode "${PERMMODE:-}"
-  fl_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+  rzr_meta_set "$ID" id "$ID"
+  rzr_meta_set "$ID" pane "$pane"
+  rzr_meta_set "$ID" tab "${tab:-}"
+  rzr_meta_set "$ID" workspace "${ws:-}"
+  rzr_meta_set "$ID" cwd "$CWD"
+  rzr_meta_set "$ID" crew "$CREW"
+  rzr_meta_set "$ID" harness "$HARNESS"
+  rzr_meta_set "$ID" model "${MODEL:-}"
+  rzr_meta_set "$ID" effort "${EFFORT:-}"
+  rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
+  rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
-  echo "fl: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
+  echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
 
   if [ "$NO_AGENT" -eq 1 ]; then
-    echo "fl: --no-agent: pane left at a bare shell"
+    echo "rzr: --no-agent: pane left at a bare shell"
     return 0
   fi
 
@@ -124,7 +124,7 @@ do_spawn() {
   # NUL-separated (a rule value may contain newlines), read into an array here.
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
-    < <(fl_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$RULES")
+    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$RULES")
   local -a start=(agent start "$ID" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 
@@ -134,23 +134,23 @@ do_spawn() {
   # other error is real and surfaces immediately (with herdr's message).
   local out="" rc=1 attempt=0
   while [ "$attempt" -lt 20 ]; do
-    if out=$(fl_herdr "${start[@]}" 2>&1); then rc=0; break; fi
+    if out=$(rzr_herdr "${start[@]}" 2>&1); then rc=0; break; fi
     case "$out" in
       *agent_pane_busy*|*"not an available shell"*) sleep 0.5; attempt=$((attempt + 1)) ;;
       *) break ;;
     esac
   done
   if [ "$rc" -ne 0 ]; then
-    fl_meta_set "$ID" agent_start failed
-    fl_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then 'fl-teardown.sh $ID' or retry"
+    rzr_meta_set "$ID" agent_start failed
+    rzr_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then 'rzr-teardown.sh $ID' or retry"
   fi
-  fl_meta_set "$ID" agent_start ok
+  rzr_meta_set "$ID" agent_start ok
 
   if [ -n "$PROMPT" ]; then
-    fl_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \
-      || echo "fl: warning: initial prompt not confirmed delivered to $ID" >&2
-    echo "fl: delivered initial prompt to '$ID'"
+    rzr_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \
+      || echo "rzr: warning: initial prompt not confirmed delivered to $ID" >&2
+    echo "rzr: delivered initial prompt to '$ID'"
   fi
 }
 
-fl_with_lock 30 do_spawn
+rzr_with_lock 30 do_spawn

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# rozoro - friendly dispatcher: `rozoro <verb> [args]` runs `rzr-<verb>.sh`.
+#
+# Usage:
+#   rozoro <verb> [args...]           e.g. `rozoro start t1 --body b.txt --cwd .`
+#   rozoro help | -h | --help         list verbs
+#
+# Every rzr-<verb>.sh in this bin/ is a verb (except the sourced-only rzr-lib.sh).
+# The rzr-*.sh scripts remain first-class; this is just a nicer front door. A
+# `rzr` symlink to this file gives the short form `rzr <verb>`.
+set -euo pipefail
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+verb="${1:-help}"
+case "$verb" in
+  help|-h|--help)
+    echo "usage: rozoro <verb> [args...]"
+    echo "verbs:"
+    for f in "$BIN"/rzr-*.sh; do
+      b="$(basename "$f" .sh)"; b="${b#rzr-}"
+      [ "$b" = "lib" ] && continue
+      printf '  %s\n' "$b"
+    done
+    exit 0 ;;
+esac
+
+target="$BIN/rzr-$verb.sh"
+{ [ -f "$target" ] && [ "$verb" != "lib" ]; } || {
+  echo "rozoro: unknown verb '$verb' (try: rozoro help)" >&2; exit 1; }
+shift
+exec "$target" "$@"
