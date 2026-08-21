@@ -44,17 +44,30 @@ Consequently:
 
 | Command | What it does |
 |---|---|
+| `fl-start.sh <id> --body <file> [opts]` | blessed start: `fl-render` → `fl-spawn` → `fl-link` in one unskippable step; passes extra flags through to `fl-spawn` |
 | `fl-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
+| `fl-render.sh <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
+| `fl-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` (`claude --resume <id>`) via marker-grep; idempotent |
+| `fl-status.sh <id>` | read the latest handoff `verdict` + whether a new block appeared (done vs needs-action; miss-detector) |
 | `fl-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
 | `fl-send.sh <id> <text>` | `herdr agent prompt` (submit); also `--key <name>` / `--text <literal>` for interrupts and unsubmitted composition; `--wait` blocks until settled |
 | `fl-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `fl-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `fl-list.sh` | known tasks + live agent state |
-| `fl-teardown.sh <id>` | close the tab, remove the record |
+| `fl-teardown.sh <id>` | close the tab, remove the record (the `tasks/<id>/` folder survives) |
 
 `fl-lib.sh` is the shared library (paths, herdr invocation, meta, status,
 presets, lock); it is sourced, not run. `herdr-eventwait.py` is the raw-socket
-subscriber `fl-watch.sh` drives.
+subscriber `fl-watch.sh` drives. `templates/brief.md` is the handoff-protocol seed
+`fl-render` fills in.
+
+### Durable task folders
+
+`fl-start` gives each task a folder under `$ROZORO_HOME/tasks/<id>/` so teardown is
+non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
+crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
+and context accumulates across `fl-send` rounds), and `session.json` (the resume
+link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
 
 ## Crewmember presets
 
@@ -99,10 +112,10 @@ The driver's whole vocabulary is small:
 
 | Trigger | Call |
 |---|---|
-| **Start** a task | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` |
+| **Start** a task | `fl-start.sh <id> --body <file> --cwd <repo> [--crew <preset>] [--model opus]` |
 | **Steer / interrupt** | `fl-send.sh <id> "<text>"` · `fl-send.sh <id> --key Escape` |
 | **Stop** | `fl-teardown.sh <id>` |
-| *(sense, not trigger)* | `fl-watch.sh` · `fl-list.sh` · `fl_status_get` (disk `state/<id>.status`) |
+| *(sense, not trigger)* | `fl-status.sh <id>` (handoff verdict) · `fl-watch.sh` · `fl-list.sh` · `fl_status_get` (disk `state/<id>.status`) |
 
 Put `bin/` on `PATH` (or drive it via the bundled skill) so the driver session
 can reach these from anywhere. Read crew state from the on-disk

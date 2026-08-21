@@ -22,7 +22,18 @@ FL_BIN="$(cd "$(dirname "$FL_LIB_SRC")" && pwd)"
 # rozoro name) > FL_HOME (legacy) > default.
 FL_HOME="${ROZORO_HOME:-${FL_HOME:-$HOME/.rozoro}}"
 FL_STATE="$FL_HOME/state"
+# Per-task folders: the durable record of a task's INPUT (brief.md), append-only
+# OUTPUT (handoff.md), and resume link (session.json). Data, so it lives under
+# FL_HOME with state/ — survives teardown, never enters the code repo.
+FL_TASKS="$FL_HOME/tasks"
+# Shipped seeds (the handoff brief template). Code, so it resolves relative to
+# this checkout, not FL_HOME. Override with FL_TEMPLATES.
+FL_REPO="$(cd "$FL_BIN/.." && pwd)"
+FL_TEMPLATES="${FL_TEMPLATES:-$FL_REPO/templates}"
 mkdir -p "$FL_STATE"
+
+# Path to a task's durable folder (does not create it).
+fl_task_dir() { printf '%s/%s' "$FL_TASKS" "$1"; }
 
 fl_die() { echo "fl: $*" >&2; exit 1; }
 

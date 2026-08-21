@@ -42,9 +42,11 @@ Verify the backend with `herdr tab list`.
 
 | Intent | Command |
 |---|---|
-| **Start** a task | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>` for a multi-line prompt — write the body to a file, no shell escaping) |
+| **Start** a task (blessed) | `fl-start.sh <id> --body <file> --cwd <repo> [fl-spawn flags]` — renders a durable brief, spawns, and links the session in one unskippable step |
+| **Start** (low-level) | `fl-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer / interrupt** | `fl-send.sh <id> "<text>"` · `fl-send.sh <id> --key Escape` |
 | **Stop / reap** | `fl-teardown.sh <id>` |
+| **Read verdict** | `fl-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (the done-vs-needs-action signal; the miss-detector) |
 | **Sense** (don't block) | `fl-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `fl-list.sh` to poll · read `state/<id>.status` (written BY fl-watch) |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
@@ -69,12 +71,11 @@ Precedence: explicit flag > preset > default.
 
 1. Gather the work (e.g. `gh pr list`, `gh issue view NNN`) and decide, per task,
    a unique id, the repo `--cwd`, and the model/preset.
-2. `fl-spawn.sh` each task with a **verbatim, self-contained** prompt, e.g.
-   `--prompt "Resolve issue #123."` The crew will follow that repo's own rules.
-   For any prompt that is long, multi-line, or contains quotes/backticks/`$`,
-   write the body to a file (the scratchpad, a tmp dir, or under
-   `$ROZORO_HOME`) and pass `--brief <file>` instead of `--prompt` — fl-spawn
-   reads the file verbatim, so you avoid wrangling shell escaping.
+2. Write each task body to a file (the scratchpad or under `$ROZORO_HOME`) and
+   `fl-start.sh <id> --body <file> --cwd <repo> [--model opus]`. This renders a
+   **durable brief** (with the handoff protocol) into `tasks/<id>/`, spawns the
+   crew, and links its session — all verbatim, no shell escaping. Prefer this over
+   raw `fl-spawn.sh`, which skips the task folder, protocol, and session link.
 3. **Do not sit in a poll loop.** Run `fl-watch.sh --once <ids>` as a
    **background task** — it blocks on herdr's native `pane.agent_status_changed`
    PUSH stream at ~0% CPU and returns (waking you, the driver) only on a real
@@ -83,10 +84,39 @@ Precedence: explicit flag > preset > default.
    `state/<id>.status` is **produced by** `fl-watch` — it is not maintained by an
    always-on daemon, and the file is absent until a watcher has run. Either way,
    `done`/`idle` means the agent *ended a turn* — not that the task is correct or
-   landed; inspect the result (the pane, the repo, `gh`) before declaring success.
-4. Steer any crew that needs it with `fl-send.sh`; the user can also click the tab
-   and type directly.
-5. `fl-teardown.sh <id>` when a task is finished and its result is captured.
+   landed.
+4. On each edge, run `fl-status.sh <id>` — read the **handoff verdict**, not herdr's
+   raw `done`: `done` → verify the result (pane, repo, `gh`) then reap;
+   `needs-action` → answer via `fl-send.sh`; a `[same]`/no-new-block on an idle edge
+   means the crew ended a turn without reporting (e.g. backgrounded work) — nudge it.
+5. Steer any crew that needs it with `fl-send.sh`; the user can also click the tab
+   and type directly. Also call `fl-link.sh <id> <cwd>` here if the birth-time link
+   was not yet captured (idempotent).
+6. `fl-teardown.sh <id>` when a task is finished and its result is captured. The
+   `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
+   nothing is lost — a follow-up crew rehydrates from it, or `claude --resume
+   <session_id>` reopens the exact conversation as a last resort.
+
+## Durable task folders & the handoff contract
+
+`fl-start` gives every task a folder under `$ROZORO_HOME/tasks/<id>/` — the durable
+record that makes teardown non-lossy:
+
+- `brief.md` — the INPUT, persisted predictably (rendered from `templates/brief.md`,
+  which appends the handoff protocol and a unique `rozoro-task: <id>` marker).
+- `handoff.md` — the OUTPUT, **append-only**. The protocol tells the crew to append
+  a block before ending *every* turn, each carrying a `verdict:` line
+  (`done | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
+  tell "done" from "needs more input", and it accumulates across multiple `fl-send`
+  rounds so context is never lost.
+- `session.json` — the resume link (`claude --resume <session_id>`), captured by
+  `fl-link` via marker-grep (concurrency-safe, unlike "newest file" when crews share
+  a `--cwd`).
+
+The protocol is delivered *in the brief* (harness-neutral — no preset rules needed),
+but a turn-1 instruction decays, so the reliability comes from the loop: detect the
+miss with `fl-status` (no new block on an idle edge) and nudge with `fl-send`. The
+folder lives in `$ROZORO_HOME` (data), never in this repo (code).
 
 ## Gotchas
 
