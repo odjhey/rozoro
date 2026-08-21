@@ -57,6 +57,7 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 | **Start** a task (blessed) | `rzr-start.sh <id> --body <file> --cwd <repo> [rzr-spawn flags]` — renders a durable brief, spawns, and links the session in one unskippable step |
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
+| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* conversation (via `claude --resume`) as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `rzr-teardown.sh <id>` |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (the done-vs-needs-action signal; the miss-detector) |
 | **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
@@ -154,16 +155,36 @@ answer itself, but whether the answer already exists.
    `done`/`idle` means the agent *ended a turn* — not that the task is correct or
    landed.
 4. On each edge, run `rzr-status.sh <id>` — read the **handoff verdict**, not herdr's
-   raw `done`: `done` → verify the result (pane, repo, `gh`) then reap;
-   `needs-action` → answer via `rzr-send.sh`; a `[same]`/no-new-block on an idle edge
-   means the crew ended a turn without reporting (e.g. backgrounded work) — nudge it.
+   raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
+   answer via `rzr-send.sh`; a `[same]`/no-new-block on an idle edge means the crew
+   ended a turn without reporting (e.g. backgrounded work) — nudge it. **`done` is
+   an invitation to review, not a signal to reap** — a done crew sits idle at ~0
+   cost, so leave it alive (see step 6).
 5. Steer any crew that needs it with `rzr-send.sh`; the user can also click the tab
    and type directly. Also call `rzr-link.sh <id> <cwd>` here if the birth-time link
    was not yet captured (idempotent).
-6. `rzr-teardown.sh <id>` when a task is finished and its result is captured. The
-   `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
-   nothing is lost — a follow-up crew rehydrates from it, or `claude --resume
-   <session_id>` reopens the exact conversation as a last resort.
+6. **Keep crews alive until the result is accepted; reap conservatively.** A `done`
+   verdict is not acceptance — the user still has to review it, and review comes
+   *after* a delay. Tearing down on `done` throws away the crew's live context, so
+   when follow-up arrives you'd have to re-spawn cold. Instead:
+   - **Follow-up continues the same crew.** More feedback on a task the crew
+     already worked is *never* a fresh `rzr-start` with a new id — it's a
+     `rzr-send.sh <id>` to the **live** crew, which still holds the full
+     conversation. Same id, same agent, same context.
+   - **If the crew was already reaped,** don't spawn a cold replacement either:
+     `rzr-resume.sh <id> [--prompt "<follow-up>"]` reopens the *exact*
+     conversation as a fresh crew tab (via `claude --resume` from
+     `tasks/<id>/session.json`) and can deliver your follow-up in the same call.
+     A brand-new `rzr-start` rehydrating from `handoff.md` is the last resort, not
+     the default — it starts cold.
+   - **Reap (`rzr-teardown.sh <id>`) only once** the result is captured **and**
+     accepted (landed/merged, or the user explicitly signs off), or the user says
+     to drop it. When unsure whether more is coming, leave it idle — an idle crew
+     costs nothing; a prematurely reaped one costs a cold re-spawn.
+
+   The `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
+   even a reaped task is recoverable — but recovery is strictly worse than a crew
+   you never closed. Prefer *not closing* over *closing and resuming*.
 
 ## Durable task folders & the handoff contract
 

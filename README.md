@@ -115,6 +115,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-status.sh <id>` | read the latest handoff `verdict` + whether a new block appeared (done vs needs-action; miss-detector) |
 | `rzr-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
 | `rzr-send.sh <id> <text>` | `herdr agent prompt` (submit); also `--key <name>` / `--text <literal>` for interrupts and unsubmitted composition; `--wait` blocks until settled |
+| `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped task's *exact* conversation as a fresh tab via `claude --resume` (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
 | `rzr-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `rzr-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `rzr-list.sh` | known tasks + live agent state |
@@ -179,6 +180,7 @@ The driver's whole vocabulary is small:
 |---|---|
 | **Start** a task | `rzr-start.sh <id> --body <file> --cwd <repo> [--crew <preset>] [--model opus]` |
 | **Steer / interrupt** | `rzr-send.sh <id> "<text>"` · `rzr-send.sh <id> --key Escape` |
+| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` |
 | **Stop** | `rzr-teardown.sh <id>` |
 | *(sense, not trigger)* | `rzr-status.sh <id>` (handoff verdict) · `rzr-watch.sh` · `rzr-list.sh` · `rzr_status_get` (disk `state/<id>.status`) |
 
@@ -186,6 +188,101 @@ Put `bin/` on `PATH` (or drive it via the bundled skill) so the driver session
 can reach these from anywhere. Read crew state from the on-disk
 `state/<id>.status` (the watcher keeps it current) rather than blocking on
 `rzr-watch`.
+
+### Launching the driver
+
+The driver is just a capable agent session with the rozoro skill in reach and a
+system prompt that keeps it in the control tower. Launch it **inside a herdr
+session**, from a repo whose skills path ships the skill (this repo's
+`.claude/skills/rozoro/` does):
+
+```sh
+claude --append-system-prompt "You are a rozoro control tower — the driver for a \
+fleet of coding agents. You orchestrate; you do not implement. Never edit code or \
+solve a task yourself: for any repo work, spawn a crew agent via the rozoro skill \
+and let it investigate and deliver. Dispatch eagerly — decide an id, the repo \
+(--cwd), and the task shape, then hand the work over on the default crew unless I \
+name another. Watch, steer, and reap the crew; report plain outcomes."
+```
+
+Keep the prompt short — the rozoro skill carries the detailed loop. The one idea
+it must anchor is the boundary: **the driver spawns and judges; the crew does the
+domain work.** (rozoro-the-tool is the dumb spawner; the driver is the judgment.)
+
+## Examples
+
+The blessed flow is `rozoro start` (durable brief + spawn + session link in one
+step); reach for raw `rzr-spawn` only for throwaway probes. All verbs work as
+`rozoro <verb>`, `rzr <verb>`, or `rzr-<verb>.sh`.
+
+**Fan out several issues in parallel** — one id + body per task, dispatched
+eagerly, then one event-driven watcher over the fleet:
+
+```sh
+for n in 42 57 61; do
+  printf 'Resolve issue #%s in this repo — investigate, fix, and open a PR.\n' "$n" \
+    > /tmp/task-$n.md
+  rozoro start issue-$n --body /tmp/task-$n.md --cwd ~/proj/acme
+done
+rozoro watch issue-42 issue-57 issue-61     # wakes on each real edge; no polling
+```
+
+On each edge, read the **handoff verdict** — not herdr's raw `done` — then reap:
+
+```sh
+rozoro status issue-42        # done → verify the result, then reap
+rozoro teardown issue-42      #   (tasks/issue-42/ survives teardown)
+```
+
+**Steer or interrupt a live crew** — a follow-up is submitted; `--key Escape`
+interrupts a runaway turn:
+
+```sh
+rozoro send issue-57 "Skip the refactor — smallest fix that closes the issue."
+rozoro send issue-57 --key Escape
+```
+
+**Dispatch a scout (investigation only, no PR)** — knowledge, not a change:
+
+```sh
+printf 'Investigate why CI flakes on the auth suite. Write findings; change no code.\n' \
+  > /tmp/scout.md
+rozoro start scout-ci-flake --body /tmp/scout.md --cwd ~/proj/acme
+```
+
+**Override the crew when you explicitly want a bigger model:**
+
+```sh
+rozoro start issue-99 --body /tmp/task-99.md --cwd ~/proj/acme --model opus
+```
+
+**Use a custom preset** — e.g. a "draft PR, never push" crew, defined once under
+`$ROZORO_HOME/crew/`, then reused:
+
+```sh
+rozoro crew list                                   # see available presets
+rozoro start issue-77 --body /tmp/t.md --cwd ~/proj/acme --crew draft-only
+```
+
+**Follow up after `done` without losing context.** `done` is an invitation to
+review, not a signal to reap — a done crew sits idle at ~0 cost. If it's still
+live, just continue it (same agent, full context):
+
+```sh
+rozoro send issue-42 "Reviewed — also handle the null-token case, then re-push."
+```
+
+**Resume a task you already reaped** — if it was torn down before your follow-up
+arrived, reopen the *exact* conversation (not a cold re-spawn) and hand it the
+feedback in one step:
+
+```sh
+rozoro resume issue-42 --prompt "Also handle the null-token case, then re-push."
+#   → new tab, `claude --resume <uuid>`, crew picks up with full memory
+```
+
+(Only reap once the result is accepted; `resume` is the safety net for when you
+reaped too early. Prefer *not closing* over *closing and resuming*.)
 
 ## How each mechanism maps to herdr 0.8.2
 
