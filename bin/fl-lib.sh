@@ -62,6 +62,89 @@ fl_socket_path() {
 # the bin/ scripts; requires python3 (stdlib only).
 fl_eventwait_py() { printf '%s/herdr-eventwait.py' "$FL_BIN"; }
 
+# --- crewmember presets (spawn profiles) -----------------------------------
+# A preset bundles HOW a crew agent is booted - harness, model, effort, and any
+# standing crew RULES - never WHAT its task is (the task prompt is always passed
+# verbatim). Presets are one JSON file per name under $FL_HOME/crew/<name>.json.
+# `rules` are crew-behavioral (e.g. "open a draft PR, never push"), deliberately
+# distinct from REPO rules, which the agent auto-loads from its --cwd.
+FL_CREW="$FL_HOME/crew"
+
+fl_crew_path() { printf '%s/%s.json' "$FL_CREW" "$1"; }
+fl_crew_exists() { [ -f "$(fl_crew_path "$1")" ]; }
+
+# Create the built-in `default` preset on first use: sonnet claude, no rules
+# (so the default crew is pure verbatim - nothing injected).
+fl_crew_ensure_default() {
+  mkdir -p "$FL_CREW"
+  local f; f=$(fl_crew_path default)
+  [ -f "$f" ] && return 0
+  cat > "$f" <<'JSON'
+{
+  "harness": "claude",
+  "model": "sonnet",
+  "permission_mode": "auto",
+  "effort": "",
+  "rules": []
+}
+JSON
+}
+
+fl_crew_field() {  # <preset> <field> -> value, or empty
+  local f; f=$(fl_crew_path "$1")
+  [ -f "$f" ] || return 1
+  jq -r --arg k "$2" '.[$k] // empty' "$f" 2>/dev/null
+}
+
+fl_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
+  local f; f=$(fl_crew_path "$1")
+  [ -f "$f" ] || return 1
+  jq -r '(.rules // []) | join("\n")' "$f" 2>/dev/null
+}
+
+# Map a resolved profile to the launch args a harness expects AFTER the `--` in
+# `herdr agent start ... -- <arg>...`. Emits NUL-separated args (so a rule value
+# containing newlines survives being read back into an array; bash-3.2 safe via
+# `read -d ''`). Returns 1 for an unknown harness so a preset can never boot one
+# with the wrong flags.
+#
+# `permmode` is a generic "run autonomously" signal: when non-empty, claude
+# passes its literal value (--permission-mode <v>), codex uses --yolo, and
+# copilot uses --mode autopilot --allow-all. `effort` and `rules` are only
+# expressible for claude today; other harnesses ignore them (a set `rules` on a
+# non-claude preset warns, since it would silently not apply).
+#
+# Verified on this machine: claude. Wired from the operator's known invocations
+# but NOT verified here: codex (not installed), copilot, pi.
+fl_harness_args() {  # <harness> <model> <effort> <permission-mode> <rules-text>
+  local harness="$1" model="$2" effort="$3" permmode="$4" rules="$5"
+  case "$harness" in
+    claude)
+      [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
+      [ -n "$effort" ]   && printf '%s\0%s\0' --effort "$effort"
+      [ -n "$permmode" ] && printf '%s\0%s\0' --permission-mode "$permmode"
+      [ -n "$rules" ]    && printf '%s\0%s\0' --append-system-prompt "$rules"
+      ;;
+    codex)  # codex --yolo --model <m> "prompt"
+      [ -n "$permmode" ] && printf '%s\0' --yolo
+      [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
+      [ -n "$rules" ]    && echo "fl: harness 'codex' has no system-prompt flag; preset rules ignored" >&2
+      ;;
+    copilot)  # copilot --model <m> --mode autopilot --allow-all "prompt"
+      [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
+      [ -n "$permmode" ] && printf '%s\0%s\0%s\0' --mode autopilot --allow-all
+      [ -n "$rules" ]    && echo "fl: harness 'copilot' has no system-prompt flag; preset rules ignored" >&2
+      ;;
+    pi)  # pi takes no launch flags; model/effort/permission/rules are ignored
+      [ -n "$rules" ] && echo "fl: harness 'pi' takes no flags; preset rules ignored" >&2
+      : ;;
+    *) return 1 ;;
+  esac
+  # Known harness: succeed regardless of which optional fields were empty (a
+  # trailing false `[ -n "" ]` test must not become the function's exit status).
+  return 0
+}
+
 # --- task metadata (KEY=VALUE, one per line) -------------------------------
 fl_meta_path() { printf '%s/%s.meta' "$FL_STATE" "$1"; }
 
