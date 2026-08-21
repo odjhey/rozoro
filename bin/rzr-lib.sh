@@ -35,6 +35,24 @@ mkdir -p "$RZR_STATE"
 # Path to a task's durable folder (does not create it).
 rzr_task_dir() { printf '%s/%s' "$RZR_TASKS" "$1"; }
 
+# The rendered handoff protocol for a task (rzr-render writes it). Delivered to
+# fresh claude crews as a system prompt and re-injected into resume prompts; it
+# survives teardown, so resume can always find it.
+rzr_handoff_protocol_path() { printf '%s/handoff-protocol.md' "$(rzr_task_dir "$1")"; }
+
+# Ensure handoff-protocol.md exists for a task, rendering it from the template if
+# rzr-render never ran (e.g. a direct `rzr-spawn --prompt ...`). Idempotent.
+rzr_render_handoff_protocol() {  # <id>
+  local id="$1" out tmpl folder
+  out="$(rzr_handoff_protocol_path "$id")"
+  [ -s "$out" ] && return 0
+  tmpl="$RZR_TEMPLATES/handoff.md"
+  [ -f "$tmpl" ] || rzr_die "no handoff template at $tmpl"
+  folder="$(rzr_task_dir "$id")"
+  mkdir -p "$folder"
+  sed -e "s#{{ID}}#$id#g" -e "s#{{FOLDER}}#$folder#g" "$tmpl" > "$out"
+}
+
 rzr_die() { echo "rzr: $*" >&2; exit 1; }
 
 command -v herdr >/dev/null 2>&1 || rzr_die "herdr not found on PATH"
@@ -121,33 +139,36 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 #
 # `permmode` is a generic "run autonomously" signal: when non-empty, claude
 # passes its literal value (--permission-mode <v>), codex uses --yolo, and
-# copilot uses --mode autopilot --allow-all. `effort` and `rules` are only
-# expressible for claude today; other harnesses ignore them (a set `rules` on a
-# non-claude preset warns, since it would silently not apply).
+# copilot uses --mode autopilot --allow-all. `effort` and the system prompt are
+# only expressible for claude today; other harnesses ignore them (rzr-spawn folds
+# the protocol into the delivered prompt for those, since they have no system
+# prompt channel).
+#
+# The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
+# preset rules), delivered via --append-system-prompt-file. claude rejects
+# --append-system-prompt together with --append-system-prompt-file, so the two
+# must already be combined into this one file (rzr-spawn does that).
 #
 # Verified on this machine: claude. Wired from the operator's known invocations
 # but NOT verified here: codex (not installed), copilot, pi.
-rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <rules-text>
-  local harness="$1" model="$2" effort="$3" permmode="$4" rules="$5"
+rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file>
+  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5"
   case "$harness" in
     claude)
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]   && printf '%s\0%s\0' --effort "$effort"
       [ -n "$permmode" ] && printf '%s\0%s\0' --permission-mode "$permmode"
-      [ -n "$rules" ]    && printf '%s\0%s\0' --append-system-prompt "$rules"
+      [ -n "$sysfile" ]  && printf '%s\0%s\0' --append-system-prompt-file "$sysfile"
       ;;
     codex)  # codex --yolo --model <m> "prompt"
       [ -n "$permmode" ] && printf '%s\0' --yolo
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
-      [ -n "$rules" ]    && echo "rzr: harness 'codex' has no system-prompt flag; preset rules ignored" >&2
       ;;
     copilot)  # copilot --model <m> --mode autopilot --allow-all "prompt"
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$permmode" ] && printf '%s\0%s\0%s\0' --mode autopilot --allow-all
-      [ -n "$rules" ]    && echo "rzr: harness 'copilot' has no system-prompt flag; preset rules ignored" >&2
       ;;
-    pi)  # pi takes no launch flags; model/effort/permission/rules are ignored
-      [ -n "$rules" ] && echo "rzr: harness 'pi' takes no flags; preset rules ignored" >&2
+    pi)  # pi takes no launch flags; model/effort/permission are ignored
       : ;;
     *) return 1 ;;
   esac

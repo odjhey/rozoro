@@ -4,32 +4,44 @@
 # Usage:
 #   rzr-render.sh <id> <body-file>     write tasks/<id>/brief.md, print its path
 #
-# Wraps the task body in templates/brief.md, adding the handoff protocol and a
-# unique `rozoro-task: <id>` marker. The brief thus persists at a predictable
-# path (survives teardown) and carries the marker rzr-link greps to find the
-# session. Feed the printed path to `rzr-spawn.sh <id> --brief <path>`.
+# Wraps the task body in templates/brief.md with a unique `rozoro-task: <id>`
+# marker, and separately renders templates/handoff.md -> handoff-protocol.md (the
+# handoff protocol, with {{FOLDER}} filled in). The brief carries ONLY the marker
+# rzr-link greps for plus the verbatim body; the handoff protocol is delivered to
+# claude crews as a system prompt (rzr-spawn), not baked into the task text. Both
+# files persist at predictable paths (survive teardown). Feed the printed brief
+# path to `rzr-spawn.sh <id> --brief <path>`.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 [ $# -ge 2 ] || rzr_die "usage: rzr-render.sh <id> <body-file>"
 ID="$1"; BODY_FILE="$2"
 TEMPLATE="$RZR_TEMPLATES/brief.md"
-[ -f "$TEMPLATE" ]  || rzr_die "no template at $TEMPLATE"
-[ -f "$BODY_FILE" ] || rzr_die "no body file at $BODY_FILE"
+HANDOFF_TMPL="$RZR_TEMPLATES/handoff.md"
+[ -f "$TEMPLATE" ]      || rzr_die "no template at $TEMPLATE"
+[ -f "$HANDOFF_TMPL" ]  || rzr_die "no handoff template at $HANDOFF_TMPL"
+[ -f "$BODY_FILE" ]     || rzr_die "no body file at $BODY_FILE"
 
 FOLDER="$(rzr_task_dir "$ID")"
 mkdir -p "$FOLDER"
 touch "$FOLDER/handoff.md"          # exists from the start so a watcher can tail it
 
-RZR_TMPL="$TEMPLATE" RZR_ID="$ID" RZR_FOLDER="$FOLDER" \
-RZR_BODY_FILE="$BODY_FILE" RZR_OUT="$FOLDER/brief.md" python3 - <<'PY'
+RZR_TMPL="$TEMPLATE" RZR_HANDOFF_TMPL="$HANDOFF_TMPL" RZR_ID="$ID" \
+RZR_FOLDER="$FOLDER" RZR_BODY_FILE="$BODY_FILE" RZR_OUT="$FOLDER/brief.md" \
+RZR_HANDOFF_OUT="$(rzr_handoff_protocol_path "$ID")" python3 - <<'PY'
 import os
-tmpl = open(os.environ["RZR_TMPL"]).read()
-body = open(os.environ["RZR_BODY_FILE"]).read()
-open(os.environ["RZR_OUT"], "w").write(
-    tmpl.replace("{{ID}}", os.environ["RZR_ID"])
-        .replace("{{FOLDER}}", os.environ["RZR_FOLDER"])
-        .replace("{{BODY}}", body))
+def render(tmpl_path, out_path, **subs):
+    t = open(tmpl_path).read()
+    for k, v in subs.items():
+        t = t.replace("{{%s}}" % k, v)
+    open(out_path, "w").write(t)
+render(os.environ["RZR_TMPL"], os.environ["RZR_OUT"],
+       ID=os.environ["RZR_ID"], FOLDER=os.environ["RZR_FOLDER"],
+       BODY=open(os.environ["RZR_BODY_FILE"]).read())
+# The handoff protocol, rendered standalone: fresh claude crews get it as a
+# system prompt; resumed crews get it re-injected into the follow-up prompt.
+render(os.environ["RZR_HANDOFF_TMPL"], os.environ["RZR_HANDOFF_OUT"],
+       ID=os.environ["RZR_ID"], FOLDER=os.environ["RZR_FOLDER"])
 PY
 
 echo "$FOLDER/brief.md"

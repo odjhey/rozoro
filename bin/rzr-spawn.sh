@@ -23,8 +23,10 @@
 #   --no-agent  create the tab + pane at a bare shell only (no agent)
 #
 # Precedence for harness/model/effort/permission-mode: explicit flag > preset >
-# built-in default. `rules` come only from the preset (appended to the agent's
-# system prompt); the task prompt itself is never modified.
+# built-in default. The claude system prompt is the rendered handoff protocol
+# plus any preset `rules`, delivered via --append-system-prompt-file; the task
+# prompt itself is passed verbatim (harnesses lacking a system-prompt channel
+# instead get the protocol folded into the prompt — see below).
 #
 # Mechanism: one herdr `tab create` (a clickable tab in the orchestrator's own
 # workspace), then `agent start` to bring up the agent in that tab's pane, then
@@ -75,6 +77,28 @@ case "$HARNESS" in
   *) rzr_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to rzr_harness_args in rzr-lib.sh" ;;
 esac
 
+# The handoff protocol is rozoro overhead, kept OUT of the verbatim task prompt.
+# claude gets it (plus any preset rules) as a system prompt via a single combined
+# file — claude forbids --append-system-prompt alongside --append-system-prompt-file,
+# so they must be merged here. Harnesses with no system-prompt channel instead get
+# the protocol folded into the delivered prompt, so they still report handoffs.
+FOLDER="$(rzr_task_dir "$ID")"
+rzr_render_handoff_protocol "$ID"
+HANDOFF="$(rzr_handoff_protocol_path "$ID")"
+SYSFILE=""
+if [ "$HARNESS" = claude ]; then
+  SYSFILE="$FOLDER/sysprompt.md"
+  { cat "$HANDOFF"
+    [ -n "$RULES" ] && printf '\n\n---\n## Crew rules\n\n%s\n' "$RULES"
+  } > "$SYSFILE"
+elif [ -n "$PROMPT" ]; then
+  PROMPT="$(cat "$HANDOFF")
+${RULES:+$RULES
+
+}--- task ---
+$PROMPT"
+fi
+
 # --- the mutation: serialize spawns behind the home lock -------------------
 do_spawn() {
   local ws; ws="$(rzr_workspace)"
@@ -124,7 +148,7 @@ do_spawn() {
   # NUL-separated (a rule value may contain newlines), read into an array here.
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
-    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$RULES")
+    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE")
   local -a start=(agent start "$ID" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 

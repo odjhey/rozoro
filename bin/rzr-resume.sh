@@ -48,11 +48,11 @@ done
 
 # A live/tracked task still owns the unique agent name — resuming would collide.
 # If it's still around, the right move is to continue it in place, not resume.
-rzr_task_exists "$ID" && rzr_die "task '$ID' is still tracked (state/$ID.meta) — it's live; continue it with 'rzr-send.sh $ID \"...\"' instead of resuming"
+rzr_task_exists "$ID" && rzr_die "task '$ID' is still tracked (state/$ID.meta) — it's live; continue it with 'rozoro send $ID \"...\"' instead of resuming"
 
 # The durable link is the whole point: session_id + the cwd it was born in.
 SESS="$(rzr_task_dir "$ID")/session.json"
-[ -s "$SESS" ] || rzr_die "no session link at $SESS — nothing to resume (was '$ID' ever started via rzr-start / linked?). Start it fresh with rzr-start.sh"
+[ -s "$SESS" ] || rzr_die "no session link at $SESS — nothing to resume (was '$ID' ever started via rozoro start / linked?). Start it fresh with 'rozoro start'"
 UUID="$(jq -r '.session_id // empty' "$SESS" 2>/dev/null)"
 [ -n "$UUID" ] || rzr_die "$SESS has no session_id — cannot resume; start '$ID' fresh instead"
 HARNESS="$(jq -r '.harness // "claude"' "$SESS" 2>/dev/null)"
@@ -64,6 +64,25 @@ CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
 if [ -n "$BRIEF" ]; then
   [ -f "$BRIEF" ] || rzr_die "no brief file at $BRIEF"
   PROMPT="$(cat "$BRIEF")"
+fi
+
+# `claude --resume` bakes in the ORIGINAL system prompt and does NOT re-apply
+# --append-system-prompt[-file] (verified), so the handoff protocol the fresh
+# crew got as a system prompt is not in force on resume. Its only surviving copy
+# is a stale user turn buried in the transcript, which the crew reliably ignores
+# — that's why a resumed crew answers but writes no handoff block, leaving
+# `rozoro status` blind. The user prompt is the one channel resume DOES honor, so
+# re-inject the protocol as a preamble to the follow-up (the follow-up itself is
+# preserved verbatim after the delimiter).
+if [ -n "$PROMPT" ]; then
+  rzr_render_handoff_protocol "$ID"
+  HANDOFF="$(rzr_handoff_protocol_path "$ID")"
+  PROMPT="[rozoro] This is a RESUMED turn. The handoff protocol still applies:
+
+$(cat "$HANDOFF")
+
+--- my follow-up ---
+$PROMPT"
 fi
 
 do_resume() {
