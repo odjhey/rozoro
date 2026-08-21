@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# fl-watch.sh - event-driven fleet monitor.
+# rzr-watch.sh - event-driven fleet monitor.
 #
 # Usage:
-#   fl-watch.sh [--once] [id ...]
+#   rzr-watch.sh [--once] [id ...]
 #     (no ids) watch every known task; otherwise just the listed ids
 #     --once   print the first event that arrives, then exit (handy for tests)
 #
@@ -20,27 +20,27 @@
 #
 # Requires: python3 (stdlib only) for the socket subscriber.
 set -euo pipefail
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fl-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 ONCE=0 ; declare -a WANT=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) ONCE=1; shift ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
-    -*) fl_die "unknown flag: $1" ;;
+    -*) rzr_die "unknown flag: $1" ;;
     *)  WANT+=("$1"); shift ;;
   esac
 done
 # (no ids given) watch every known task. Read loop instead of `mapfile` so this
 # runs on stock macOS bash 3.2, which has no mapfile/readarray.
 if [ "${#WANT[@]}" -eq 0 ]; then
-  while IFS= read -r _id; do WANT+=("$_id"); done < <(fl_task_ids)
+  while IFS= read -r _id; do WANT+=("$_id"); done < <(rzr_task_ids)
 fi
-[ "${#WANT[@]}" -gt 0 ] || fl_die "no tasks to watch"
+[ "${#WANT[@]}" -gt 0 ] || rzr_die "no tasks to watch"
 
-command -v python3 >/dev/null 2>&1 || fl_die "python3 not found on PATH (needed for the event stream)"
-SOCK=$(fl_socket_path)
-[ -n "$SOCK" ] && [ -S "$SOCK" ] || fl_die "could not resolve herdr control socket (is the server running?)"
+command -v python3 >/dev/null 2>&1 || rzr_die "python3 not found on PATH (needed for the event stream)"
+SOCK=$(rzr_socket_path)
+[ -n "$SOCK" ] && [ -S "$SOCK" ] || rzr_die "could not resolve herdr control socket (is the server running?)"
 
 # Parallel indexed arrays (bash-3.2 safe; no associative arrays): the watched
 # panes to subscribe to, and the id each pane maps back to when an edge arrives.
@@ -61,21 +61,21 @@ id_for_pane() {  # <pane> -> id, or fail
 # subscription is live; the next edge corrects the disk status, and agent-state
 # changes are seconds apart, so in practice nothing is missed.
 for id in "${WANT[@]}"; do
-  fl_task_exists "$id" || { echo "fl: skip unknown task '$id'" >&2; continue; }
-  p=$(fl_pane_of "$id"); s=$(fl_agent_status "$p")
-  fl_status_set "$id" "$s"
+  rzr_task_exists "$id" || { echo "rzr: skip unknown task '$id'" >&2; continue; }
+  p=$(rzr_pane_of "$id"); s=$(rzr_agent_status "$p")
+  rzr_status_set "$id" "$s"
   printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"
   case "$s" in
-    gone|shell) echo "fl: '$id' has no agent to watch ($s); skipping" >&2; continue ;;
+    gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2; continue ;;
   esac
   IDS+=("$id"); PANES+=("$p")
 done
-[ "${#PANES[@]}" -gt 0 ] || fl_die "no live tasks to watch"
+[ "${#PANES[@]}" -gt 0 ] || rzr_die "no live tasks to watch"
 
 # Subscribe to the push stream for all live panes. The reader writes one line
 # per edge to a fifo; we hold only the READ end so its exit surfaces as EOF.
-PIPE="$FL_STATE/.watch.$$.pipe"
-mkfifo "$PIPE" || fl_die "could not create event pipe"
+PIPE="$RZR_STATE/.watch.$$.pipe"
+mkfifo "$PIPE" || rzr_die "could not create event pipe"
 SUBPID=""
 cleanup() {
   [ -n "$SUBPID" ] && kill "$SUBPID" 2>/dev/null || true
@@ -84,12 +84,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 "$(fl_eventwait_py)" "$SOCK" 0 "${PANES[@]}" > "$PIPE" 2>/dev/null &
+python3 "$(rzr_eventwait_py)" "$SOCK" 0 "${PANES[@]}" > "$PIPE" 2>/dev/null &
 SUBPID=$!
 exec 3< "$PIPE"
 
-IFS= read -r ack <&3 || fl_die "event subscriber closed before acknowledging (socket $SOCK)"
-[ "$ack" = "@subscribed" ] || fl_die "unexpected event subscriber output: $ack"
+IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (socket $SOCK)"
+[ "$ack" = "@subscribed" ] || rzr_die "unexpected event subscriber output: $ack"
 
 # Event loop: block on the next pushed edge, print+persist only REAL changes.
 # A `<pane> <ws> <status> <agent>` line whose status equals the last one on disk
@@ -98,9 +98,9 @@ IFS= read -r ack <&3 || fl_die "event subscriber closed before acknowledging (so
 # stop.
 while IFS=$'\t' read -r pane ws st agent <&3; do
   id=$(id_for_pane "$pane") || continue
-  prev=$(fl_status_get "$id" 2>/dev/null || true)
+  prev=$(rzr_status_get "$id" 2>/dev/null || true)
   [ "$st" = "$prev" ] && continue
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
-  fl_status_set "$id" "$st"
+  rzr_status_set "$id" "$st"
   [ "$ONCE" -eq 1 ] && break
 done
