@@ -23,10 +23,18 @@ resolution, delivery, or merge authority — those are **repo-specific** and bel
 to the **crew agent**, which loads the target repo's own rules (`AGENTS.md`,
 skills, `CLAUDE.md`) from its `--cwd`. So:
 
-- **You** (the driver) read the issues/PRs, decide model by complexity, spawn
-  crew, watch, and judge completion — using rozoro + `gh` as tools.
-- **The crew** does the repo-specific work its own way, and may spawn its own
-  harness-native subagents.
+- **You** (the driver) identify the work, spawn crew, watch, and judge
+  completion — using rozoro + `gh` as tools. Route **eagerly**: gather only
+  enough to pick an id and a `--cwd`, then spawn on the **default crew** — *not*
+  enough to pre-solve the task. Don't grade the task and hand-pick a model; that's
+  its own upfront investigation. Use the default unless the user explicitly asked
+  for a specific crew/model. Naming the issue and its repo is dispatch;
+  reading every comment and reproducing the bug is not your job.
+- **The crew** does the repo-specific work its own way — **including the
+  investigation** — and may spawn its own harness-native subagents. Trust it to
+  dig. A thin brief that points at the work beats a fat one you assembled by hand:
+  the crew reads faster in-context than you can relay, and a dossier you pre-chew
+  goes stale the moment the crew opens the repo.
 - **Task prompts are verbatim.** rozoro never edits what you tell a crew to do.
 
 ## Setup
@@ -56,14 +64,20 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
 
-## Picking a crew (model by complexity)
+## Picking a crew
+
+**Default to the default preset.** Don't grade tasks by complexity to pick a
+model — that's an upfront investigation, and the crew is capable on the default.
+Only override when the **user explicitly** asks for a specific crew/model (or has
+a standing preference). Inspect presets with `rzr-crew.sh list`.
 
 Crew presets bundle *how* an agent boots (harness, model, permission mode, effort,
-standing rules) — never the task. Inspect them with `rzr-crew.sh list`.
+standing rules) — never the task.
 
 - Default preset = **sonnet claude, `auto` permission** (i.e.
-  `claude --model sonnet --permission-mode auto`). Good for routine work.
-- Harder task → override the model: `rzr-spawn.sh <id> --model opus --cwd … --prompt …`.
+  `claude --model sonnet --permission-mode auto`). This is the right choice for
+  routine *and* hard work unless told otherwise.
+- User asked for a bigger model → override: `rzr-spawn.sh <id> --model opus --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
 - `rules` in a preset are crew-behavioral and apply only to `claude` (appended to
@@ -71,15 +85,65 @@ standing rules) — never the task. Inspect them with `rzr-crew.sh list`.
 
 Precedence: explicit flag > preset > default.
 
+## Intake: decide policy, delegate discovery
+
+Before you spawn, resolve only what the crew **cannot** discover for itself, and
+declare everything else its job. The upfront decisions are small and finite:
+
+- **the id** — a short unique slug per task,
+- **the `--cwd`** — which repo/checkout the crew works in,
+- **the task shape** (ship vs scout, below), and
+- any **posture the crew can't infer** — a merge/delivery rule, a "don't touch X",
+  a required approach. State these; they're the constraints, not the content.
+
+Everything past that line — reading the issue, reproducing the bug, reading the
+code, weighing approaches — is **discovery**, and discovery belongs to the crew.
+Don't pre-solve to build a brief. Deciding policy is your job; digging is theirs.
+
+### Two task shapes: ship (default) and scout
+
+- **Ship** is the default. It produces a change (fix, feature, PR — however the
+  repo delivers). **Keep the investigation *inside* the ship task.** Bounded
+  research — repro, root-cause, reading the code — is the crew's first move, not
+  something you do upfront and hand over. Only pull research out into its own task
+  when unresolved uncertainty could materially change *whether or what* to build.
+- **Scout** produces *knowledge*, not a change — a written finding/report, no PR.
+  Dispatch a scout **only** when the user explicitly asks for a standalone
+  investigation/plan/audit, or when that could-change-what-to-build uncertainty
+  is real. Don't reflexively scout before every ship; that's the pre-gathering
+  habit wearing a different hat. And never both hand over a good-enough answer
+  *and* launch a parallel scout that isn't expected to change it.
+
+### Reuse-check before you scout
+
+A scout is expensive and often redundant. Before dispatching one, check whether
+the answer already exists: prior `tasks/<id>/handoff.md` blocks, existing reports
+or notes in the target repo, an earlier scout's output, or established evidence
+you already have. If it's already answered, relay it — don't re-run the
+investigation. This is the *one* cheap thing worth gathering upfront: not the
+answer itself, but whether the answer already exists.
+
 ## How to run a batch (the loop)
 
-1. Gather the work (e.g. `gh pr list`, `gh issue view NNN`) and decide, per task,
-   a unique id, the repo `--cwd`, and the model/preset.
+1. Identify the work (e.g. `gh pr list`/`gh issue list` for the *set* of ids) and
+   run **Intake** (above) per task: id, `--cwd`, task shape (ship/scout), and any
+   posture the crew can't infer. Leave the crew on the default preset unless the
+   user named a model. Stop there — you don't need `gh issue view NNN` digested
+   into the brief. The moment you can name a task and point at it, dispatch; let
+   the crew do the reading. Reach for deeper `gh` inspection only when you
+   genuinely can't route without it (e.g. which repo an issue belongs to, or
+   splitting one id into several) — or for the reuse-check before a scout.
 2. Write each task body to a file (the scratchpad or under `$ROZORO_HOME`) and
-   `rzr-start.sh <id> --body <file> --cwd <repo> [--model opus]`. This renders a
+   `rzr-start.sh <id> --body <file> --cwd <repo>` (add `--model opus` only if the
+   user asked for it). This renders a
    **durable brief** (with the handoff protocol) into `tasks/<id>/`, spawns the
    crew, and links its session — all verbatim, no shell escaping. Prefer this over
    raw `rzr-spawn.sh`, which skips the task folder, protocol, and session link.
+   Keep the body **intent + pointer**, not a dossier: what outcome you want and
+   where to look (`issue #NNN`, a PR, a path) — the crew investigates from there.
+   Front-load only the constraints the crew *can't* discover on its own (a merge
+   rule, a "don't touch X", a preferred approach). If you catch yourself pasting
+   issue comments or repro steps into the brief, you're doing the crew's job.
 3. **Do not sit in a poll loop.** Run `rzr-watch.sh --once <ids>` as a
    **background task** — it blocks on herdr's native `pane.agent_status_changed`
    PUSH stream at ~0% CPU and returns (waking you, the driver) only on a real

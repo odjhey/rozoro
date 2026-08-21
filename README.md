@@ -14,6 +14,48 @@ The core mechanics:
 3. **send to sessions** — submit a follow-up, or drop keys to interrupt
 4. **lockfile** — single-driver safety around the spawn mutation
 
+## What rozoro is for
+
+The problem: one agent session is easy to run, but the moment you want three or
+five tasks worked in parallel — across different repos — you become a tab-juggler,
+babysitting sessions and copy-pasting context. rozoro's goal is to let **one
+driver session run a fleet** without that overhead. The driver talks to you and
+dispatches; each crew agent works its task in its own tab; the driver watches,
+steers, and reaps.
+
+Concretely, rozoro aims to be:
+
+- **The smallest useful spawn/watch/message/reap layer over herdr** — four verbs,
+  not a framework. If herdr already does it, rozoro doesn't wrap it.
+- **Crash-safe by being stateless in-process.** All state is files under
+  `$ROZORO_HOME`; there is no daemon. Kill the driver and the next command
+  reconciles from disk — nothing in flight is lost.
+- **A leverage multiplier for the driver.** The driver dispatches *eagerly* and
+  delegates *discovery* (reading issues, reproducing bugs, weighing approaches) to
+  the crew, rather than pre-solving work itself. rozoro is the hands; the crew is
+  the domain expert; the driver is the judgment.
+
+## What rozoro is *not* (non-goals)
+
+These are deliberate. rozoro stays small by refusing to grow into them:
+
+- **Not a manager or workflow engine.** It knows nothing about worktrees, PR
+  resolution, delivery, testing, or merge authority — and never will. Those are
+  repo-specific and belong to the crew agent (see the design boundary below).
+- **Not a harness or a model.** It *launches* harnesses (`claude`, `codex`, …);
+  it doesn't replace or wrap their reasoning.
+- **Not a policy layer over the crew.** rozoro is a *transport, not a gatekeeper*
+  — a dumb spawner, not a manager. Task prompts pass through verbatim; it never
+  rewrites, filters, or approves what you tell the crew. The only injection is a
+  preset's standing `rules`, and only as a separate appended system prompt.
+- **Not a daemon or always-on service.** No background process maintains state;
+  `state/<id>.status` exists only after a watcher has run.
+- **Not a replacement for repo rules.** The crew loads the target repo's own
+  `AGENTS.md` / `CLAUDE.md` / skills from its `--cwd`; rozoro never re-encodes them.
+- **Not a doer of domain work.** rozoro spawns "Resolve issue #NNN" and stays out
+  of the way. It does not read the code, pick approaches, or judge correctness —
+  that intelligence is the driver's and the crew's.
+
 ## rozoro is a spawner, not a manager (the design boundary)
 
 rozoro is intentionally dumb. It does **not** know about worktrees, PR
@@ -28,9 +70,10 @@ Consequently:
 - **Task prompts are passed verbatim.** rozoro never edits what you tell a crew
   to do. The only thing it injects is a preset's standing `rules`, and only as an
   *appended system prompt*, never into the task.
-- **The intelligence is the driver's.** "Read the PRs, pick a model by
-  complexity, assign, judge done" is the driver session using rozoro + `gh` as
-  tools. rozoro is the hands.
+- **The intelligence is the driver's.** "Identify the work, dispatch, steer,
+  judge done" is the driver session using rozoro + `gh` as tools — spawning on the
+  default crew unless you ask for a specific one, and leaving the investigation to
+  the crew. rozoro is the hands.
 
 ## Requirements
 
@@ -180,7 +223,7 @@ can reach these from anywhere. Read crew state from the on-disk
 # 1. spawn a crew from the default preset (sonnet claude, auto permission):
 bin/rzr-spawn.sh t1 --cwd /some/repo --prompt 'List the files in this repo, then stop.'
 
-# …or override the model for a harder task:
+# …or override the model when you explicitly want one:
 bin/rzr-spawn.sh t2 --cwd /some/repo --model opus --prompt 'Resolve issue #42.'
 
 # 2. watch the fleet event-driven (blocks, prints on each real transition):
