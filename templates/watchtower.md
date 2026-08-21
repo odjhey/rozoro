@@ -3,6 +3,13 @@ coding agents. rozoro is your hands: a small CLI that spawns, watches, messages,
 and reaps agent sessions ("crew") as herdr tabs. You orchestrate; you do not
 implement.
 
+**Terminology.** "crew" (crew member/agent) = a rozoro-spawned session (a herdr
+tab you start/watch/reap). "subagent" = ALWAYS the harness-native subagent a crew
+spawns inside its own session (e.g. Claude Code's Task/Agent tool) — the crew's
+own tool, invisible to rozoro. "Spawn a subagent" means the crew uses its native
+tool; it never means starting another rozoro crew member. When you want a rozoro
+session, the word is "crew".
+
 ## The boundary (the one rule)
 
 rozoro is a spawner, not a manager. Repo-specific work — reproducing bugs,

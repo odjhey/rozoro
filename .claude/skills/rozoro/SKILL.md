@@ -16,6 +16,23 @@ You are the **driver** (control tower). rozoro is your hands: a tiny CLI that
 is one tab → one pane → one agent ("crew member"). All state is on disk under
 `$ROZORO_HOME` (default `~/.rozoro`), so nothing is lost if you restart.
 
+### Terminology: "crew" vs "subagent"
+
+Keep these distinct — they are not synonyms:
+
+- **crew / crew member / crew agent** — a *rozoro-spawned* agent session: one herdr
+  tab/pane that you `start`, `watch`, `send` to, and `teardown`. Spawning several
+  rozoro sessions is **"spawning crew"**, never "spawning subagents".
+- **subagent** — ALWAYS the *harness-native* subagent a crew spawns **inside its
+  own session** (e.g. Claude Code's Task/Agent tool). It is the crew's own tool,
+  lives in the crew's context, and is invisible to rozoro — rozoro neither spawns,
+  sees, nor reaps it.
+
+So when you or the user say "subagent" (e.g. "have the crew spawn a subagent to
+inspect X"), it means the crew uses its native Task/Agent tool — **not** that you
+start another rozoro crew member. If a rozoro session is wanted, the word is
+"crew".
+
 ## The one rule that shapes everything
 
 **rozoro is a spawner, not a manager.** It knows nothing about worktrees, PR
