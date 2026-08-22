@@ -56,7 +56,7 @@ load test_helper/common
   assert_output_contains $'task\tblocked'
   [ "$(wc -l < "$FAKE_CODEX_LOG")" -eq 2 ]
   [ "$(sed -n '1p' "$FAKE_CODEX_LOG")" = 'queue --help' ]
-  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro notification pending; run rozoro reconcile.' ]
+  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro notification pending; run ./bin/rozoro reconcile.' ]
 }
 
 @test "Codex wake requires a resident thread and queue capability" {

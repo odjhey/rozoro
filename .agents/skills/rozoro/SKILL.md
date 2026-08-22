@@ -56,40 +56,38 @@ skills, `CLAUDE.md`) from its `--cwd`. So:
 
 ## Setup
 
-The tools ship in their **own** repo's `bin/` (e.g. `~/proj/rozoro/bin`) — **not**
-inside this skill folder. On a set-up machine that `bin/` is already on `$PATH`, so
-you can call them by bare name; otherwise add it to `PATH` or call by absolute
-path. Every command has two forms: the dispatcher `rozoro <verb>` (or short `rzr
-<verb>`) and the underlying `rzr-<verb>.sh` script — `rozoro start …` ≡ `rzr-start.sh
-…`. This doc uses the `rzr-*.sh` form; substitute the dispatcher freely. Still
-requires `herdr` (running server, and you inside a herdr session), `jq`, and
-`python3`. Run `rozoro doctor` to verify everything at once (deps, herdr server,
-`bin/` on PATH, and the resolved default harness). It does not create or rewrite
-the optional `$ROZORO_HOME/crew/default.json`.
+The control tower runs from the rozoro checkout and invokes its local dispatcher
+as `./bin/rozoro <verb>`. Keep the driver in that checkout; select every fresh
+crew's target repository explicitly with `--cwd <repo>`. Rozoro itself does not
+need to be registered on `PATH`. External dependencies still do: `herdr` (with a
+running server, and the driver inside a herdr session), `jq`, `python3`, and the
+selected harness. Run `./bin/rozoro doctor` to verify them and the resolved
+default harness. It does not create or rewrite the optional
+`$ROZORO_HOME/crew/default.json`.
 
 ## Trigger vocabulary
 
 | Intent | Command |
 |---|---|
-| **Start** a task (blessed) | `rzr-start.sh <display-name> --body <file> --cwd <repo> [rzr-spawn flags]` — reserves and prints an immutable task key, renders a durable brief, spawns, and links the session in one unskippable step |
-| **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
-| **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
-| **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
-| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
-| **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
-| **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
-| **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`rzr-register.sh --harness <h>`) then run `rzr-watch.sh --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver `rzr-reconcile.sh`s on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
+| **Start** a task (blessed) | `./bin/rozoro start <display-name> --body <file> --cwd <repo> [spawn flags]` — reserves and prints an immutable task key, renders a durable brief, spawns, and links the session in one unskippable step |
+| **Start** (low-level) | `./bin/rozoro spawn <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
+| **Steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` |
+| **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
+| **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
+| **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
+| **Read verdict** | `./bin/rozoro status <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
+| **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
+| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`./bin/rozoro register --harness <h>`) then run `./bin/rozoro watch --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver runs `./bin/rozoro reconcile` on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
 
-**Never conflate DATA and CONTROL.** `rzr-send.sh` is free text the crew reads
-and reasons about — a prompt or follow-up. `rzr-control.sh` is a lifecycle
+**Never conflate DATA and CONTROL.** `./bin/rozoro send` is free text the crew reads
+and reasons about — a prompt or follow-up. `./bin/rozoro control` is a lifecycle
 action from a closed verb list that the harness *executes* directly — it never
 passes through the agent as something to interpret. Sending a lifecycle command
 as chat text (hoping the agent "reads" it and stops) is the failure this split
-prevents. `rzr-control.sh` also fails closed: an unresolved task id or a pane
+prevents. `./bin/rozoro control` also fails closed: an unresolved task id or a pane
 that's already gone is refused loudly rather than guessed at, and every verb
 verifies its own postcondition (e.g. `interrupt` confirms the agent actually
 left `working`) instead of trusting the send call's exit code alone.
@@ -99,7 +97,7 @@ left `working`) instead of trusting the send call's exit code alone.
 **Default to the default preset.** Don't grade tasks by complexity to pick a
 model — that's an upfront investigation, and the crew is capable on the default.
 Only override when the **user explicitly** asks for a specific crew/model (or has
-a standing preference). Inspect presets with `rzr-crew.sh list`.
+a standing preference). Inspect presets with `./bin/rozoro crew list`.
 
 Crew presets bundle *how* an agent boots (harness, model, permission mode, effort, fast tier,
 standing rules) — never the task.
@@ -109,7 +107,7 @@ standing rules) — never the task.
 - Without that file, the hardcoded default is Claude/Sonnet/`auto`; an explicit
   `--harness codex` selects gpt-5.6-sol/`low`. Every Codex spawn and resume is
   forced to `--yolo`, including presets whose `permission_mode` is empty.
-- User asked for another model → override: `rzr-spawn.sh <id> --model <model> --cwd … --prompt …`.
+- User asked for another model → override: `./bin/rozoro spawn <id> --model <model> --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
 - `rules` in a preset are crew-behavioral. Claude and Pi receive them through
@@ -174,66 +172,66 @@ answer itself, but whether the answer already exists.
    genuinely can't route without it (e.g. which repo an issue belongs to, or
    splitting one id into several) — or for the reuse-check before a scout.
 2. Write each task body to a file (the scratchpad or under `$ROZORO_HOME`) and
-   `rzr-start.sh <display-name> --body <file> --cwd <repo>` (add `--model <model>` only if the
+   `./bin/rozoro start <display-name> --body <file> --cwd <repo>` (add `--model <model>` only if the
    user asked for it). Use the immutable key it prints for all later operations.
    The command writes the **durable brief** (with the
    handoff protocol) into `tasks/<task-key>/`, spawns the
    crew, and links its session — all verbatim, no shell escaping. Prefer this over
-   raw `rzr-spawn.sh`, which skips the task folder, protocol, and session link.
+   raw `./bin/rozoro spawn`, which skips the task folder, protocol, and session link.
    Keep the body **intent + pointer**, not a dossier: what outcome you want and
    where to look (`issue #NNN`, a PR, a path) — the crew investigates from there.
    Front-load only the constraints the crew *can't* discover on its own (a merge
    rule, a "don't touch X", a preferred approach). If you catch yourself pasting
    issue comments or repro steps into the brief, you're doing the crew's job.
 3. **Do not sit in a poll loop or occupy a foreground tool call with a watcher.**
-   A foreground `rzr-watch.sh` blocks the watchtower's model turn, so operator
+   A foreground `./bin/rozoro watch` blocks the watchtower's model turn, so operator
    messages queue behind it. In Pi, the project-local `rozoro-watchtower`
    extension owns a long-lived Herdr push subscriber and injects
    `[rozoro event]` messages on actionable edges; `/rozoro-monitor status`
    reports it and `/rozoro-monitor on` repairs it. In a resident Codex or Claude
-   watchtower, register the validated target once (`rzr-register.sh --harness
-   <h>`), then run `rzr-watch.sh --once --wake <ids>` from a genuinely external
+   watchtower, register the validated target once (`./bin/rozoro register --harness
+   <h>`), then run `./bin/rozoro watch --once --wake <ids>` from a genuinely external
    background task: it delivers a fixed, content-free nudge on settled `idle`,
    `done`, or `blocked` edges through the registered backend (Codex queue, or the
    Herdr pane for Claude — deferred while the driver is working/blocked), backed by
-   a durable at-least-once ledger. On the nudge run `rzr-reconcile.sh` to read
-   verdicts and ack the generation. `rzr-list.sh` polling is
+   a durable at-least-once ledger. On the nudge run `./bin/rozoro reconcile` to read
+   verdicts and ack the generation. `./bin/rozoro list` polling is
    only a fallback. `state/<id>.status` is produced by the active watcher. Either
    way, `done`/`idle` means the agent ended a turn — not that the task is correct
    or landed.
-4. On each edge, run `rzr-status.sh <id>` — read the **handoff verdict**, not herdr's
+4. On each edge, run `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
-   answer via `rzr-send.sh`; a `[same]`/no-new-block on an idle edge means the crew
+   answer via `./bin/rozoro send`; a `[same]`/no-new-block on an idle edge means the crew
    ended a turn without reporting (e.g. backgrounded work) — nudge it. Status also
    prints any **unresolved OPEN items** (an earlier `needs-action`/`blocked`/`failed`
    or an unanswered `inputs-needed`): a `done` verdict with an OPEN list means the
    crew finished *this* turn but an earlier question is still hanging — handle it,
-   then `rzr-ack.sh <id>` so it stops resurfacing. **`done` is an invitation to
+   then `./bin/rozoro ack <id>` so it stops resurfacing. **`done` is an invitation to
    review, not a signal to reap** — a done crew sits idle at ~0 cost, so leave it
    alive (see step 6).
-5. Steer any crew that needs it with `rzr-send.sh`; the user can also click the tab
-   and type directly. Also call `rzr-link.sh <id> <cwd>` here if the birth-time link
+5. Steer any crew that needs it with `./bin/rozoro send`; the user can also click the tab
+   and type directly. Also call `./bin/rozoro link <id> <cwd>` here if the birth-time link
    was not yet captured (idempotent).
 6. **Keep crews alive until the result is accepted; reap conservatively.** A `done`
    verdict is not acceptance — the user still has to review it, and review comes
    *after* a delay. Tearing down on `done` throws away the crew's live context, so
    when follow-up arrives you'd have to re-spawn cold. Instead:
    - **Follow-up continues the same crew.** More feedback on a task the crew
-     already worked is *never* a fresh `rzr-start` with a new id — it's a
-     `rzr-send.sh <id>` to the **live** crew, which still holds the full
+     already worked is *never* a fresh `./bin/rozoro start` with a new id — it's a
+     `./bin/rozoro send <id>` to the **live** crew, which still holds the full
      conversation. Same id, same agent, same context.
    - **If the crew was already reaped,** don't spawn a cold replacement either:
-     `rzr-resume.sh <id> [--prompt "<follow-up>"]` reopens the *exact*
+     `./bin/rozoro resume <id> [--prompt "<follow-up>"]` reopens the *exact*
      Claude, Codex, or Pi conversation as a fresh crew tab from
      `tasks/<id>/session.json` and can deliver your follow-up in the same call.
-     A brand-new `rzr-start` rehydrating from `handoff.md` is the last resort, not
+     A brand-new `./bin/rozoro start` rehydrating from `handoff.md` is the last resort, not
      the default — it starts cold.
-   - **Reap (`rzr-teardown.sh <id>`) only once** the result is captured **and**
+   - **Reap (`./bin/rozoro teardown <id>`) only once** the result is captured **and**
      accepted (landed/merged, or the user explicitly signs off), or the user says
      to drop it. When unsure whether more is coming, leave it idle — an idle crew
      costs nothing; a prematurely reaped one costs a cold re-spawn.
    - **Teardown itself refuses on unlanded work.** If the crew's `cwd` still has
-     uncommitted/untracked changes or unpushed commits, `rzr-teardown.sh` exits
+     uncommitted/untracked changes or unpushed commits, `./bin/rozoro teardown` exits
      with an error instead of closing the tab — the standard behavior only
      verifying `done` on the handoff should not accidentally cover. Land the
      work (or have the crew do so) and retry; `--force` is the explicit override
@@ -245,7 +243,7 @@ answer itself, but whether the answer already exists.
 
 ## Durable task folders & the handoff contract
 
-`rzr-start` atomically reserves a globally unique key for every display name and
+`./bin/rozoro start` atomically reserves a globally unique key for every display name and
 gives it a folder under `$ROZORO_HOME/tasks/<task-key>/` — the durable
 record that makes teardown non-lossy:
 
@@ -254,10 +252,10 @@ record that makes teardown non-lossy:
 - `handoff.md` — the OUTPUT, **append-only**. The protocol tells the crew to append
   a block before ending *every* turn, each carrying a `verdict:` line
   (`done | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
-  tell "done" from "needs more input", and it accumulates across multiple `rzr-send`
+  tell "done" from "needs more input", and it accumulates across multiple `./bin/rozoro send`
   rounds so context is never lost. Because it is append-only, reading only the last
-  block would let a later `done` bury an earlier open question — so `rzr-status`
-  scans *all* blocks and keeps surfacing any OPEN item until you `rzr-ack` it (the
+  block would let a later `done` bury an earlier open question — so `./bin/rozoro status`
+  scans *all* blocks and keeps surfacing any OPEN item until you `./bin/rozoro ack` it (the
   ack cursor `.acked-blocks` is separate from the miss-detector's `.seen-blocks` and
   advances only on an explicit ack).
 - `session.json` — the Claude/Codex/Pi resume link. Pi uses its preallocated
@@ -268,14 +266,14 @@ into the prompt for harnesses without that channel. It is rendered per task to
 `tasks/<id>/handoff-protocol.md` and re-injected into resume follow-ups. A
 standing system rule is more durable than a turn-1 instruction, but reliability
 still comes from the loop: detect a miss with
-`rzr-status` (no new block on an idle edge), surface buried opens the same way, and
-nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this repo.
+`./bin/rozoro status` (no new block on an idle edge), surface buried opens the same way, and
+nudge with `./bin/rozoro send`. The folder lives in `$ROZORO_HOME` (data), never in this repo.
 
 ## Gotchas
 
 - Spawning in a repo the crew hasn't trusted shows Claude Code's trust dialog;
-  `rzr-spawn` reports the pane `blocked`. Accept it once with
-  `rzr-control.sh <id> key enter` (a key press is CONTROL, not chat text), then
+  `./bin/rozoro spawn` reports the pane `blocked`. Accept it once with
+  `./bin/rozoro control <id> key enter` (a key press is CONTROL, not chat text), then
   re-deliver the prompt.
 - One live agent per unique name — always give each task a distinct `<id>`.
 - Claude, Codex, and Pi are wired for model and effort. Claude and Pi receive
@@ -288,5 +286,5 @@ nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this 
 - A crew can self-background its own long-running command (e.g. a `sleep`, a
   build) and **end its turn early** — the edge to `done` fires before the work
   is actually finished. The footer showing `1 shell`/`1 monitor` is the tell:
-  read the pane and steer with `rzr-send.sh` to make it finish; don't assume
+  read the pane and steer with `./bin/rozoro send` to make it finish; don't assume
   `done` means complete.

@@ -3,6 +3,10 @@ coding agents. rozoro is your hands: a small CLI that spawns, watches, messages,
 and reaps agent sessions ("crew") as herdr tabs. You orchestrate; you do not
 implement.
 
+Remain in this rozoro checkout and invoke its dispatcher as `./bin/rozoro`.
+Choose each fresh crew's target repository explicitly with `--cwd`; do not move
+the driver into the target checkout or depend on Rozoro being on `PATH`.
+
 **Terminology.** "crew" (crew member/agent) = a rozoro-spawned session (a herdr
 tab you start/watch/reap). "subagent" = ALWAYS the harness-native subagent a crew
 spawns inside its own session (e.g. Claude Code's Task/Agent tool) — the crew's
@@ -40,35 +44,35 @@ are passed to the crew verbatim.
 
 ## The loop
 
-1. `rozoro start <display-name> --body <file> --cwd <repo>` — reserves and prints
+1. `./bin/rozoro start <display-name> --body <file> --cwd <repo>` — reserves and prints
    an immutable task key, then renders a durable brief (with
    the handoff protocol), spawns the crew, links its session. Prefer this over raw
-   `rozoro spawn`.
+   `./bin/rozoro spawn`.
 2. Sense without blocking. In Pi, this repo's `rozoro-watchtower` extension owns
    the Herdr push subscriber in the background and injects a `[rozoro event]`
-   message on actionable edges. **Never run `rozoro watch` in a foreground bash
+   message on actionable edges. **Never run `./bin/rozoro watch` in a foreground bash
    tool call**: that occupies your turn and queues operator messages. The
    extension starts automatically for this watchtower prompt; `/rozoro-monitor
    status` reports it and `/rozoro-monitor on` repairs it. Outside Pi (Codex or
-   Claude), register your validated wake target once with `rozoro register
-   --harness <h>`, then run `rozoro watch --once --wake <id>` only through a
+   Claude), register your validated wake target once with `./bin/rozoro register
+   --harness <h>`, then run `./bin/rozoro watch --once --wake <id>` only through a
    genuinely external background waiter — the nudge is durable (at-least-once).
-   When it arrives, run `rozoro reconcile` to read verdicts and ack it.
+   When it arrives, run `./bin/rozoro reconcile` to read verdicts and ack it.
    `state/<id>.status` remains the non-blocking current-state snapshot.
 
-   **Claude registration.** `rozoro register --harness claude` requires the
+   **Claude registration.** `./bin/rozoro register --harness claude` requires the
    herdr pane to report `interactive_ready`, which a Claude pane only does once
    it reaches its own idle prompt — never mid-turn. So for a Claude watchtower,
    register by hand at your first idle prompt:
 
    ```
-   !rozoro register --harness claude
+   !./bin/rozoro register --harness claude
    ```
 
    This is the one documented registration path — not a fallback. It always
    works once you're idle, requires no setup, and doesn't depend on any
    settings file loading correctly. Do it once per session, before relying on
-   `rozoro watch --wake`.
+   `./bin/rozoro watch --wake`.
 
    A Claude watchtower is launched with `ROZORO_ROLE=watchtower` in its
    environment. That marker is session identity, not a registration
@@ -76,19 +80,19 @@ are passed to the crew verbatim.
    rozoro-spawned crew or a plain dev session opened in the same checkout.
    Nothing reads it yet — it's reserved for watchtower-scoped tooling, such
    as the planned long-lived monitor daemon (#25).
-3. On each edge, `rozoro status <id>` — read the **handoff verdict**, not herdr's
+3. On each edge, `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
-   `needs-action` → answer with `rozoro send <id> "..."`; a no-new-block on an idle
+   `needs-action` → answer with `./bin/rozoro send <id> "..."`; a no-new-block on an idle
    edge means the crew ended a turn without reporting — nudge it.
-4. Steer with `rozoro send`. Follow-up on a task the crew already worked is never a
+4. Steer with `./bin/rozoro send`. Follow-up on a task the crew already worked is never a
    fresh start with a new id — it's a `send` to the **live** crew (same context).
 
 ## Keep crews alive; reap conservatively
 
 `done` is an invitation to review, not acceptance. An idle crew costs nothing; a
-prematurely reaped one costs a cold re-spawn. Reap (`rozoro teardown <id>`) only
+prematurely reaped one costs a cold re-spawn. Reap (`./bin/rozoro teardown <id>`) only
 once the result is captured **and** accepted (landed/merged or the user signs
-off). If a crew was already reaped and follow-up arrives, `rozoro resume <id>
+off). If a crew was already reaped and follow-up arrives, `./bin/rozoro resume <id>
 --prompt "..."` reopens the exact conversation — don't cold-spawn a replacement.
 
 ## Reporting

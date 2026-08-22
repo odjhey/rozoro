@@ -2,7 +2,7 @@
 # rzr-start.sh - render + spawn + link a task in one unskippable command.
 #
 # Usage:
-#   rzr-start.sh <display-name> --body <file> [--cwd <dir>] [rzr-spawn flags...]
+#   rzr-start.sh <display-name> --body <file> --cwd <dir> [rzr-spawn flags...]
 #
 # The blessed way to begin a task, so linking can never be forgotten:
 #   1. rzr-render.sh  -> persist tasks/<id>/brief.md (with handoff protocol + marker)
@@ -12,18 +12,19 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-[ $# -ge 1 ] || rzr_die "usage: rzr-start.sh <display-name> --body <file> [--cwd dir] [rzr-spawn flags]"
+[ $# -ge 1 ] || rzr_die "usage: rzr-start.sh <display-name> --body <file> --cwd dir [rzr-spawn flags]"
 DISPLAY="$1"; shift
-BODY=""; CWD="$PWD"; PASS=(); NO_AGENT=0
+BODY=""; CWD=""; PASS=(); NO_AGENT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --body) BODY="$2"; shift 2 ;;
-    --cwd)  CWD="$2"; PASS+=(--cwd "$2"); shift 2 ;;
+    --body) [ $# -ge 2 ] || rzr_die "--body <file> required"; BODY="$2"; shift 2 ;;
+    --cwd)  [ $# -ge 2 ] || rzr_die "--cwd <dir> required"; CWD="$2"; PASS+=(--cwd "$2"); shift 2 ;;
     --no-agent) NO_AGENT=1; PASS+=("$1"); shift ;;
     *)      PASS+=("$1"); shift ;;
   esac
 done
 [ -n "$BODY" ] || rzr_die "--body <file> required"
+[ -n "$CWD" ] || rzr_die "--cwd <dir> required for a fresh task"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad --cwd"
 rzr_validate_task_component "$DISPLAY" "display name"
 
@@ -44,5 +45,5 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 echo "rzr-start: '$ID' spawned but session not linked yet — the watch step links it" \
-     "on first sense, or run: rzr-link.sh $ID $CWD" >&2
+     "on first sense, or run: ./bin/rozoro link $ID $CWD" >&2
 exit 0

@@ -28,7 +28,7 @@ register_claude_driver() {
   run rzr-watch.sh --once --wake task
   assert_success
   assert_output_contains $'task\tdone'
-  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run rozoro reconcile.' "$FAKE_HERDR_LOG"
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run ./bin/rozoro reconcile.' "$FAKE_HERDR_LOG"
   ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
   [ "$(jq -r '.generation' "$ledger")" -eq 1 ]
   [ "$(jq -r '.delivered' "$ledger")" -eq 1 ]
@@ -71,7 +71,7 @@ register_claude_driver() {
   start_event_server events 'p1,w1,done,claude' 'driver-pane,w1,idle,claude'
   run rzr-watch.sh --once --wake task
   assert_success
-  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run rozoro reconcile.' "$FAKE_HERDR_LOG"
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run ./bin/rozoro reconcile.' "$FAKE_HERDR_LOG"
   ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
   [ "$(jq -r '.generation' "$ledger")" -eq 1 ]
   [ "$(jq -r '.delivered' "$ledger")" -eq 1 ]
@@ -86,7 +86,7 @@ register_claude_driver() {
   start_event_server hold
   run rzr-watch.sh --once --wake task
   assert_success
-  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run rozoro reconcile.' "$FAKE_HERDR_LOG"
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run ./bin/rozoro reconcile.' "$FAKE_HERDR_LOG"
   [ "$(jq -r '.generation' "$ledger/pending.json")" -eq 1 ]
   [ "$(jq -r '.delivered' "$ledger/pending.json")" -eq 1 ]
 }

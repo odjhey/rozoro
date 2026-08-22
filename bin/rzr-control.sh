@@ -127,7 +127,7 @@ case "$VERB" in
         if "$RZR_BIN/rzr-link.sh" "$ID" "$CWD" --refresh >/dev/null 2>&1; then linked=1; break; fi
         sleep 0.5
       done
-      [ "$linked" -eq 1 ] || echo "rzr: warning: restarted '$ID' but its new session is not linked yet; run: rzr-link.sh $ID '$CWD'" >&2
+      [ "$linked" -eq 1 ] || echo "rzr: warning: restarted '$ID' but its new session is not linked yet; run: ./bin/rozoro link $ID '$CWD'" >&2
     fi
 
     NEWPANE="$(rzr_pane_of "$ID")"
