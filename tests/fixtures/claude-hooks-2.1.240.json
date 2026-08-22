@@ -1,0 +1,31 @@
+{
+  "fixture_version": 1,
+  "claude_code_version": "2.1.240",
+  "captured_with": [
+    "--setting-sources=",
+    "--settings=<temporary-file>",
+    "--include-hook-events",
+    "--output-format=stream-json",
+    "--verbose",
+    "--debug=hooks"
+  ],
+  "redactions": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "cwd": "/redacted/worktree",
+    "transcript_path": "/redacted/transcript.jsonl"
+  },
+  "payloads": [
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","hook_event_name":"SessionStart","source":"startup"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","permission_mode":"bypassPermissions","hook_event_name":"UserPromptSubmit","prompt":"<redacted>","prompt_id":"00000000-0000-4000-8000-000000000002"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","hook_event_name":"SubagentStart","agent_id":"agent-redacted-1","agent_type":"general-purpose","prompt_id":"00000000-0000-4000-8000-000000000002"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","permission_mode":"bypassPermissions","hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"agent-redacted-1","agent_type":"general-purpose","agent_transcript_path":"/redacted/subagent.jsonl","last_assistant_message":"<redacted>","background_tasks":[{"id":"agent-redacted-1","type":"subagent","status":"running","description":"<redacted>","agent_type":"general-purpose"}],"session_crons":[],"prompt_id":"00000000-0000-4000-8000-000000000002"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","permission_mode":"bypassPermissions","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"<redacted>","background_tasks":[{"id":"agent-redacted-1","type":"subagent","status":"running","description":"<redacted>","agent_type":"general-purpose"},{"id":"shell-redacted-1","type":"shell","status":"running","description":"<redacted>","command":"<redacted>"}],"session_crons":[],"prompt_id":"00000000-0000-4000-8000-000000000002"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","permission_mode":"bypassPermissions","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"<redacted>","background_tasks":[],"session_crons":[],"prompt_id":"00000000-0000-4000-8000-000000000002"},
+    {"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/redacted/transcript.jsonl","cwd":"/redacted/worktree","hook_event_name":"SessionEnd","reason":"other","prompt_id":"00000000-0000-4000-8000-000000000002"}
+  ],
+  "stream_hook_events": [
+    {"type":"system","subtype":"hook_started","hook_name":"Stop","hook_event":"Stop","hook_id":"hook-redacted-1","session_id":"00000000-0000-4000-8000-000000000001","uuid":"00000000-0000-4000-8000-000000000003"},
+    {"type":"system","subtype":"hook_response","hook_name":"Stop","hook_event":"Stop","hook_id":"hook-redacted-1","session_id":"00000000-0000-4000-8000-000000000001","uuid":"00000000-0000-4000-8000-000000000004","exit_code":0,"outcome":"success","stdout":"","stderr":"","output":""}
+  ]
+}
