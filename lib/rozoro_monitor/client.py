@@ -94,9 +94,10 @@ def allocate_producer_seq(session_id: str, home: str | os.PathLike[str] | None =
 
 
 def prepare_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None = None) -> dict[str, Any]:
-    """Copy and validate an event, allocating producer_seq only when absent."""
+    """Copy and validate an event, allocating producer_seq only when the schema requires it and it's absent."""
     prepared = dict(event)
-    if "producer_seq" not in prepared:
+    message_type = prepared.get("type")
+    if isinstance(message_type, str) and protocol.requires_producer_seq(message_type) and "producer_seq" not in prepared:
         session_id = prepared.get("session_id")
         if not isinstance(session_id, str):
             protocol.validate(prepared)  # raises the contract's deterministic error
@@ -170,8 +171,6 @@ class ProducerClient:
             ack = self._exchange(prepared)
         except Exception as exc:
             path = spool_event(prepared, self.home)
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
             raise ClientError(f"durable ACK uncertain; event retained at {path}: {exc}") from exc
         return ack
 

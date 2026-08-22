@@ -152,6 +152,12 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
 }
 
 
+def requires_producer_seq(message_type: str) -> bool:
+    """Return whether *message_type*'s schema declares a producer_seq field."""
+    schema = _SCHEMAS.get(message_type)
+    return schema is not None and "producer_seq" in schema[0]
+
+
 _REPORT_SCHEMA: dict[str, Callable[[Any, str], None]] = {
     "task_id": _ID,
     "generation": _POSITIVE,
