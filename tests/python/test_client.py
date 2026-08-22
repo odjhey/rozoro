@@ -71,6 +71,14 @@ def crash_before_send_worker(home):
     os._exit(23)
 
 
+def native_first_create_worker(home, event_id, output):
+    try:
+        reserved = prepare_event(event(event_id, session_id="native-shared"), home)
+        output.put(("ok", reserved["producer_seq"]))
+    except Exception:
+        output.put(("error", traceback.format_exc()))
+
+
 class ClientTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -114,6 +122,18 @@ class ClientTests(unittest.TestCase):
             prepare_event({"v": 1, "type": "ack", "event_id": "ack-1", "durable_seq": 1}, self.home)
         reserved = prepare_event(event("good"), self.home)
         self.assertEqual(1, reserved["producer_seq"])
+
+    def test_supplied_producer_seq_gap_rejected_exact_next_accepted(self):
+        first = prepare_event(event("first"), self.home)
+        self.assertEqual(1, first["producer_seq"])
+        skip_ahead = dict(event("skip"), producer_seq=7)
+        with self.assertRaises(ClientError):
+            prepare_event(skip_ahead, self.home)
+        self.assertEqual({"first.json"}, {path.name for path in self.spooled()})
+        exact_next = dict(event("second"), producer_seq=2)
+        second = prepare_event(exact_next, self.home)
+        self.assertEqual(2, second["producer_seq"])
+        self.assertEqual({"first.json", "second.json"}, {path.name for path in self.spooled()})
 
     def test_crash_before_send_and_before_counter_update_are_recoverable(self):
         context = multiprocessing.get_context("spawn")
@@ -181,6 +201,24 @@ class ClientTests(unittest.TestCase):
         values = [value for _, group in results for value in group]
         self.assertEqual(list(range(1, 101)), sorted(values))
         self.assertEqual(100, len(self.spooled()))
+
+    def test_repeated_native_first_create_probes_never_race(self):
+        for trial in range(8):
+            temp = tempfile.TemporaryDirectory()
+            try:
+                home = Path(temp.name) / "home"; home.mkdir(mode=0o700)
+                context = multiprocessing.get_context()
+                output = context.Queue()
+                processes = [context.Process(target=native_first_create_worker, args=(str(home), f"evt-{trial}-{n}", output))
+                             for n in range(4)]
+                for process in processes: process.start()
+                results = [output.get(timeout=15) for _ in processes]
+                for process in processes: process.join(15); self.assertEqual(0, process.exitcode)
+                self.assertTrue(all(status == "ok" for status, _ in results), results)
+                sequences = sorted(value for _, value in results)
+                self.assertEqual([1, 2, 3, 4], sequences)
+            finally:
+                temp.cleanup()
 
     def test_concurrent_differing_payloads_never_clobber_same_event_id(self):
         context = multiprocessing.get_context("spawn")
