@@ -264,6 +264,63 @@ def with_report(
     return replace(state, report=ReportState(verdict, status, accepted))
 
 
+def _map_v2_background(bg: Any) -> tuple[str, frozenset[str], int, bool, bool]:
+    """Validate legacy state/count/jobs as one conservative tuple."""
+    unknown = ("unknown", frozenset(), 0, False, False)
+    if not isinstance(bg, Mapping) or bg.get("supported") is not True:
+        return unknown
+
+    state = bg.get("state")
+    if state not in BACKGROUNDS:
+        return unknown
+
+    raw_count = bg.get("active_count")
+    if raw_count is not None and (
+        not isinstance(raw_count, int) or isinstance(raw_count, bool) or raw_count < 0
+    ):
+        return unknown
+
+    raw_jobs = bg.get("jobs", [])
+    if raw_jobs is None:
+        raw_jobs = []
+    if not isinstance(raw_jobs, list):
+        return unknown
+    parsed_jobs: list[str] = []
+    for job in raw_jobs:
+        if isinstance(job, str):
+            job_id = job
+        elif isinstance(job, Mapping):
+            job_id = job.get("id")
+        else:
+            return unknown
+        if not isinstance(job_id, str) or not job_id:
+            return unknown
+        parsed_jobs.append(job_id)
+    if len(set(parsed_jobs)) != len(parsed_jobs):
+        return unknown
+    jobs = frozenset(parsed_jobs)
+
+    if state == "clear":
+        if jobs or raw_count not in (None, 0):
+            return unknown
+        return ("clear", frozenset(), 0, True, False)
+    if state == "unknown":
+        return unknown
+
+    # Active with explicit zero contradicts itself. A positive count and a
+    # non-empty job list must describe the same aggregate when both are given.
+    if raw_count == 0:
+        return unknown
+    if raw_count is not None and jobs and raw_count != len(jobs):
+        return unknown
+    if raw_count is not None:
+        return ("active", jobs, raw_count - len(jobs), True, False)
+    if jobs:
+        return ("active", jobs, 0, True, False)
+    # State alone proves positive presence, but not a count that stops can drain.
+    return ("active", frozenset(), 0, False, True)
+
+
 def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | None = None) -> LifecycleState:
     """Purely map current ``rzr-runtime.py``/``rzr-status --json`` v2 shapes.
 
@@ -288,20 +345,14 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
         )
         gone = raw_fg == "gone" or raw_runtime == "gone"
         blocked = raw_fg == "blocked" or raw_runtime == "blocked"
-        bg = status.get("background_activity", runtime.get("background_activity", {})) or {}
-        bg_state = bg.get("state")
-        # supported=false/unknown cannot certify even if an incidental state says clear.
-        background = bg_state if bg.get("supported") is True and bg_state in BACKGROUNDS else "unknown"
+        bg = status.get("background_activity", runtime.get("background_activity", {}))
+        background, jobs, anonymous, exact_background, presence_only = _map_v2_background(bg)
 
-    bg_obj = status.get("background_activity", runtime.get("background_activity", {})) or {}
-    jobs = frozenset(
-        str(job.get("id", job)) if isinstance(job, Mapping) else str(job)
-        for job in (bg_obj.get("jobs") or [])
-    ) if background == "active" else frozenset()
-    count = bg_obj.get("active_count")
-    anonymous = max(0, count - len(jobs)) if background == "active" and isinstance(count, int) else 0
-    has_authoritative_active_set = isinstance(count, int) or bool(jobs)
-    presence_only = background == "active" and not has_authoritative_active_set
+    if freshness != "current":
+        jobs = frozenset()
+        anonymous = 0
+        exact_background = False
+        presence_only = False
 
     verdict = status.get("handoff_verdict")
     if isinstance(verdict, str):
@@ -310,9 +361,7 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
     state = LifecycleState(
         foreground=foreground,
         background=background,
-        background_certified=(
-            background == "clear" or (background == "active" and has_authoritative_active_set)
-        ),
+        background_certified=exact_background,
         active_jobs=jobs,
         anonymous_active=anonymous,
         active_presence_only=presence_only,

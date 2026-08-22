@@ -268,6 +268,43 @@ class V2CompatibilityTests(unittest.TestCase):
         stopped = reduce_event(state, event("background.stop", 1, job_id="unknown-job")).state
         self.assertEqual((stopped.background, stopped.availability), ("unknown", "unknown"))
 
+    def test_v2_background_tuple_contradictions_map_unknown(self):
+        malformed = (
+            {"supported": True, "state": "clear", "active_count": 1, "jobs": []},
+            {"supported": True, "state": "clear", "active_count": 0, "jobs": ["job"]},
+            {"supported": True, "state": "active", "active_count": 0, "jobs": []},
+            {"supported": True, "state": "active", "active_count": -1, "jobs": []},
+            {"supported": True, "state": "active", "active_count": True, "jobs": []},
+            {"supported": True, "state": "active", "active_count": 2, "jobs": ["only-one"]},
+            {"supported": True, "state": "active", "active_count": 1, "jobs": [None]},
+            {"supported": True, "state": "active", "active_count": 1, "jobs": [{"kind": "missing-id"}]},
+            {"supported": True, "state": "active", "active_count": 1, "jobs": "not-a-list"},
+            {"supported": True, "state": "active", "active_count": 2, "jobs": ["dup", "dup"]},
+        )
+        for background_activity in malformed:
+            with self.subTest(background_activity=background_activity):
+                runtime = self.runtime("idle")
+                runtime["background_activity"] = background_activity
+                state = map_v2_projection(runtime)
+                self.assertEqual((state.background, state.availability, state.active_count),
+                                 ("unknown", "unknown", None))
+                self.assertFalse(state.background_certified)
+
+    def test_v2_valid_background_tuples_are_exact_only_when_warranted(self):
+        cases = (
+            ({"supported": True, "state": "clear", "active_count": 0, "jobs": []}, "clear", 0),
+            ({"supported": True, "state": "active", "active_count": 2, "jobs": []}, "active", 2),
+            ({"supported": True, "state": "active", "active_count": 1, "jobs": [{"id": "job"}]}, "active", 1),
+            ({"supported": True, "state": "active", "active_count": None, "jobs": ["job"]}, "active", 1),
+        )
+        for background_activity, expected_state, expected_count in cases:
+            with self.subTest(background_activity=background_activity):
+                runtime = self.runtime("idle")
+                runtime["background_activity"] = background_activity
+                state = map_v2_projection(runtime)
+                self.assertEqual((state.background, state.active_count), (expected_state, expected_count))
+                self.assertTrue(state.background_certified)
+
 
 if __name__ == "__main__":
     unittest.main()
