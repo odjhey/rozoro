@@ -92,16 +92,21 @@ session, harness stores, and working checkouts. It uses a PATH-injected fake
 Herdr and standard-library Unix socket fixtures, so neither a running Herdr
 server nor an installed coding harness is needed.
 
-Install Bats-core 1.14.x, then run the same command used by Linux and macOS CI:
+Install Podman or Docker, then run the same command used by CI:
 
 ```sh
 ./tests/run.sh
 ```
 
-On macOS, install Bats with `brew install bats-core`. On other platforms, use
-the official v1.14.0 source release or `npm install -g bats`; avoid an older OS
-package unless `bats --version` confirms 1.14.x. The runner checks the version
-and prints installation guidance without downloading or changing the checkout.
+The runner prefers Podman when both engines are available and falls back to
+Docker. Set `CONTAINER_ENGINE=docker` (or an executable path) to select one
+explicitly. It builds a small cached test image from the official Bats 1.14.0
+image pinned by digest, copying `jq` and Python from separately pinned images.
+The first run pulls those immutable images; later builds reuse the container
+engine's cache. Tests run without network access against a read-only checkout,
+using only a temporary writable filesystem inside the disposable container. No
+host Bats, `jq`, or Python installation is required. CI runs the full suite this
+way on Linux and keeps a stock macOS Bash 3.2 syntax check.
 
 The automated suite covers shell/Python protocol parsing, event transport,
 watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr

@@ -1,0 +1,13 @@
+# Every stage uses a multi-architecture OCI index digest. Copying the tools from
+# immutable images avoids depending on Alpine's moving package repository.
+FROM docker.io/library/python:3.14.7-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc AS python-runtime
+FROM ghcr.io/jqlang/jq:1.8.1@sha256:4f34c6d23f4b1372ac789752cc955dc67c2ae177eb1b5860b75cdc5091ce6f91 AS jq-runtime
+
+# Bats 1.14.0 is the final image, preserving its entrypoint and runtime setup.
+FROM docker.io/bats/bats:1.14.0@sha256:5322b877351fda0cc435de8c6116de7d0a2ec79d7c680132a0ef329a633bc66f
+
+COPY --from=python-runtime /usr/local/ /usr/local/
+COPY --from=python-runtime /usr/lib/ /usr/lib/
+COPY --from=jq-runtime /jq /usr/local/bin/jq
+RUN ln -s /usr/local/bin/python3 /usr/bin/python3 \
+    && ln -s /usr/local/bin/jq /usr/bin/jq
