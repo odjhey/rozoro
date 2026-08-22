@@ -33,10 +33,17 @@ def _check_private(info: os.stat_result, label: str, *, directory: bool) -> None
 def _open_home(home: str | os.PathLike[str] | None, *, create: bool = True) -> tuple[Path, int]:
     path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
     if create:
+        existed = path.exists()
         try:
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError as exc:
             raise UnsafePathError(f"cannot create private directory {path}: {exc}") from exc
+        if not existed:
+            parent_fd = os.open(path.parent, _DIR_FLAGS)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
     try:
         fd = os.open(path, _DIR_FLAGS)
         _check_private(os.fstat(fd), str(path), directory=True)
@@ -163,8 +170,17 @@ def _publish_locked(spool_fd: int, event: Mapping[str, Any]) -> None:
 
 
 def _locked_fd(directory_fd: int, name: str) -> int:
-    fd = _open_file(directory_fd, name, os.O_RDWR | os.O_CREAT)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        fd = _open_file(directory_fd, name, os.O_RDWR | os.O_CREAT | os.O_EXCL)
+    except FileExistsError:
+        fd = _open_file(directory_fd, name, os.O_RDWR)
+    else:
+        os.fsync(directory_fd)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except Exception:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -251,7 +267,7 @@ def prepare_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None 
                         value = previous + 1
                     else:
                         value = supplied
-                        if value <= previous:
+                        if value != previous + 1:
                             raise ClientError("supplied producer_seq is not a new reservation")
                     if value > protocol.MAX_INTEGER:
                         raise ClientError(f"producer sequence exhausted for {session_id}")

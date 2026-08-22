@@ -193,6 +193,8 @@ class ClientTests(unittest.TestCase):
         for process in processes: process.join(10); self.assertEqual(0, process.exitcode)
         self.assertEqual(["error", "ok"], sorted(status for status, _ in results))
         winner = next(value for status, value in results if status == "ok")
+        loser_error = next(value for status, value in results if status == "error")
+        self.assertEqual("ClientError", loser_error)
         saved = protocol.decode((self.home / "spool/same-id.json").read_bytes())
         self.assertEqual(winner, saved["turn_id"])
 
