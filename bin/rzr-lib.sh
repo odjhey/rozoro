@@ -390,6 +390,27 @@ rzr_agent_status() {  # <pane>
   if rzr_herdr pane get "$1" >/dev/null 2>&1; then echo shell; else echo gone; fi
 }
 
+# `herdr agent start` can return agent_not_ready after it has successfully
+# claimed the pane and launched the harness, while the harness is still crossing
+# its startup readiness gate. In that case starting it again risks colliding with
+# the agent that already owns the pane; wait for that launch to become interactive
+# instead. Returns success only for a real, interactive agent.
+rzr_wait_agent_ready() {  # <pane> [attempts]
+  local pane="$1" attempts="${2:-20}" out ready attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if out=$(rzr_herdr agent get "$pane" 2>/dev/null); then
+      ready=$(printf '%s' "$out" | jq -r '
+        (.result.agent // .result // .) as $a |
+        if ($a.interactive_ready // false) == true then "true" else "false" end
+      ' 2>/dev/null || echo false)
+      [ "$ready" = true ] && return 0
+    fi
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 # --- unlanded-work guard (teardown safety) ---------------------------------
 # A crew's --cwd may hold work teardown would otherwise discard silently:
 # uncommitted/untracked changes, or commits with no pushed upstream. One reason

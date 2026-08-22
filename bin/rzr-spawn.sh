@@ -184,13 +184,15 @@ do_spawn() {
 
   # `tab create` returns a pane id before its shell prompt is ready, so an
   # immediate `agent start` can race and get `agent_pane_busy` ("not an
-  # available shell"). Retry ONLY that transient case with a short backoff; any
-  # other error is real and surfaces immediately (with herdr's message).
+  # available shell"). Retry that pre-launch transient with a short backoff.
+  # Herdr may also report `agent_not_ready` after the harness has launched but
+  # before it is interactive; do not launch it twice, just wait for readiness.
   local out="" rc=1 attempt=0
   while [ "$attempt" -lt 20 ]; do
     if out=$(rzr_herdr "${start[@]}" 2>&1); then rc=0; break; fi
     case "$out" in
       *agent_pane_busy*|*"not an available shell"*) sleep 0.5; attempt=$((attempt + 1)) ;;
+      *agent_not_ready*) rzr_wait_agent_ready "$pane" 20 && rc=0; break ;;
       *) break ;;
     esac
   done

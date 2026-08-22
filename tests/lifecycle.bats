@@ -91,6 +91,16 @@ JSON
   [ -e "$FAKE_HERDR_ROOT/busy-once" ]
 }
 
+@test "spawn accepts a launched agent that becomes ready after agent_not_ready" {
+  fake_pane p1 idle codex true
+  export FAKE_HERDR_FAIL_MATCH=' agent start '
+  export FAKE_HERDR_FAIL_TEXT='{"error":{"code":"agent_not_ready","message":"blocked during startup"}}'
+  run rzr-spawn.sh task --harness codex --cwd "$TEST_ROOT"
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'agent_start=ok'
+  [ "$(grep -c $'CALL\tagent\tstart\t' "$FAKE_HERDR_LOG")" -eq 1 ]
+}
+
 @test "spawn records terminal agent start failure" {
   export FAKE_HERDR_FAIL_MATCH=' agent start '
   export FAKE_HERDR_FAIL_TEXT='terminal start error'
@@ -233,6 +243,18 @@ JSON
   [ "$(grep -Fxc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
 }
 
+@test "resume accepts a launched agent that becomes ready after agent_not_ready" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf '{"session_id":"uuid-codex","harness":"codex","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  fake_pane p1 idle codex true
+  export FAKE_HERDR_FAIL_MATCH=' agent start '
+  export FAKE_HERDR_FAIL_TEXT='{"error":{"code":"agent_not_ready","message":"blocked during startup"}}'
+  run rzr-resume.sh task
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'agent_start=ok'
+  [ "$(grep -c $'CALL\tagent\tstart\t' "$FAKE_HERDR_LOG")" -eq 1 ]
+}
+
 @test "Codex resume overrides can disable fast and change effort" {
   mkdir -p "$ROZORO_HOME/tasks/task"
   cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
@@ -347,6 +369,31 @@ JSON
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
   assert_file_contains "$FAKE_HERDR_LOG" $'\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
+}
+
+@test "restart after resume does not treat the lifecycle marker as a crew preset" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf 'continue\n' > "$ROZORO_HOME/tasks/task/brief.md"
+  cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
+{"session_id":"uuid-codex","harness":"codex","cwd":"$TEST_ROOT","profile":{"harness":"codex","model":"gpt-5.6-sol","effort":"high","permission_mode":"yolo","fast":true}}
+JSON
+  fake_pane p1 idle codex true
+  run rzr-resume.sh task
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'crew=resumed'
+
+  store="$HOME/.codex/sessions/2026/08/22"
+  mkdir -p "$store"
+  cat > "$store/restarted.jsonl" <<JSON
+{"type":"session_meta","payload":{"id":"uuid-restarted","cwd":"$TEST_ROOT"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"rozoro-task: task\nbody"}]}}
+JSON
+
+  run rzr-control.sh task restart
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
+  [ "$(jq -r '.session_id' "$ROZORO_HOME/tasks/task/session.json")" = uuid-restarted ]
 }
 
 @test "start gives repeated display names distinct durable task keys" {
