@@ -69,6 +69,13 @@ are passed to the crew verbatim.
    works once you're idle, requires no setup, and doesn't depend on any
    settings file loading correctly. Do it once per session, before relying on
    `rozoro watch --wake`.
+
+   A Claude watchtower is launched with `ROZORO_ROLE=watchtower` in its
+   environment. That marker is session identity, not a registration
+   mechanism: it distinguishes this session as a watchtower from a
+   rozoro-spawned crew or a plain dev session opened in the same checkout.
+   Nothing reads it yet — it's reserved for watchtower-scoped tooling, such
+   as the planned long-lived monitor daemon (#25).
 3. On each edge, `rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
    `needs-action` → answer with `rozoro send <id> "..."`; a no-new-block on an idle
