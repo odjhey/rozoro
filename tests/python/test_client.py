@@ -19,6 +19,11 @@ from rozoro_monitor import client, protocol
 from rozoro_monitor.client import ClientError, ProducerClient, UnsafePathError, prepare_event, spool_event
 
 
+def open_fd_count():
+    fd_dir = "/dev/fd" if os.path.isdir("/dev/fd") else f"/proc/{os.getpid()}/fd"
+    return len(os.listdir(fd_dir))
+
+
 def event(event_id="evt-1", turn_id="turn-1", session_id="session-1"):
     return {"v": 1, "type": "turn.start", "event_id": event_id,
             "session_id": session_id, "harness": "claude", "role": "crew",
@@ -255,16 +260,38 @@ class ClientTests(unittest.TestCase):
                 raise OSError("boom")
             return real_open_subdir(parent_fd, name)
 
-        def open_fd_count():
-            fd_dir = "/dev/fd" if os.path.isdir("/dev/fd") else f"/proc/{os.getpid()}/fd"
-            return len(os.listdir(fd_dir))
-
         before = open_fd_count()
         with mock.patch.object(client, "_open_subdir", side_effect=failing_open_subdir):
             with self.assertRaises(OSError):
                 prepare_event(event(), self.home)
         after = open_fd_count()
         self.assertEqual(before, after)
+
+    def test_locked_fd_closes_descriptor_on_flock_failure(self):
+        (self.home / "spool").mkdir(mode=0o700)
+        directory_fd = os.open(self.home / "spool", client._DIR_FLAGS)
+        try:
+            before = open_fd_count()
+            with mock.patch.object(client.fcntl, "flock", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    client._locked_fd(directory_fd, ".lock")
+            after = open_fd_count()
+            self.assertEqual(before, after)
+        finally:
+            os.close(directory_fd)
+
+    def test_locked_fd_closes_descriptor_on_parent_fsync_failure(self):
+        (self.home / "spool").mkdir(mode=0o700)
+        directory_fd = os.open(self.home / "spool", client._DIR_FLAGS)
+        try:
+            before = open_fd_count()
+            with mock.patch.object(client.os, "fsync", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    client._locked_fd(directory_fd, ".lock")
+            after = open_fd_count()
+            self.assertEqual(before, after)
+        finally:
+            os.close(directory_fd)
 
     def test_remove_reserved_is_idempotent_when_spool_entry_already_gone(self):
         reserved = prepare_event(event(), self.home)

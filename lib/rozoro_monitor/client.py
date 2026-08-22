@@ -175,7 +175,11 @@ def _locked_fd(directory_fd: int, name: str) -> int:
     except FileExistsError:
         fd = _open_file(directory_fd, name, os.O_RDWR)
     else:
-        os.fsync(directory_fd)
+        try:
+            os.fsync(directory_fd)
+        except Exception:
+            os.close(fd)
+            raise
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
     except Exception:
