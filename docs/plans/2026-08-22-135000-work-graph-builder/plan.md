@@ -35,6 +35,8 @@ rozoro                        spawn/watch/message/reap transport
 
 The watchtower decides *what crew-sized responsibilities should exist and how they relate*. The graph runtime deterministically decides *which declared transition is enabled next*. Crew agents do domain work and remain free to use their harness-native subagents. Rozoro remains unaware of PRs, testing policy, graph edges, joins, merge authority, and subagent topology.
 
+Implementation sequencing and target UX are documented separately in [`implementation-guideline.md`](./implementation-guideline.md).
+
 ## The boundary: graphs coordinate crews, not subagents
 
 This is the central design constraint.
