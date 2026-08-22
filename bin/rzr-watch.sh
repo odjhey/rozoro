@@ -237,7 +237,7 @@ while IFS=$'\t' read -r pane _ st _ seq <&3; do
   projection=$(python3 "$RZR_BIN/rzr-runtime.py" event --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$st" ${seq_args[@]+"${seq_args[@]}"})
   # A queued event older than the synchronized snapshot is not a real edge.
   if [ -n "${seq:-}" ] && [ "$(printf '%s' "$projection" | jq -r '.source.event_seq // ""')" != "$seq" ]; then continue; fi
-  SEEN[$i]="$st"; rzr_status_set "$id" "$st"
+  SEEN[i]="$st"; rzr_status_set "$id" "$st"
   if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"; fi
   DELIVERED_WAKE=0
   # A wake means "the crew FINISHED a turn", so only a settle that FOLLOWS

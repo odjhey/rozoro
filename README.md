@@ -462,6 +462,9 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   the legacy name.
 - `RZR_WORKSPACE` — herdr workspace for new tabs (default `$HERDR_WORKSPACE_ID`).
 - `RZR_SESSION` — herdr `--session` name (default: the single local server).
+- `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps
+  once before re-reading the handoff when a foreground settle event races its
+  append; `0` disables the retry.
 
 ## Try it
 
