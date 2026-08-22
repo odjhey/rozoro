@@ -37,7 +37,15 @@ key="${1:-}"
 for arg in "$@"; do key="$key.$arg"; done
 key="$(printf '%s' "$key" | tr '/ ' '__')"
 
-count_file="$FAKE_HERDR_ROOT/count.$key"
+# The full argv key remains human-readable for configured fake responses, but it
+# can contain long temp paths and passthrough arguments. Hash only the internal
+# invocation counter so its basename stays below filesystem limits on macOS.
+counter_key="$(FAKE_HERDR_COUNTER_KEY="$key" python3 - <<'PY'
+import hashlib, os
+print(hashlib.sha256(os.environ["FAKE_HERDR_COUNTER_KEY"].encode()).hexdigest())
+PY
+)"
+count_file="$FAKE_HERDR_ROOT/count.$counter_key"
 count=0; [ -f "$count_file" ] && count="$(cat "$count_file")"
 count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
 if [ -f "$FAKE_HERDR_ROOT/$key.$count.rc" ]; then

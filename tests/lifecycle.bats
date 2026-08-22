@@ -30,6 +30,16 @@ load test_helper/common
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'agent_start=failed'
 }
 
+@test "fake Herdr counter tolerates long agent-start argv while validating the name" {
+  long_arg="$(printf '%0300d' 0)"
+  run herdr agent start valid-agent --kind claude --pane p1 -- "$long_arg"
+  assert_success
+
+  run herdr agent start 'INVALID-AGENT' --kind claude --pane p1
+  assert_failure
+  assert_output_contains 'invalid_agent_name'
+}
+
 @test "send fails closed for unknown and dead targets" {
   run rzr-send.sh missing hello
   assert_failure
