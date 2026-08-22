@@ -24,6 +24,7 @@ HANDOFF_TMPL="$RZR_TEMPLATES/handoff.md"
 
 FOLDER="$(rzr_task_dir "$ID")"
 mkdir -p "$FOLDER"
+[ ! -e "$FOLDER/brief.md" ] || rzr_die "refusing to overwrite existing brief for '$ID'"
 touch "$FOLDER/handoff.md"          # exists from the start so a watcher can tail it
 
 RZR_TMPL="$TEMPLATE" RZR_HANDOFF_TMPL="$HANDOFF_TMPL" RZR_ID="$ID" \

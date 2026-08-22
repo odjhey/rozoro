@@ -71,7 +71,7 @@ the optional `$ROZORO_HOME/crew/default.json`.
 
 | Intent | Command |
 |---|---|
-| **Start** a task (blessed) | `rzr-start.sh <id> --body <file> --cwd <repo> [rzr-spawn flags]` — renders a durable brief, spawns, and links the session in one unskippable step |
+| **Start** a task (blessed) | `rzr-start.sh <display-name> --body <file> --cwd <repo> [rzr-spawn flags]` — reserves and prints an immutable task key, renders a durable brief, spawns, and links the session in one unskippable step |
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
@@ -168,9 +168,10 @@ answer itself, but whether the answer already exists.
    genuinely can't route without it (e.g. which repo an issue belongs to, or
    splitting one id into several) — or for the reuse-check before a scout.
 2. Write each task body to a file (the scratchpad or under `$ROZORO_HOME`) and
-   `rzr-start.sh <id> --body <file> --cwd <repo>` (add `--model <model>` only if the
-   user asked for it). This renders a
-   **durable brief** (with the handoff protocol) into `tasks/<id>/`, spawns the
+   `rzr-start.sh <display-name> --body <file> --cwd <repo>` (add `--model <model>` only if the
+   user asked for it). Use the immutable key it prints for all later operations.
+   The command writes the **durable brief** (with the
+   handoff protocol) into `tasks/<task-key>/`, spawns the
    crew, and links its session — all verbatim, no shell escaping. Prefer this over
    raw `rzr-spawn.sh`, which skips the task folder, protocol, and session link.
    Keep the body **intent + pointer**, not a dossier: what outcome you want and
@@ -238,7 +239,8 @@ answer itself, but whether the answer already exists.
 
 ## Durable task folders & the handoff contract
 
-`rzr-start` gives every task a folder under `$ROZORO_HOME/tasks/<id>/` — the durable
+`rzr-start` atomically reserves a globally unique key for every display name and
+gives it a folder under `$ROZORO_HOME/tasks/<task-key>/` — the durable
 record that makes teardown non-lossy:
 
 - `brief.md` — the INPUT, persisted predictably (rendered from `templates/brief.md`,

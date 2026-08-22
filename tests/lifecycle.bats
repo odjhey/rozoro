@@ -83,3 +83,66 @@ load test_helper/common
   assert_failure
   assert_output_contains "still tracked"
 }
+
+@test "start gives repeated display names distinct durable task keys" {
+  printf 'ship it\n' > "$TEST_ROOT/body"
+  run rzr-start.sh same-name --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  key1="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  run rzr-start.sh same-name --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  key2="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  [ "$key1" != "$key2" ]
+  [ -f "$ROZORO_HOME/tasks/$key1/brief.md" ]
+  [ -f "$ROZORO_HOME/tasks/$key2/brief.md" ]
+  assert_file_contains "$ROZORO_HOME/state/$key1.meta" 'display_name=same-name'
+}
+
+@test "reuse after teardown preserves the old durable record" {
+  printf 'first\n' > "$TEST_ROOT/first"
+  printf 'second\n' > "$TEST_ROOT/second"
+  run rzr-start.sh reusable --body "$TEST_ROOT/first" --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  old="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  run rzr-teardown.sh "$old" --force
+  assert_success
+  run rzr-start.sh reusable --body "$TEST_ROOT/second" --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  new="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  [ "$old" != "$new" ]
+  assert_file_contains "$ROZORO_HOME/tasks/$old/brief.md" 'first'
+  assert_file_contains "$ROZORO_HOME/tasks/$new/brief.md" 'second'
+}
+
+@test "concurrent same-name starts reserve different folders" {
+  printf 'parallel\n' > "$TEST_ROOT/body"
+  rzr-start.sh concurrent --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent > "$TEST_ROOT/a.out" 2>&1 & p1=$!
+  rzr-start.sh concurrent --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent > "$TEST_ROOT/b.out" 2>&1 & p2=$!
+  wait "$p1"; wait "$p2"
+  key1="$(sed -n 's/^rzr-start: task key -> //p' "$TEST_ROOT/a.out")"
+  key2="$(sed -n 's/^rzr-start: task key -> //p' "$TEST_ROOT/b.out")"
+  [ -n "$key1" ] && [ -n "$key2" ] && [ "$key1" != "$key2" ]
+  [ -d "$ROZORO_HOME/tasks/$key1" ] && [ -d "$ROZORO_HOME/tasks/$key2" ]
+}
+
+@test "same display name across repositories has distinct identities" {
+  mkdir -p "$TEST_ROOT/repo-a" "$TEST_ROOT/repo-b"
+  printf 'cross repo\n' > "$TEST_ROOT/body"
+  run rzr-start.sh shared --body "$TEST_ROOT/body" --cwd "$TEST_ROOT/repo-a" --no-agent
+  assert_success
+  key1="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  run rzr-start.sh shared --body "$TEST_ROOT/body" --cwd "$TEST_ROOT/repo-b" --no-agent
+  assert_success
+  key2="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  [ "$key1" != "$key2" ]
+  assert_file_contains "$ROZORO_HOME/tasks/$key1/identity.json" "$TEST_ROOT/repo-a"
+  assert_file_contains "$ROZORO_HOME/tasks/$key2/identity.json" "$TEST_ROOT/repo-b"
+}
+
+@test "unsafe display names cannot escape the task root" {
+  printf 'unsafe\n' > "$TEST_ROOT/body"
+  run rzr-start.sh ../escape --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent
+  assert_failure
+  assert_output_contains 'display name'
+  [ ! -e "$ROZORO_HOME/escape" ]
+}

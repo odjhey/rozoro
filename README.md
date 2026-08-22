@@ -133,7 +133,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | Command | What it does |
 |---|---|
 | `rozoro <verb> [args]` (or `rzr <verb>`) | dispatcher: `rozoro start …` runs `rzr-start.sh …`; `rozoro help` lists verbs |
-| `rzr-start.sh <id> --body <file> [opts]` | blessed start: `rzr-render` → `rzr-spawn` → `rzr-link` in one unskippable step; passes extra flags through to `rzr-spawn` |
+| `rzr-start.sh <display-name> --body <file> [opts]` | blessed start: atomically reserve a unique task key → `rzr-render` → `rzr-spawn` → `rzr-link`; prints the key used by every later command |
 | `rzr-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `rzr-render.sh <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
 | `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude or Codex via marker-grep; idempotent |
@@ -156,11 +156,30 @@ subscriber `rzr-watch.sh` drives. `templates/brief.md` is the handoff-protocol s
 
 ### Durable task folders
 
-`rzr-start` gives each task a folder under `$ROZORO_HOME/tasks/<id>/` so teardown is
+`rzr-start` treats its first argument as a concise display name and generates a
+time-sortable, globally collision-safe key such as
+`test-foundation--01K3A7Y8M4N2ABCDEFGHJKMNPQ`. It prints that key at startup;
+use the exact key for `send`, `status`, `ack`, `control`, `resume`, and
+`teardown`. The display name remains the tab label. Names may contain letters,
+digits, `.`, `_`, and `-` (maximum 80 characters);
+path separators and traversal components are rejected.
+
+The key is reserved with an atomic directory creation before any brief or
+handoff file is rendered. Repeated names, concurrent starts, and starts from
+different repositories therefore always receive different folders. Repository
+context is recorded in `identity.json` for discovery, but is not the uniqueness
+boundary.
+
+Each task has a folder under `$ROZORO_HOME/tasks/<task-key>/` so teardown is
 non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
 crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
 and context accumulates across `rzr-send` rounds), and `session.json` (the resume
 link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
+
+Compatibility: existing safe, unsuffixed keys such as `issue-42` remain valid
+exact addresses. All lifecycle commands, including `resume`, continue to read
+their existing `tasks/issue-42/` and `state/issue-42.meta` records without
+migration or rewriting. Only new `rzr-start` calls allocate suffixed keys.
 
 That covers the task *record*; teardown separately guards the crew's actual
 work: it refuses to close a task whose recorded `cwd` has uncommitted,
@@ -219,7 +238,7 @@ The driver's whole vocabulary is small:
 
 | Trigger | Call |
 |---|---|
-| **Start** a task | `rzr-start.sh <id> --body <file> --cwd <repo> [--crew <preset>] [--model <model>]` |
+| **Start** a task | `rzr-start.sh <display-name> --body <file> --cwd <repo> [--crew <preset>] [--model <model>]` (prints the immutable task key) |
 | **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
 | **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
 | **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` |

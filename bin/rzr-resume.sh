@@ -10,7 +10,7 @@
 #   --permission-mode  autonomous permission signal for non-Codex harnesses;
 #               Codex always resumes with --yolo
 #   --model     model override for the resumed run (default: session's own)
-#   --label     tab label (default: the id)
+#   --label     tab label (default: the recorded display name, then the id)
 #   --prompt    a follow-up delivered VERBATIM once the resumed agent is ready
 #   --brief     file whose contents become that follow-up (also verbatim)
 #
@@ -45,7 +45,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-resume.sh <id> ...)"
-[ -n "$LABEL" ] || LABEL="$ID"
+rzr_validate_task_component "$ID"
+if [ -z "$LABEL" ]; then
+  IDENTITY="$(rzr_task_dir "$ID")/identity.json"
+  [ -s "$IDENTITY" ] && LABEL="$(jq -r '.display_name // empty' "$IDENTITY" 2>/dev/null || true)"
+  LABEL="${LABEL:-$ID}"
+fi
 
 # A live/tracked task still owns the unique agent name — resuming would collide.
 # If it's still around, the right move is to continue it in place, not resume.
@@ -103,6 +108,7 @@ do_resume() {
   [ -n "$pane" ] || rzr_die "could not parse pane id from tab create output: $out"
 
   rzr_meta_set "$ID" id "$ID"
+  rzr_meta_set "$ID" display_name "$LABEL"
   rzr_meta_set "$ID" pane "$pane"
   rzr_meta_set "$ID" tab "${tab:-}"
   rzr_meta_set "$ID" workspace "${ws:-}"
