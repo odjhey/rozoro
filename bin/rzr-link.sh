@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# rzr-link.sh - link a task to its Claude session for last-resort resume.
+# rzr-link.sh - link a task to its harness session for last-resort resume.
 #
 # Usage:
 #   rzr-link.sh <id> <cwd>             write tasks/<id>/session.json
 #
-# Finds the crew's transcript by grepping the cwd's Claude projects dir for the
+# Finds the crew's transcript by searching the harness session store for the
 # unique `rozoro-task: <id>` marker rzr-render put in the brief (concurrency-safe:
-# no reliance on "newest file", which breaks when crews share a cwd). Idempotent
-# — a no-op once a valid link exists — so the watch step can call it freely.
-# Run a few seconds after rzr-spawn (the crew must have received the brief).
+# no reliance on "newest file", which breaks when crews share a cwd). Supports
+# Claude and Codex. Idempotent — a no-op once a valid link exists — so the watch
+# step can call it freely. Run a few seconds after rzr-spawn (the crew must have
+# received the brief).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -17,27 +18,82 @@ ID="$1"; CWD="$(cd "$2" && pwd)" || rzr_die "bad cwd '$2'"
 FOLDER="$(rzr_task_dir "$ID")"
 mkdir -p "$FOLDER"
 OUT="$FOLDER/session.json"
+HARNESS="$(rzr_meta_get "$ID" harness || true)"
+if [ -z "$HARNESS" ] && [ -s "$OUT" ]; then
+  HARNESS="$(jq -r '.harness // empty' "$OUT" 2>/dev/null)"
+fi
+HARNESS="${HARNESS:-claude}"
 
-# idempotent: a valid link already captured -> nothing to do.
-if [ -s "$OUT" ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("session_id") else 1)' "$OUT" 2>/dev/null; then
+# idempotent: a valid link for this harness/cwd already captured -> nothing to do.
+if [ -s "$OUT" ] && RZR_EXPECT_HARNESS="$HARNESS" RZR_EXPECT_CWD="$CWD" \
+  python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("session_id") and d.get("harness") == os.environ["RZR_EXPECT_HARNESS"] and d.get("cwd") == os.environ["RZR_EXPECT_CWD"] else 1)' \
+  "$OUT" 2>/dev/null; then
   echo "rzr-link: $ID already linked ($(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["session_id"])' "$OUT"))"
   exit 0
 fi
 
-# Claude stores sessions under ~/.claude/projects/<cwd with / and . -> ->.
-SLUG="$(printf '%s' "$CWD" | sed 's/[/.]/-/g')"
-PROJ="$HOME/.claude/projects/$SLUG"
-[ -d "$PROJ" ] || rzr_die "no Claude projects dir $PROJ"
+case "$HARNESS" in
+  claude)
+    # Claude stores sessions under ~/.claude/projects/<cwd with / and . -> ->.
+    SLUG="$(printf '%s' "$CWD" | sed 's/[/.]/-/g')"
+    STORE="$HOME/.claude/projects/$SLUG"
+    [ -d "$STORE" ] || rzr_die "no Claude projects dir $STORE"
+    match="$(grep -l "rozoro-task: $ID\b" "$STORE"/*.jsonl 2>/dev/null | head -1 || true)"
+    uuid="${match:+$(basename "$match" .jsonl)}"
+    resume="claude --resume $uuid"
+    ;;
+  codex)
+    # Codex stores rollouts in date-partitioned directories. Match the marker,
+    # but only inside real user messages, then confirm the session metadata cwd
+    # in case an id was reused elsewhere.
+    codex_data="${CODEX_HOME:-$HOME/.codex}"
+    STORE="$codex_data/sessions"
+    [ -d "$STORE" ] || rzr_die "no Codex sessions dir $STORE"
+    found="$(RZR_STORE="$STORE" RZR_MARKER="rozoro-task: $ID" RZR_CWD="$CWD" python3 - <<'PY'
+import glob, json, os
 
-match="$(grep -l "rozoro-task: $ID\b" "$PROJ"/*.jsonl 2>/dev/null | head -1 || true)"
-[ -n "$match" ] || { echo "rzr-link: no session yet for '$ID' in $PROJ (retry in a few s)" >&2; exit 2; }
+for path in sorted(glob.glob(os.path.join(os.environ["RZR_STORE"], "**", "*.jsonl"), recursive=True), reverse=True):
+    try:
+        with open(path) as stream:
+            meta = json.loads(next(stream))
+            payload = meta.get("payload", {})
+            if meta.get("type") != "session_meta" or payload.get("cwd") != os.environ["RZR_CWD"]:
+                continue
+            for line in stream:
+                item = json.loads(line)
+                message = item.get("payload", {})
+                if item.get("type") != "response_item" or message.get("type") != "message" or message.get("role") != "user":
+                    continue
+                if any(
+                    os.environ["RZR_MARKER"] in part.get("text", "").splitlines()
+                    for part in message.get("content", [])
+                    if isinstance(part, dict)
+                ):
+                    print(path + "\t" + payload.get("id", ""))
+                    raise SystemExit
+    except (OSError, StopIteration, ValueError):
+        continue
+PY
+)"
+    match="${found%%$'\t'*}"
+    uuid="${found#*$'\t'}"
+    [ "$uuid" != "$found" ] || uuid=""
+    resume="codex resume $uuid"
+    ;;
+  *) rzr_die "session linking is not supported for harness '$HARNESS'" ;;
+esac
 
-uuid="$(basename "$match" .jsonl)"
-RZR_OUT="$OUT" RZR_ID="$ID" RZR_CWD="$CWD" RZR_UUID="$uuid" RZR_PATH="$match" python3 - <<'PY'
+[ -n "$match" ] && [ -n "$uuid" ] || {
+  echo "rzr-link: no $HARNESS session yet for '$ID' in $STORE (retry in a few s)" >&2
+  exit 2
+}
+
+RZR_OUT="$OUT" RZR_ID="$ID" RZR_HARNESS="$HARNESS" RZR_CWD="$CWD" \
+RZR_UUID="$uuid" RZR_PATH="$match" RZR_RESUME="$resume" python3 - <<'PY'
 import json, os
-json.dump({"id": os.environ["RZR_ID"], "harness": "claude", "cwd": os.environ["RZR_CWD"],
+json.dump({"id": os.environ["RZR_ID"], "harness": os.environ["RZR_HARNESS"], "cwd": os.environ["RZR_CWD"],
            "session_id": os.environ["RZR_UUID"], "session_path": os.environ["RZR_PATH"],
-           "resume": "claude --resume " + os.environ["RZR_UUID"]},
+           "resume": os.environ["RZR_RESUME"]},
           open(os.environ["RZR_OUT"], "w"), indent=2)
 PY
-echo "rzr-link: $ID -> $uuid  (resume: claude --resume $uuid)"
+echo "rzr-link: $ID -> $uuid  (resume: $resume)"

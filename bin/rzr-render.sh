@@ -7,10 +7,10 @@
 # Wraps the task body in templates/brief.md with a unique `rozoro-task: <id>`
 # marker, and separately renders templates/handoff.md -> handoff-protocol.md (the
 # handoff protocol, with {{FOLDER}} filled in). The brief carries ONLY the marker
-# rzr-link greps for plus the verbatim body; the handoff protocol is delivered to
-# claude crews as a system prompt (rzr-spawn), not baked into the task text. Both
-# files persist at predictable paths (survive teardown). Feed the printed brief
-# path to `rzr-spawn.sh <id> --brief <path>`.
+# rzr-link greps for plus the verbatim body; rzr-spawn delivers the handoff
+# protocol through the harness's available channel. Both files persist at
+# predictable paths (survive teardown). Feed the printed brief path to
+# `rzr-spawn.sh <id> --brief <path>`.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -38,8 +38,8 @@ def render(tmpl_path, out_path, **subs):
 render(os.environ["RZR_TMPL"], os.environ["RZR_OUT"],
        ID=os.environ["RZR_ID"], FOLDER=os.environ["RZR_FOLDER"],
        BODY=open(os.environ["RZR_BODY_FILE"]).read())
-# The handoff protocol, rendered standalone: fresh claude crews get it as a
-# system prompt; resumed crews get it re-injected into the follow-up prompt.
+# The handoff protocol, rendered standalone: fresh Claude crews get it as a
+# system prompt; other harnesses and resumed crews get it in the prompt.
 render(os.environ["RZR_HANDOFF_TMPL"], os.environ["RZR_HANDOFF_OUT"],
        ID=os.environ["RZR_ID"], FOLDER=os.environ["RZR_FOLDER"])
 PY

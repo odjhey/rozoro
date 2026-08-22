@@ -63,9 +63,9 @@ path. Every command has two forms: the dispatcher `rozoro <verb>` (or short `rzr
 <verb>`) and the underlying `rzr-<verb>.sh` script — `rozoro start …` ≡ `rzr-start.sh
 …`. This doc uses the `rzr-*.sh` form; substitute the dispatcher freely. Still
 requires `herdr` (running server, and you inside a herdr session), `jq`, and
-`python3`. Run `rozoro doctor` to verify everything at once (deps, herdr server
-reachable, `bin/` on PATH, default preset) — it seeds nothing you must pre-create,
-since `$ROZORO_HOME` and its subdirs self-create on first use.
+`python3`. Run `rozoro doctor` to verify everything at once (deps, herdr server,
+`bin/` on PATH, and the resolved default harness). It does not create or rewrite
+the optional `$ROZORO_HOME/crew/default.json`.
 
 ## Trigger vocabulary
 
@@ -75,7 +75,7 @@ since `$ROZORO_HOME` and its subdirs self-create on first use.
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
-| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* conversation (via `claude --resume`) as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
+| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude or Codex conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
@@ -104,16 +104,18 @@ a standing preference). Inspect presets with `rzr-crew.sh list`.
 Crew presets bundle *how* an agent boots (harness, model, permission mode, effort,
 standing rules) — never the task.
 
-- Default preset = **sonnet claude, `auto` permission** (i.e.
-  `claude --model sonnet --permission-mode auto`). This is the right choice for
-  routine *and* hard work unless told otherwise.
-- User asked for a bigger model → override: `rzr-spawn.sh <id> --model opus --cwd … --prompt …`.
+- `$ROZORO_HOME/crew/default.json` is authoritative when present. The recommended
+  personal default is **gpt-5.6-sol Codex at `high` effort**.
+- Without that file, the hardcoded default is Claude/Sonnet/`auto`; an explicit
+  `--harness codex` selects gpt-5.6-sol/`low` with normal permissions.
+- User asked for another model → override: `rzr-spawn.sh <id> --model <model> --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
-- `rules` in a preset are crew-behavioral and apply only to `claude` (appended to
-  its system prompt). Repo-specific rules stay in the repo, not the preset.
+- `rules` in a preset are crew-behavioral. Claude receives them through its
+  system prompt; other harnesses receive them in the delivered prompt.
+  Repo-specific rules stay in the repo, not the preset.
 
-Precedence: explicit flag > preset > default.
+Precedence: explicit flag > preset file > hardcoded harness fallback.
 
 ## Intake: decide policy, delegate discovery
 
@@ -164,7 +166,7 @@ answer itself, but whether the answer already exists.
    genuinely can't route without it (e.g. which repo an issue belongs to, or
    splitting one id into several) — or for the reuse-check before a scout.
 2. Write each task body to a file (the scratchpad or under `$ROZORO_HOME`) and
-   `rzr-start.sh <id> --body <file> --cwd <repo>` (add `--model opus` only if the
+   `rzr-start.sh <id> --body <file> --cwd <repo>` (add `--model <model>` only if the
    user asked for it). This renders a
    **durable brief** (with the handoff protocol) into `tasks/<id>/`, spawns the
    crew, and links its session — all verbatim, no shell escaping. Prefer this over
@@ -206,8 +208,8 @@ answer itself, but whether the answer already exists.
      conversation. Same id, same agent, same context.
    - **If the crew was already reaped,** don't spawn a cold replacement either:
      `rzr-resume.sh <id> [--prompt "<follow-up>"]` reopens the *exact*
-     conversation as a fresh crew tab (via `claude --resume` from
-     `tasks/<id>/session.json`) and can deliver your follow-up in the same call.
+     Claude or Codex conversation as a fresh crew tab from
+     `tasks/<id>/session.json` and can deliver your follow-up in the same call.
      A brand-new `rzr-start` rehydrating from `handoff.md` is the last resort, not
      the default — it starts cold.
    - **Reap (`rzr-teardown.sh <id>`) only once** the result is captured **and**
@@ -241,15 +243,14 @@ record that makes teardown non-lossy:
   scans *all* blocks and keeps surfacing any OPEN item until you `rzr-ack` it (the
   ack cursor `.acked-blocks` is separate from the miss-detector's `.seen-blocks` and
   advances only on an explicit ack).
-- `session.json` — the resume link (`claude --resume <session_id>`), captured by
-  `rzr-link` via marker-grep (concurrency-safe, unlike "newest file" when crews share
-  a `--cwd`).
+- `session.json` — the Claude/Codex resume link, captured by `rzr-link` via
+  marker-grep (concurrency-safe, unlike "newest file" when crews share a `--cwd`).
 
-The protocol is delivered as the claude crew's **system prompt** (rendered per task
-to `tasks/<id>/handoff-protocol.md`, passed via `--append-system-prompt-file`; on
-resume it's re-injected into the follow-up prompt, since `claude --resume` doesn't
-re-apply system-prompt flags). A standing system rule is more durable than a turn-1
-instruction, but reliability still comes from the loop: detect a miss with
+The protocol is delivered as a Claude crew's **system prompt** or folded into
+the prompt for harnesses without that channel. It is rendered per task to
+`tasks/<id>/handoff-protocol.md` and re-injected into resume follow-ups. A
+standing system rule is more durable than a turn-1 instruction, but reliability
+still comes from the loop: detect a miss with
 `rzr-status` (no new block on an idle edge), surface buried opens the same way, and
 nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this repo.
 
@@ -260,8 +261,10 @@ nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this 
   `rzr-control.sh <id> key enter` (a key press is CONTROL, not chat text), then
   re-deliver the prompt.
 - One live agent per unique name — always give each task a distinct `<id>`.
-- Only `claude` is fully wired for model/effort/rules; `codex`/`copilot`/`pi` are
-  mapped from known invocations but unverified. An unmapped harness fails loudly.
+- Claude and Codex are wired for model and effort. Claude receives rules through
+  its system-prompt channel; Codex receives them in the delivered prompt.
+  `copilot`/`pi` remain mapped from known invocations but unverified. An unmapped
+  harness fails loudly.
 - Concurrent crew in the **same** checkout will clobber each other — worktree
   isolation is the *crew's* job (via repo rules), so prefer repos/tasks whose
   rules handle it, or spawn against separate checkouts.
