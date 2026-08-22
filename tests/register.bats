@@ -68,3 +68,14 @@ load test_helper/common
   assert_failure
   assert_output_contains 'HERDR_PANE_ID'
 }
+
+@test "Copilot registration uses Herdr and rejects Codex backend" {
+  export HERDR_PANE_ID=p-driver CODEX_THREAD_ID=stale
+  fake_pane p-driver idle copilot true
+  run rzr-register.sh --harness copilot --backend auto
+  assert_success
+  [ "$(jq -r .backend "$ROZORO_HOME/watchtowers/$output/target.json")" = herdr ]
+  run rzr-register.sh --harness copilot --backend codex
+  assert_failure
+  assert_output_contains 'codex backend requires --harness codex'
+}

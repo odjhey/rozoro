@@ -84,7 +84,7 @@ Consequently:
 - `jq` on `PATH`
 - `python3` on `PATH` (stdlib only) — for the event-stream watcher
 - `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
-- The selected coding harness (`claude`, `codex`, or `pi`) on `PATH`
+- The selected coding harness (`claude`, `codex`, `copilot`, or `pi`) on `PATH`
 
 ## Automated tests
 
@@ -143,7 +143,7 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro start <display-name> --body <file> --cwd <repo> [opts]` | blessed start: atomically reserve a unique task key → render → spawn → link; prints the key used by every later command |
 | `./bin/rozoro spawn <id> --cwd <repo> [opts]` | low-level `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `./bin/rozoro render <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
-| `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent unless `--refresh` deliberately replaces the link after a fresh restart |
+| `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, Copilot, or Pi; Copilot and Pi use preallocated native session UUIDs; idempotent unless `--refresh` replaces the link after restart |
 | `./bin/rozoro status <id>` | pure schema-v2 projection separating persisted runtime, foreground, background, task, turn-report, and action state; unresolved items remain until explicitly acked |
 | `./bin/rozoro ack <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `./bin/rozoro register --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!./bin/rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the one documented registration path, not a fallback. `ROZORO_ROLE=watchtower` marks session identity independently of registration |
@@ -151,7 +151,7 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro reconcile [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' v2 projections, flag vanished tasks, and ack exactly the snapshotted generation (never resolves OPEN items) |
 | `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `./bin/rozoro control <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
-| `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
+| `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, Copilot, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
 | `./bin/rozoro crew list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `./bin/rozoro lock status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `./bin/rozoro list` | known tasks + live agent state |
@@ -221,7 +221,7 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
   Codex is the one launch-time exception: its effective permission mode is
   always normalized to `yolo`.
 - If that file is absent, the hardcoded fallback is Claude/Sonnet/`auto`.
-  Passing `--harness codex` instead selects gpt-5.6-sol/`low` and always passes
+  Passing `--harness codex` selects gpt-5.6-sol/`low`; `--harness copilot` selects portable `auto` with no explicit effort. Codex and Copilot always use normalized `yolo` permission. Codex always passes
   `--yolo`.
 - Spawn from one with `./bin/rozoro spawn <id> --cwd <repo> --crew <name> …`.
 - **Precedence** for harness/model/effort/fast/permission-mode: explicit flag > preset
@@ -237,10 +237,10 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 |---|---|---|
 | `claude` | `--model --effort --permission-mode --append-system-prompt-file` | verified on this machine |
 | `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e> [--config service_tier=priority]` | `--yolo` is unconditional; `fast:true` selects the gpt-5.6-sol priority tier |
-| `copilot`| `--model <m> --mode autopilot --allow-all` | wired; not verified here |
+| `copilot`| `--no-auto-update --autopilot --yolo --no-ask-user --model <m> [--effort <e>] --session-id <uuid>` | capability-checked; fresh UUID is preallocated; exact resume uses `--resume=<uuid>` |
 | `pi`     | `--model <m> --thinking <e> --approve --append-system-prompt <file> --session-id <uuid>` | project trust is approved when permission mode is non-empty; native UUID enables exact linking/resume |
 
-Claude, Codex, and Pi support `effort` (Pi names it `thinking`). Claude and Pi
+Claude, Codex, Copilot, and Pi support `effort` (Pi names it `thinking`). Claude and Pi
 receive the handoff protocol and preset `rules` through dedicated system-prompt
 channels, leaving the task prompt verbatim. Harnesses without one receive the
 protocol and rules in the delivered prompt. An unmapped harness fails loudly
@@ -430,7 +430,7 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   target (see `./bin/rozoro register`): the backend is chosen by the validated
   registration, never by env-var priority, so a Claude/Pi process that inherited a
   stale `CODEX_THREAD_ID` can't wake the wrong conversation. Codex uses its native
-  `codex queue`; Claude and Pi are prompted through the resident Herdr pane, and
+  `codex queue`; Claude, Copilot, and Pi are prompted through the resident Herdr pane, and
   that path DEFERS while the driver is `working` and retains while `blocked` rather
   than injecting into its turn. `--wake-codex`/`--wake-herdr` force one backend.
   Every wake routes through a durable per-driver ledger: the actionable generation
@@ -518,7 +518,7 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
-Not verified here: `copilot` harness launches.
+Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interrupt, and exact resume. Run the opt-in, cost-incurring lifecycle and Copilot-hosted watchtower smokes with `RZR_LIVE_COPILOT=1 tests/live/copilot-lifecycle.sh` and `RZR_LIVE_COPILOT=1 tests/live/copilot-watchtower.sh`. Copilot model availability is account-specific: persisted model metadata is the requested profile, and Copilot may warn and route an unavailable named model through `auto`.
 
 ### Status v2 and background-work boundary
 

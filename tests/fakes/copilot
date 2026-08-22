@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -eu
+if [ "${1:-}" = --version ]; then echo 'GitHub Copilot CLI 1.0.80'; exit 0; fi
+if [ "${1:-}" = --help ]; then
+  [ "${FAKE_COPILOT_HELP_FAIL:-0}" != 1 ] || exit 1
+  for flag in --model --effort --autopilot --yolo --no-ask-user --no-auto-update --session-id --resume; do
+    [ "$flag" = "${FAKE_COPILOT_OMIT:-}" ] || echo "  $flag"
+  done
+  exit 0
+fi
+exit 0

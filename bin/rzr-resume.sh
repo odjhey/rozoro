@@ -22,13 +22,13 @@
 # conversation on disk (the harness transcript linked in tasks/<id>/session.json).
 # When follow-up arrives, re-spawning a NEW crew starts cold — it has to rebuild
 # context from handoff.md. `resume` instead relaunches the recorded Claude,
-# Codex, or Pi session in a new pane, so the crew picks up with full memory.
+# Codex, Copilot, or Pi session in a new pane, so the crew picks up with full memory.
 #
 # Prefer NOT closing over closing-and-resuming: if the crew is still live, use
 # rzr-send.sh (same live context) rather than tearing down and resuming. This
 # verb is for the case where teardown already happened.
 #
-# Claude, Codex, and Pi sessions are supported. The task must NOT be currently tracked
+# Claude, Codex, Copilot, and Pi sessions are supported. The task must NOT be currently tracked
 # — a live agent already owns the unique name; resume is for a reaped task whose
 # name is free again.
 set -euo pipefail
@@ -71,7 +71,7 @@ UUID="$(jq -r '.session_id // empty' "$SESS" 2>/dev/null)"
 [ -n "$UUID" ] || rzr_die "$SESS has no session_id — cannot resume; start '$ID' fresh instead"
 HARNESS="$(jq -r '.harness // "claude"' "$SESS" 2>/dev/null)"
 case "$HARNESS" in
-  claude|codex|pi) ;;
+  claude|codex|copilot|pi) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
@@ -94,8 +94,9 @@ MODEL="${MODEL_OV:-$PROFILE_MODEL}"
 EFFORT="${EFFORT_OV:-$PROFILE_EFFORT}"
 PERMMODE="${PERMMODE_OV:-${PROFILE_PERMMODE:-auto}}"
 FAST="${FAST_OV:-$PROFILE_FAST}"
-[ "$HARNESS" = codex ] && PERMMODE="yolo"
+case "$HARNESS" in codex|copilot) PERMMODE="yolo" ;; esac
 rzr_profile_validate "$HARNESS" "$MODEL" "$EFFORT" "$FAST"
+[ "$HARNESS" != copilot ] || rzr_copilot_capabilities || exit 1
 CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
@@ -170,6 +171,11 @@ do_resume() {
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--config "model_reasoning_effort=$EFFORT")
       [ "$FAST" = true ] && pass+=(--config service_tier=priority)
+      ;;
+    copilot)
+      pass=(--no-auto-update "--resume=$UUID" --autopilot --yolo --no-ask-user)
+      [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
       ;;
     pi)
       pass=(--session "$UUID")

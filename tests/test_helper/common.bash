@@ -50,7 +50,7 @@ assert_output_contains() {
 }
 
 assert_file_contains() {
-  grep -F "$2" "$1" >/dev/null || { printf '%s did not contain <%s>\n' "$1" "$2" >&2; return 1; }
+  grep -F -- "$2" "$1" >/dev/null || { printf '%s did not contain <%s>\n' "$1" "$2" >&2; return 1; }
 }
 
 write_meta() {

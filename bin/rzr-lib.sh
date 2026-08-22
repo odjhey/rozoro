@@ -183,8 +183,8 @@ rzr_crew_exists() { [ -f "$(rzr_crew_path "$1")" ]; }
 
 # The personal default file is authoritative when present. If it is absent,
 # resolve `default` to an in-memory fallback without creating or changing any
-# file under $RZR_HOME. Claude is the no-flag fallback; an explicit Codex harness
-# gets the lower-cost gpt-5.6-sol/low profile.
+# file under $RZR_HOME. Claude is the no-flag fallback; explicit Codex and
+# Copilot selections get coherent harness-specific profiles.
 rzr_crew_builtin_default() {
   case "${1:-claude}" in
     claude) cat <<'JSON'
@@ -204,6 +204,17 @@ JSON
   "model": "gpt-5.6-sol",
   "permission_mode": "yolo",
   "effort": "low",
+  "fast": false,
+  "rules": []
+}
+JSON
+      ;;
+    copilot) cat <<'JSON'
+{
+  "harness": "copilot",
+  "model": "auto",
+  "permission_mode": "yolo",
+  "effort": "",
   "fast": false,
   "rules": []
 }
@@ -270,27 +281,35 @@ rzr_profile_validate() {  # <harness> <model> <effort> <fast>
   fi
 }
 
+# Require the public Copilot options Rozoro relies on. Capability checking is
+# more robust than a version floor for a self-updating CLI.
+rzr_copilot_capabilities() {
+  command -v copilot >/dev/null 2>&1 || { echo "rzr: copilot not found on PATH" >&2; return 1; }
+  local help flag
+  help="$(copilot --help 2>&1)" || { echo "rzr: could not inspect 'copilot --help'; upgrade or repair GitHub Copilot CLI" >&2; return 1; }
+  for flag in --model --effort --autopilot --yolo --no-ask-user --no-auto-update --session-id --resume; do
+    printf '%s\n' "$help" | grep -F -- "$flag" >/dev/null || {
+      echo "rzr: GitHub Copilot CLI is missing required capability $flag; upgrade Copilot CLI" >&2
+      return 1
+    }
+  done
+}
+
 # Map a resolved profile to the launch args a harness expects AFTER the `--` in
 # `herdr agent start ... -- <arg>...`. Emits NUL-separated args (so a rule value
 # containing newlines survives being read back into an array; bash-3.2 safe via
 # `read -d ''`). Returns 1 for an unknown harness so a preset can never boot one
 # with the wrong flags.
 #
-# `permmode` is a generic "run autonomously" signal: when non-empty, claude
-# passes its literal value (--permission-mode <v>), copilot uses --mode
-# autopilot --allow-all, and pi uses --approve so project-local resources load
-# without an interactive trust gate. Codex is deliberately always launched with
-# --yolo; its permmode input cannot weaken that spawner invariant. `effort` maps
-# to a native flag for claude, Pi's --thinking, and Codex's
-# model_reasoning_effort config override.
+# `permmode` is a generic "run autonomously" signal. Claude passes its literal
+# value and Pi uses --approve. Codex and Copilot are unconditionally autonomous;
+# their permmode input cannot weaken the spawner invariant. `effort` maps to each
+# harness's native flag/config.
 #
 # The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
 # preset rules). Claude takes it through --append-system-prompt-file; Pi's
 # --append-system-prompt accepts either text or a file path. The 6th optional arg
-# is a preallocated harness session id (currently used by Pi for exact linking).
-#
-# Verified on this machine: Claude, Codex, and Pi argument parsing. Wired from
-# the operator's known invocation but NOT verified here: Copilot.
+# is a preallocated harness session id (used by Pi and Copilot for exact linking).
 rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id] [fast]
   local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}" fast="${7:-false}"
   rzr_profile_validate "$harness" "$model" "$effort" "$fast"
@@ -307,9 +326,11 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$effort" ]   && printf '%s\0%s\0' --config "model_reasoning_effort=$effort"
       [ "$fast" = true ] && printf '%s\0%s\0' --config service_tier=priority
       ;;
-    copilot)  # copilot --model <m> --mode autopilot --allow-all "prompt"
-      [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
-      [ -n "$permmode" ] && printf '%s\0%s\0%s\0' --mode autopilot --allow-all
+    copilot)
+      printf '%s\0%s\0%s\0%s\0' --no-auto-update --autopilot --yolo --no-ask-user
+      [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
+      [ -n "$effort" ]     && printf '%s\0%s\0' --effort "$effort"
+      [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
       ;;
     pi)
       [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"

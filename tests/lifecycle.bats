@@ -490,3 +490,37 @@ JSON
   assert_output_contains 'display name'
   [ ! -e "$ROZORO_HOME/escape" ]
 }
+
+@test "Copilot fallback is autonomous, preallocates identity, links without private storage, and resumes exactly" {
+  run rzr-spawn.sh task --harness copilot --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'model=auto'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'permission_mode=yolo'
+  uuid="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
+  [ -n "$uuid" ]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--no-auto-update\t--autopilot\t--yolo\t--no-ask-user\t--model\tauto\t--session-id\t'"$uuid"
+  assert_file_contains "$FAKE_HERDR_LOG" $'--- task ---\ndo exactly this'
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  [ "$(jq -r .session_id "$ROZORO_HOME/tasks/task/session.json")" = "$uuid" ]
+  [ "$(jq 'has("session_path")' "$ROZORO_HOME/tasks/task/session.json")" = false ]
+  rm "$ROZORO_HOME/state/task.meta"
+  : > "$FAKE_HERDR_LOG"
+  run rzr-resume.sh task --prompt continue
+  assert_success
+  assert_file_contains "$FAKE_HERDR_LOG" $'--no-auto-update\t--resume='"$uuid"$'\t--autopilot\t--yolo\t--no-ask-user\t--model\tauto'
+  assert_file_contains "$FAKE_HERDR_LOG" '--- my follow-up ---'
+}
+
+@test "Copilot capability drift and fast fail before Herdr mutation" {
+  export FAKE_COPILOT_OMIT=--session-id
+  run rzr-spawn.sh task --harness copilot --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'missing required capability --session-id'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+  unset FAKE_COPILOT_OMIT
+  run rzr-spawn.sh task2 --harness copilot --fast --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'fast mode is currently supported only for the codex harness'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+}

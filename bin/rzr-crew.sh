@@ -10,7 +10,7 @@
 # permission mode, standing rules) - never WHAT its task is. Presets are plain
 # JSON files under $ROZORO_HOME/crew/<name>.json; create or edit them by hand.
 # `default` resolves from default.json when present. Without that file it falls
-# back to sonnet/Claude, or gpt-5.6-sol/low with `--harness codex`.
+# back to sonnet/Claude, gpt-5.6-sol/low for Codex, or auto/yolo for Copilot.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -19,7 +19,7 @@ print_row() {  # <name>
   rzr_crew_validate "$name" || rzr_die "crew preset '$name' has invalid JSON or known field types"
   json="$(rzr_crew_json "$name")"
   harness="$(printf '%s' "$json" | jq -r '.harness // "-"' 2>/dev/null)"
-  if [ "$harness" = codex ]; then
+  if [ "$harness" = codex ] || [ "$harness" = copilot ]; then
     perm="yolo"
   else
     perm="$(printf '%s' "$json" | jq -r 'if (.permission_mode // "") == "" then "-" else .permission_mode end' 2>/dev/null)"

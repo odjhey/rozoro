@@ -14,20 +14,20 @@
 #   --cwd       required working directory for the tab. The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     concise tab label (default: the exact task key)
-#   --harness   agent kind (overrides preset). Claude, Codex, and Pi are wired
-#               for model/effort; other kinds have more limited mappings.
+#   --harness   agent kind (overrides preset). Claude, Codex, Copilot, and Pi
+#               are wired for model/effort.
 #   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
 #   --effort    reasoning effort: low|medium|high|xhigh|max (overrides preset)
 #   --fast      use Codex's priority service tier (currently gpt-5.6-sol only)
 #   --no-fast   disable a preset's fast selection
-#   --permission-mode  autonomous permission signal for non-Codex harnesses;
-#               Codex always launches with --yolo
+#   --permission-mode  autonomous permission signal; Codex and Copilot always
+#               launch with yolo permissions
 #   --prompt    initial task, submitted VERBATIM once the agent is ready
 #   --brief     file whose contents become the initial prompt (also verbatim)
 #   --no-agent  create the tab + pane at a bare shell only (no agent)
 #
 # Precedence for harness/model/effort/fast/permission-mode: explicit flag > preset >
-# built-in harness fallback, except Codex permission mode is always yolo. The
+# built-in harness fallback, except Codex/Copilot permission is always yolo. The
 # Claude/Pi system prompts contain the rendered handoff protocol plus any preset
 # `rules`; the task prompt itself is passed verbatim (harnesses lacking a
 # system-prompt channel instead get the protocol folded into the prompt).
@@ -95,10 +95,12 @@ else
 fi
 rzr_profile_validate "$HARNESS" "$MODEL" "$EFFORT" "$FAST"
 
-# Codex crews are an intentionally autonomous spawner contract. Normalize the
-# effective value after all preset/flag resolution so old personal presets with
-# an empty permission_mode cannot silently launch an approval-gated session.
-[ "$HARNESS" = codex ] && PERMMODE="yolo"
+# Codex and Copilot crews are intentionally autonomous. Normalize after all
+# preset/flag resolution so a personal preset cannot weaken that contract.
+case "$HARNESS" in codex|copilot) PERMMODE="yolo" ;; esac
+
+# Reject incompatible Copilot binaries before rendering or Herdr mutation.
+[ "$HARNESS" != copilot ] || rzr_copilot_capabilities || exit 1
 
 # The handoff protocol is rozoro overhead, kept OUT of the verbatim task prompt.
 # Claude and Pi get it (plus any preset rules) through their system-prompt
@@ -109,11 +111,11 @@ rzr_render_handoff_protocol "$ID"
 HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
 SESSION_ID=""
-if [ "$HARNESS" = pi ]; then
-  # Pi can start with a caller-selected UUID. Preallocating it removes transcript
-  # discovery races and gives rzr-link/rzr-resume an exact durable identity.
-  SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-fi
+case "$HARNESS" in
+  pi|copilot)
+    # Caller-selected UUIDs remove discovery races and provide exact identity.
+    SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
+esac
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
   { cat "$HANDOFF"

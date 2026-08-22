@@ -73,7 +73,7 @@ default harness. It does not create or rewrite the optional
 | **Start** (low-level) | `./bin/rozoro spawn <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
-| **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
+| **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, Copilot, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read state** | `./bin/rozoro status <id>` — pure v2 runtime/background/task/turn/action projection plus unresolved OPEN items; status reads never advance observation state |
 | **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
@@ -225,7 +225,7 @@ answer itself, but whether the answer already exists.
      conversation. Same id, same agent, same context.
    - **If the crew was already reaped,** don't spawn a cold replacement either:
      `./bin/rozoro resume <id> [--prompt "<follow-up>"]` reopens the *exact*
-     Claude, Codex, or Pi conversation as a fresh crew tab from
+     Claude, Codex, Copilot, or Pi conversation as a fresh crew tab from
      `tasks/<id>/session.json` and can deliver your follow-up in the same call.
      A brand-new `./bin/rozoro start` rehydrating from `handoff.md` is the last resort, not
      the default — it starts cold.
@@ -279,9 +279,12 @@ nudge with `./bin/rozoro send`. The folder lives in `$ROZORO_HOME` (data), never
   `./bin/rozoro control <id> key enter` (a key press is CONTROL, not chat text), then
   re-deliver the prompt.
 - One live agent per unique name — always give each task a distinct `<id>`.
-- Claude, Codex, and Pi are wired for model and effort. Claude and Pi receive
-  rules through system-prompt channels; Codex receives them in the delivered
-  prompt. Copilot remains mapped from a known invocation but unverified. An
+- Claude, Codex, Copilot, and Pi are wired for model and effort. Claude and Pi
+  receive rules through system-prompt channels; Codex and Copilot receive them
+  before the unchanged task delimiter. Copilot defaults to `auto`, always uses
+  yolo/autopilot, has no fast mode, and exact-resumes its preallocated UUID.
+  Named-model availability is account-specific; metadata records the requested
+  profile. Copilot driver registration uses the validated Herdr backend. An
   unmapped harness fails loudly.
 - Concurrent crew in the **same** checkout will clobber each other — worktree
   isolation is the *crew's* job (via repo rules), so prefer repos/tasks whose
