@@ -456,7 +456,7 @@ rzr_unlanded_reasons() {  # <cwd>
 # generation is persisted BEFORE the backend call, so a crash between deliver and
 # recording success re-delivers (a duplicate fixed nudge is acceptable; a lost
 # actionable edge is not).
-RZR_WAKE_MESSAGE="Rozoro notification pending; run rozoro reconcile."
+RZR_WAKE_MESSAGE="Rozoro notification pending; run ./bin/rozoro reconcile."
 
 rzr_watchtowers_dir() { printf '%s/watchtowers' "$RZR_HOME"; }
 rzr_driver_dir() {  # <driver-id>
@@ -615,7 +615,7 @@ rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
   local explicit="${1:-}" dir cand matches=""
   if [ -n "$explicit" ]; then
     dir="$(rzr_driver_dir "$explicit")"
-    [ -s "$dir/target.json" ] || rzr_die "driver '$explicit' is not registered (run: rozoro register --harness <h>)"
+    [ -s "$dir/target.json" ] || rzr_die "driver '$explicit' is not registered (run: ./bin/rozoro register --harness <h>)"
     printf '%s' "$dir"; return 0
   fi
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
@@ -628,7 +628,7 @@ rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
   fi
   set -- $matches
   case $# in
-    0) rzr_die "--wake found no registered watchtower for this environment (run: rozoro register --harness <h>)" ;;
+    0) rzr_die "--wake found no registered watchtower for this environment (run: ./bin/rozoro register --harness <h>)" ;;
     1) printf '%s' "$1" ;;
     *) rzr_die "--wake is ambiguous: multiple registered targets match this environment; pass --driver <id>" ;;
   esac

@@ -2,7 +2,7 @@
 # rzr-spawn.sh - spawn a task as a herdr TAB running an agent.
 #
 # Usage:
-#   rzr-spawn.sh <id> [--crew <preset>] [--cwd <dir>] [--label <text>]
+#   rzr-spawn.sh <id> --cwd <dir> [--crew <preset>] [--label <text>]
 #               [--harness <kind>] [--model <m>] [--effort <e>] [--fast|--no-fast]
 #               [--permission-mode <mode>] [--prompt <text> | --brief <file>]
 #               [--no-agent]
@@ -11,7 +11,7 @@
 #   --crew      crewmember preset to boot from (default: "default" reads
 #               $ROZORO_HOME/crew/default.json when present; otherwise Claude
 #               Sonnet, or gpt-5.6-sol/low with --harness codex). See rzr-crew.sh.
-#   --cwd       working directory for the tab (default: current dir). The agent
+#   --cwd       required working directory for the tab. The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     concise tab label (default: the exact task key)
 #   --harness   agent kind (overrides preset). Claude, Codex, and Pi are wired
@@ -39,12 +39,12 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-ID="" ; CWD="$PWD" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
+ID="" ; CWD="" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
 CREW="default" ; HARNESS_OV="" ; MODEL_OV="" ; EFFORT_OV="" ; PERMMODE_OV="" ; FAST_OV=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --crew)    CREW="$2"; shift 2 ;;
-    --cwd)     CWD="$2"; shift 2 ;;
+    --cwd)     [ $# -ge 2 ] || rzr_die "--cwd <dir> required"; CWD="$2"; shift 2 ;;
     --harness) HARNESS_OV="$2"; shift 2 ;;
     --model)   MODEL_OV="$2"; shift 2 ;;
     --effort)  EFFORT_OV="$2"; shift 2 ;;
@@ -62,6 +62,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"
 rzr_validate_task_component "$ID"
+[ -n "$CWD" ] || rzr_die "--cwd <dir> required for a fresh task"
 [ -n "$LABEL" ] || LABEL="$ID"
 AGENT_NAME="$(rzr_task_agent_name "$ID")"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad --cwd"
@@ -73,7 +74,7 @@ fi
 rzr_task_exists "$ID" && rzr_die "task '$ID' already exists (state/$ID.meta); pick another id or tear it down"
 
 # --- resolve the crew profile (flag > preset > built-in harness fallback) --
-rzr_crew_resolves "$CREW" || rzr_die "unknown crew preset '$CREW' (see: rzr-crew.sh list)"
+rzr_crew_resolves "$CREW" || rzr_die "unknown crew preset '$CREW' (see: ./bin/rozoro crew list)"
 rzr_crew_validate "$CREW" || rzr_die "crew preset '$CREW' has invalid JSON or known field types"
 if rzr_crew_exists "$CREW"; then
   HARNESS="${HARNESS_OV:-$(rzr_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
@@ -198,7 +199,7 @@ do_spawn() {
   done
   if [ "$rc" -ne 0 ]; then
     rzr_meta_set "$ID" agent_start failed
-    rzr_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then 'rzr-teardown.sh $ID' or retry"
+    rzr_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
 

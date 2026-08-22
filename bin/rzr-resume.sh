@@ -62,11 +62,11 @@ fi
 
 # A live/tracked task still owns the unique agent name — resuming would collide.
 # If it's still around, the right move is to continue it in place, not resume.
-rzr_task_exists "$ID" && rzr_die "task '$ID' is still tracked (state/$ID.meta) — it's live; continue it with 'rozoro send $ID \"...\"' instead of resuming"
+rzr_task_exists "$ID" && rzr_die "task '$ID' is still tracked (state/$ID.meta) — it's live; continue it with './bin/rozoro send $ID \"...\"' instead of resuming"
 
 # The durable link is the whole point: session_id + the cwd it was born in.
 SESS="$(rzr_task_dir "$ID")/session.json"
-[ -s "$SESS" ] || rzr_die "no session link at $SESS — nothing to resume (was '$ID' ever started via rozoro start / linked?). Start it fresh with 'rozoro start'"
+[ -s "$SESS" ] || rzr_die "no session link at $SESS — nothing to resume (was '$ID' ever started via ./bin/rozoro start / linked?). Start it fresh with './bin/rozoro start <name> --body <file> --cwd <repo>'"
 UUID="$(jq -r '.session_id // empty' "$SESS" 2>/dev/null)"
 [ -n "$UUID" ] || rzr_die "$SESS has no session_id — cannot resume; start '$ID' fresh instead"
 HARNESS="$(jq -r '.harness // "claude"' "$SESS" 2>/dev/null)"
@@ -197,7 +197,7 @@ do_resume() {
   done
   if [ "$rc" -ne 0 ]; then
     rzr_meta_set "$ID" agent_start failed
-    rzr_die "herdr agent start ($HARNESS resume) failed in pane $pane: $sout; the tab exists - inspect it, then 'rzr-teardown.sh $ID' or retry"
+    rzr_die "herdr agent start ($HARNESS resume) failed in pane $pane: $sout; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
 

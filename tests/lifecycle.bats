@@ -1,6 +1,25 @@
 #!/usr/bin/env bats
 load test_helper/common
 
+@test "fresh spawn requires an explicit cwd before mutation" {
+  run rzr-spawn.sh task --prompt 'do exactly this'
+  assert_failure
+  assert_output_contains '--cwd <dir> required for a fresh task'
+  [ ! -e "$ROZORO_HOME/state/task.meta" ]
+  [ ! -e "$ROZORO_HOME/tasks/task" ]
+  [ ! -s "$FAKE_HERDR_LOG" ]
+}
+
+@test "fresh start requires an explicit cwd before reserving a task" {
+  printf 'ship it\n' > "$TEST_ROOT/body"
+  run rzr-start.sh task --body "$TEST_ROOT/body" --no-agent
+  assert_failure
+  assert_output_contains '--cwd <dir> required for a fresh task'
+  [ -z "$(find "$ROZORO_HOME/tasks" -mindepth 1 -print -quit)" ]
+  [ -z "$(find "$ROZORO_HOME/state" -mindepth 1 -print -quit)" ]
+  [ ! -s "$FAKE_HERDR_LOG" ]
+}
+
 @test "spawn records metadata and keeps the task prompt out of Claude system prompt" {
   run rzr-spawn.sh task --cwd "$TEST_ROOT" --prompt 'do exactly this'
   assert_success
@@ -8,7 +27,7 @@ load test_helper/common
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'harness=claude'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
   [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tcreate'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tcreate\t--cwd\t'"$TEST_ROOT"
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"

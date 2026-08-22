@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# rzr-doctor.sh - preflight a rozoro machine: deps, herdr server, PATH, preset.
+# rzr-doctor.sh - preflight a rozoro machine: deps, herdr server, preset.
 #
 # Usage:
 #   rzr-doctor.sh                      run every check and summarize
 #
 # rozoro creates its own dirs lazily ($ROZORO_HOME/{state,crew,tasks}), so there
 # is nothing to "install" - this only verifies the preconditions a fresh machine
-# needs: the base binaries, the resolved default harness, a reachable herdr
-# server, and bin/ on PATH. Exits non-zero if a hard dependency is missing.
+# needs: the external binaries, the resolved default harness, and a reachable
+# herdr server. Exits non-zero if a hard dependency is missing.
 #
 # It does NOT source rzr-lib.sh up front: rzr-lib hard-fails when herdr/jq are
 # absent, which is exactly the case a doctor must report gracefully.
@@ -36,12 +36,6 @@ if command -v herdr >/dev/null 2>&1; then
   else fail "herdr present but server not answering — start herdr and run inside a session"; fi
 else warn "skipped (herdr missing)"; fi
 
-echo "PATH:"
-case ":$PATH:" in
-  *":$BIN:"*) pass "bin/ on PATH" ;;
-  *) warn "bin/ not on PATH — add to your shell rc:  export PATH=\"$BIN:\$PATH\"" ;;
-esac
-
 echo "default crew preset:"
 if command -v jq >/dev/null 2>&1 && command -v herdr >/dev/null 2>&1; then
   . "$BIN/rzr-lib.sh"           # safe now: both hard deps present
@@ -58,9 +52,9 @@ else warn "skipped (needs jq + herdr)"; fi
 
 echo
 if [ "$bad" -eq 0 ]; then
-  echo "all good ($ok checks passed) — try: rozoro start t1 --body <file> --cwd <repo>"
+  echo "all good ($ok checks passed) — try: ./bin/rozoro start t1 --body <file> --cwd <repo>"
   exit 0
 else
-  echo "$bad check(s) failed — resolve the above, then re-run rzr-doctor.sh"
+  echo "$bad check(s) failed — resolve the above, then re-run ./bin/rozoro doctor"
   exit 1
 fi
