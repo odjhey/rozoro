@@ -284,10 +284,15 @@ class ClientTests(unittest.TestCase):
         with mock.patch.object(client.os, "fsync", side_effect=recording_fsync):
             _, fd = client._open_home(home)
         os.close(fd)
-        expected = []
-        for parent in (trusted, trusted / "level-one", trusted / "level-one" / "level-two"):
-            info = parent.stat()
-            expected.append((info.st_dev, info.st_ino))
+        anchor = trusted
+        while anchor.parent != anchor and client._is_trusted_path(anchor.parent):
+            anchor = anchor.parent
+        expected_paths = []
+        current = anchor
+        for name in home.relative_to(anchor).parts:
+            expected_paths.append(current)
+            current = current / name
+        expected = [(parent.stat().st_dev, parent.stat().st_ino) for parent in expected_paths]
         self.assertEqual(expected, synced)
         for component in (trusted / "level-one", trusted / "level-one" / "level-two", home):
             self.assertEqual(0o700, stat.S_IMODE(component.stat().st_mode))
@@ -297,23 +302,106 @@ class ClientTests(unittest.TestCase):
         trusted.mkdir(mode=0o700)
         home = trusted / "level-one" / "level-two" / "home"
         real_fsync = os.fsync
-        calls = 0
 
-        def fail_second_parent(fd):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("injected ancestor fsync failure")
+        def fail_level_two_parent(fd):
+            level_one = trusted / "level-one"
+            if level_one.exists():
+                info = level_one.stat()
+                current = os.fstat(fd)
+                if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                    raise OSError("injected ancestor fsync failure")
             return real_fsync(fd)
 
         before = open_fd_count()
-        with mock.patch.object(client.os, "fsync", side_effect=fail_second_parent):
+        with mock.patch.object(client.os, "fsync", side_effect=fail_level_two_parent):
             with self.assertRaises(UnsafePathError):
                 client._open_home(home)
         self.assertEqual(before, open_fd_count())
         self.assertFalse(home.exists())
         self.assertEqual(0o700, stat.S_IMODE((trusted / "level-one").stat().st_mode))
         self.assertEqual(0o700, stat.S_IMODE((trusted / "level-one" / "level-two").stat().st_mode))
+
+    def test_retry_repairs_existing_home_component_after_fsync_failure(self):
+        trusted = Path(self.temp.name) / "retry-home"
+        trusted.mkdir(mode=0o700)
+        home = trusted / "one" / "two" / "home"
+        real_fsync = os.fsync
+        failed = False
+
+        def fail_once(fd):
+            nonlocal failed
+            one = trusted / "one"
+            if not failed and one.exists():
+                info, current = one.stat(), os.fstat(fd)
+                if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                    failed = True
+                    raise OSError("uncertain home link")
+            return real_fsync(fd)
+
+        before = open_fd_count()
+        with mock.patch.object(client.os, "fsync", side_effect=fail_once):
+            with self.assertRaises(UnsafePathError):
+                client._open_home(home)
+        self.assertEqual(before, open_fd_count())
+        repaired = []
+        one_info = (trusted / "one").stat()
+
+        def record(fd):
+            current = os.fstat(fd)
+            repaired.append((current.st_dev, current.st_ino))
+            return real_fsync(fd)
+
+        with mock.patch.object(client.os, "fsync", side_effect=record):
+            _, fd = client._open_home(home)
+        os.close(fd)
+        self.assertIn((one_info.st_dev, one_info.st_ino), repaired)
+
+    def test_retry_repairs_existing_subdir_lock_and_counter_links(self):
+        real_fsync = os.fsync
+        cases = []
+        # Each operation first creates its entry but receives an injected parent
+        # fsync failure; the retry must fsync that same parent before success.
+        home_fd = os.open(self.home, client._DIR_FLAGS)
+        cases.append((home_fd, "spool", lambda fd: client._open_subdir(fd, "spool")))
+        (self.home / "lock-parent").mkdir(mode=0o700)
+        lock_parent = os.open(self.home / "lock-parent", client._DIR_FLAGS)
+        cases.append((lock_parent, ".lock", lambda fd: client._locked_fd(fd, ".lock")))
+        (self.home / "counter-parent").mkdir(mode=0o700)
+        counter_parent = os.open(self.home / "counter-parent", client._DIR_FLAGS)
+        cases.append((counter_parent, "session.seq", lambda fd: client._locked_fd(fd, "session.seq")))
+        try:
+            for parent_fd, name, operation in cases:
+                parent_info = os.fstat(parent_fd)
+                failed = False
+
+                def fail_once(fd):
+                    nonlocal failed
+                    current = os.fstat(fd)
+                    if not failed and (current.st_dev, current.st_ino) == (parent_info.st_dev, parent_info.st_ino):
+                        failed = True
+                        raise OSError(f"uncertain {name} link")
+                    return real_fsync(fd)
+
+                before = open_fd_count()
+                with mock.patch.object(client.os, "fsync", side_effect=fail_once):
+                    with self.assertRaises(OSError):
+                        operation(parent_fd)
+                self.assertEqual(before, open_fd_count())
+                self.assertTrue(stat.S_ISREG(os.stat(name, dir_fd=parent_fd).st_mode) if "." in name else stat.S_ISDIR(os.stat(name, dir_fd=parent_fd).st_mode))
+                repaired = []
+
+                def record(fd):
+                    current = os.fstat(fd)
+                    repaired.append((current.st_dev, current.st_ino))
+                    return real_fsync(fd)
+
+                with mock.patch.object(client.os, "fsync", side_effect=record):
+                    result_fd = operation(parent_fd)
+                os.close(result_fd)
+                self.assertIn((parent_info.st_dev, parent_info.st_ino), repaired)
+        finally:
+            for parent_fd, _, _ in cases:
+                os.close(parent_fd)
 
     def test_home_creation_rejects_writable_existing_ancestor(self):
         untrusted = Path(self.temp.name) / "untrusted"

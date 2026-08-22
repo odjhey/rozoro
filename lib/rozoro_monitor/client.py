@@ -35,40 +35,50 @@ def _trusted_directory(info: os.stat_result, label: str) -> None:
         raise UnsafePathError(f"refusing untrusted ancestor directory: {label}")
 
 
+def _is_trusted_path(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not stat.S_IMODE(info.st_mode) & 0o022
+
+
 def _create_home_from_trusted_ancestor(path: Path) -> int:
-    """Create missing components privately and durably, holding dirfds throughout."""
+    """Create or repair components durably, holding dirfds throughout.
+
+    Every descendant link is parent-fsynced even when it already exists. That
+    makes retry repair a link whose first creation succeeded but parent fsync
+    failed before durability was known.
+    """
     path = path.absolute()
     if ".." in path.parts:
         raise UnsafePathError(f"refusing parent traversal in ROZORO_HOME: {path}")
 
-    missing: list[str] = []
     ancestor = path
-    while True:
-        try:
-            ancestor.lstat()
-            break
-        except FileNotFoundError:
-            if ancestor.parent == ancestor:
-                raise UnsafePathError(f"no existing ancestor for ROZORO_HOME: {path}")
-            missing.append(ancestor.name)
-            ancestor = ancestor.parent
+    while not _is_trusted_path(ancestor):
+        if ancestor.parent == ancestor:
+            raise UnsafePathError(f"no existing trusted ancestor for ROZORO_HOME: {path}")
+        ancestor = ancestor.parent
+    # Climb to the highest contiguous user-owned, non-writable ancestor. Its
+    # own link predates client-managed descendants and is our trust boundary.
+    while ancestor.parent != ancestor and _is_trusted_path(ancestor.parent):
+        ancestor = ancestor.parent
+    relative = path.relative_to(ancestor).parts
 
     fd = os.open(ancestor, _DIR_FLAGS)
     try:
         _trusted_directory(os.fstat(fd), str(ancestor))
-        for name in reversed(missing):
+        for name in relative:
             try:
                 os.mkdir(name, 0o700, dir_fd=fd)
             except FileExistsError:
-                created = False
-            else:
-                created = True
+                pass
             child_fd = os.open(name, _DIR_FLAGS, dir_fd=fd)
             try:
                 _check_private(os.fstat(child_fd), name, directory=True)
-                if created:
-                    # Persist this link before creating anything beneath it.
-                    os.fsync(fd)
+                # Always repair the link: an earlier mkdir may have survived a
+                # failed fsync and cannot otherwise be distinguished on retry.
+                os.fsync(fd)
             except BaseException:
                 os.close(child_fd)
                 raise
@@ -110,14 +120,13 @@ def _open_subdir(parent_fd: int, name: str) -> int:
         os.mkdir(name, 0o700, dir_fd=parent_fd)
     except FileExistsError:
         pass
-    else:
-        # Durably record first creation before storing state below it.
-        os.fsync(parent_fd)
     fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
     try:
         _check_private(os.fstat(fd), name, directory=True)
+        # Existing may mean a prior creation whose parent fsync failed.
+        os.fsync(parent_fd)
         return fd
-    except Exception:
+    except BaseException:
         os.close(fd)
         raise
 
@@ -219,15 +228,11 @@ def _locked_fd(directory_fd: int, name: str) -> int:
         fd = _open_file(directory_fd, name, os.O_RDWR | os.O_CREAT | os.O_EXCL)
     except FileExistsError:
         fd = _open_file(directory_fd, name, os.O_RDWR)
-    else:
-        try:
-            os.fsync(directory_fd)
-        except Exception:
-            os.close(fd)
-            raise
     try:
+        # Repair uncertain first creation before relying on this inode.
+        os.fsync(directory_fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
-    except Exception:
+    except BaseException:
         os.close(fd)
         raise
     return fd
