@@ -269,11 +269,22 @@ repo at [`templates/watchtower.md`](templates/watchtower.md) — maintain it the
 not inline. Launch the driver **inside a herdr session**, from a repo whose skills
 path ships the skill (this repo's `.claude/skills/rozoro/` does):
 
+From the Rozoro checkout:
+
 ```sh
-claude --append-system-prompt-file templates/watchtower.md
-# or
-pi --append-system-prompt templates/watchtower.md --approve
+# Pi watchtower (recommended)
+PATH="$PWD/bin:$PATH" pi \
+  --approve \
+  --append-system-prompt "$PWD/templates/watchtower.md"
+
+# Or Claude
+PATH="$PWD/bin:$PATH" claude \
+  --append-system-prompt-file "$PWD/templates/watchtower.md"
 ```
+
+Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
+command supplies the control-tower prompt, puts Rozoro's commands on `PATH`, and
+approves the project-local extension for this run.
 
 The Pi launch also loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
 When it detects the watchtower system prompt, the extension starts `rzr-watch`
