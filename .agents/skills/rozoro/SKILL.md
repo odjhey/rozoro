@@ -254,8 +254,11 @@ record that makes teardown non-lossy:
   which appends the handoff protocol and a unique `rozoro-task: <id>` marker).
 - `handoff.md` — the OUTPUT, **append-only**. The protocol tells the crew to append
   a block before ending *every* turn, each carrying a `verdict:` line
-  (`done | waiting | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
-  tell "done" from "needs more input", and it accumulates across multiple `./bin/rozoro send`
+  (`done | waiting | needs-action | failed | blocked`) and `inputs-needed:`. An optional,
+  tooling-agnostic `artifacts:` value can preserve useful external evidence such as run
+  IDs, PR URLs, logs, report paths, or status snapshots; crews write `none` when there
+  is nothing to preserve, and no target repository must use a particular tool. This is
+  how you tell "done" from "needs more input", and it accumulates across multiple `./bin/rozoro send`
   rounds so context is never lost. Because it is append-only, reading only the last
   block would let a later `done` bury an earlier open question — so `./bin/rozoro status`
   scans *all* blocks and keeps surfacing any OPEN item until you `./bin/rozoro ack` it (the

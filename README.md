@@ -184,8 +184,11 @@ the tab label; fresh spawn and resume reuse the transport name internally.
 
 Each task has a folder under `$ROZORO_HOME/tasks/<task-key>/` so teardown is
 non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
-crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
-and context accumulates across `./bin/rozoro send` rounds), and `session.json` (the resume
+crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`;
+its optional, tooling-agnostic `artifacts:` value can preserve external evidence such
+as run IDs, PR URLs, logs, report paths, or status snapshots, with `none` used when
+there is nothing to preserve; no target repository needs any particular tool; and
+context accumulates across `./bin/rozoro send` rounds), and `session.json` (the resume
 link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
 
 Compatibility: existing safe, unsuffixed keys such as `issue-42` remain valid

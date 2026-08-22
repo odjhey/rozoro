@@ -12,12 +12,16 @@ input — APPEND (never overwrite, never edit an earlier block) one block to
   did:           <what you changed / verified this turn>
   pending:       <what is left, or "none">
   inputs-needed: <the exact question you need me to answer, or "none">
-  artifacts:     <branch / PR # / commit sha / file paths, or "none">
+  artifacts:     <optional external-tool evidence: run IDs, PR URLs, logs, report paths, status snapshots; or "none">
 
 Rules:
 - Append-only. Each turn adds a new block; the file is the full history of this
   task, so a future session (or I) can resume from it alone.
 - `verdict` is how I tell completion, waiting, and action requests apart.
+- `artifacts` is tooling-agnostic and optional. Use it to preserve useful evidence
+  from any external tool (for example run IDs, PR URLs, logs, report paths, or
+  status snapshots); write `none` when there are no artifacts. No particular tool
+  is required.
 - Use `waiting` only while harness-owned background work is active, with useful
   reason/pending text and `inputs-needed: none`; report again after consuming it.
 - If background capability is unavailable, `waiting` is unverified and actionable.

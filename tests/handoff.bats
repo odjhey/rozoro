@@ -18,6 +18,16 @@ block() { printf '%s\n' "## turn $1 — report" "verdict: $2" "reason: ${3:-}" "
   assert_output_contains '"blocks":1'; assert_output_contains 'noncanonical H2'
 }
 
+@test "artifacts are optional and external-tool evidence is preserved" {
+  write_handoff task '## turn 1 — no evidence' 'verdict: done' 'reason:' 'did: work' 'pending: none' 'inputs-needed: none'
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"protocol_errors":[]'; assert_output_contains '"artifacts":""'
+
+  write_handoff task '## turn 1 — evidence' 'verdict: done' 'reason:' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: run build-42; https://example.test/pr/7; reports/status.json'
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"artifacts":"run build-42; https://example.test/pr/7; reports/status.json"'
+}
+
 @test "open input survives later done until FIFO acknowledgement" {
   write_handoff task '## turn 1 — question' 'verdict: needs-action' 'reason: choose' 'did: asked' 'pending: choice' 'inputs-needed: choose A or B' 'artifacts: none' "$(block 2 done)"
   run rzr-status.sh task --json; assert_success; assert_output_contains '"unresolved":1'; assert_output_contains 'choose A or B'
