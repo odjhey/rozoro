@@ -85,6 +85,29 @@ Consequently:
 - `python3` (stdlib only) — for the event-stream watcher
 - `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
 
+## Automated tests
+
+The regression suite is isolated from your real home, Rozoro state, Herdr
+session, harness stores, and working checkouts. It uses a PATH-injected fake
+Herdr and standard-library Unix socket fixtures, so neither a running Herdr
+server nor an installed coding harness is needed.
+
+Install Bats-core 1.14.x, then run the same command used by Linux and macOS CI:
+
+```sh
+./tests/run.sh
+```
+
+On macOS, install Bats with `brew install bats-core`. On other platforms, use
+the official v1.14.0 source release or `npm install -g bats`; avoid an older OS
+package unless `bats --version` confirms 1.14.x. The runner checks the version
+and prints installation guidance without downloading or changing the checkout.
+
+The automated suite covers shell/Python protocol parsing, event transport,
+watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr
+0.8.x server remain optional manual integration smoke tests; they are not part
+of the automated correctness evidence.
+
 ## Install
 
 There is nothing to build and no dir to create — `$ROZORO_HOME` (default
