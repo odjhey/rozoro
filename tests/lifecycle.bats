@@ -12,6 +12,24 @@ load test_helper/common
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
+@test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
+  mkdir -p "$ROZORO_HOME/crew"
+  cat > "$ROZORO_HOME/crew/pi-worker.json" <<'JSON'
+{"harness":"pi","model":"anthropic/claude-sonnet-4-6","effort":"high","permission_mode":"auto","rules":["never push"]}
+JSON
+  run rzr-spawn.sh task --crew pi-worker --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'harness=pi'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'model=anthropic/claude-sonnet-4-6'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=high'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'session='
+  assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'never push'
+  ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tpi\t--pane\tp1\t--\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--session-id\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
+}
+
 @test "spawn retries transient pane busy" {
   export FAKE_HERDR_BUSY_ONCE_MATCH=' agent start '
   run rzr-spawn.sh task --cwd "$TEST_ROOT"
@@ -68,6 +86,33 @@ load test_helper/common
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tclose\tt1'
 }
 
+@test "Pi session link uses the preallocated native UUID" {
+  uuid='11111111-2222-4333-8444-555555555555'
+  write_meta task 'harness=pi' "session=$uuid"
+  store="$HOME/.pi/agent/sessions/--fixture--"
+  mkdir -p "$store"
+  printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/pi.jsonl"
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  assert_output_contains "$uuid"
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"harness": "pi"'
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_id\": \"$uuid\""
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_path\": \"$store/pi.jsonl\""
+}
+
+@test "Pi session link falls back to an isolated real user marker" {
+  write_meta task 'harness=pi'
+  export PI_CODING_AGENT_SESSION_DIR="$TEST_ROOT/pi-sessions"
+  mkdir -p "$PI_CODING_AGENT_SESSION_DIR/project"
+  cat > "$PI_CODING_AGENT_SESSION_DIR/project/pi.jsonl" <<JSON
+{"type":"session","version":3,"id":"legacy-pi","cwd":"$TEST_ROOT"}
+{"type":"message","id":"12345678","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"rozoro-task: task\\nbody"}]}}
+JSON
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"session_id": "legacy-pi"'
+}
+
 @test "legacy Claude session link can be resumed" {
   mkdir -p "$ROZORO_HOME/tasks/task"
   printf '{"session_id":"uuid-1","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
@@ -75,6 +120,17 @@ load test_helper/common
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-1'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+}
+
+@test "Pi session can be resumed with trust, model override, and persisted system prompt" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf 'handoff rules\n' > "$ROZORO_HOME/tasks/task/sysprompt.md"
+  printf '{"session_id":"uuid-pi","harness":"pi","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run rzr-resume.sh task --model anthropic/claude-sonnet-4-6 --prompt 'continue'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-pi'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tpi\t--pane\tp1\t--\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
 @test "resume refuses a currently tracked task" {
