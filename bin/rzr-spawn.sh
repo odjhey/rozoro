@@ -60,6 +60,7 @@ done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"
 rzr_validate_task_component "$ID"
 [ -n "$LABEL" ] || LABEL="$ID"
+AGENT_NAME="$(rzr_task_agent_name "$ID")"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad --cwd"
 if [ -n "$BRIEF" ]; then
   [ -f "$BRIEF" ] || rzr_die "no brief file at $BRIEF"
@@ -138,6 +139,7 @@ do_spawn() {
 
   rzr_meta_set "$ID" id "$ID"
   rzr_meta_set "$ID" display_name "$LABEL"
+  rzr_meta_set "$ID" herdr_agent_name "$AGENT_NAME"
   rzr_meta_set "$ID" pane "$pane"
   rzr_meta_set "$ID" tab "${tab:-}"
   rzr_meta_set "$ID" workspace "${ws:-}"
@@ -157,10 +159,9 @@ do_spawn() {
   fi
 
   # Bring the agent up in the pane and wait for interactive readiness. The agent
-  # NAME must be UNIQUE per herdr session: herdr rejects a second `agent start`
-  # that reuses a live name (agent_name_taken), so naming every crew "$HARNESS"
-  # would cap the whole fleet at one live agent. Use the task id as the name
-  # (--kind stays the harness); everything else addresses the agent by pane.
+  # NAME must be valid and UNIQUE per herdr session. Durable task keys include
+  # uppercase ULIDs and may exceed Herdr's 32-character limit, so use their
+  # stable transport-safe digest; everything else addresses the agent by pane.
   #
   # The crew profile (model/effort/permission-mode/rules) is forwarded to the
   # underlying agent binary via herdr's `-- <arg>...` passthrough. Args arrive
@@ -168,7 +169,7 @@ do_spawn() {
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
     < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE")
-  local -a start=(agent start "$ID" --kind "$HARNESS" --pane "$pane")
+  local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 
   # `tab create` returns a pane id before its shell prompt is ready, so an
