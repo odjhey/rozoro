@@ -223,7 +223,11 @@ def prepare_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None 
     del root
     try:
         spool_fd = _open_subdir(home_fd, "spool")
-        sequence_fd = _open_subdir(home_fd, "producer-seq")
+        try:
+            sequence_fd = _open_subdir(home_fd, "producer-seq")
+        except Exception:
+            os.close(spool_fd)
+            raise
         try:
             spool_lock = _locked_fd(spool_fd, ".lock")
             try:
@@ -295,6 +299,8 @@ def _remove_reserved(event: Mapping[str, Any], home: str | os.PathLike[str]) -> 
             try:
                 name = f"{event['event_id']}.json"
                 data = _read_file(spool_fd, name)
+                if data is None:
+                    return
                 expected = protocol.encode(dict(event)).encode("utf-8")
                 if data != expected:
                     raise ClientError(f"spool identity changed before ACK cleanup: {event['event_id']}")

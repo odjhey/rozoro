@@ -207,6 +207,43 @@ class ClientTests(unittest.TestCase):
             spool_event(linked, self.home)
         self.assertFalse((Path(self.temp.name) / "outside").exists())
 
+    def test_prepare_event_second_subdir_failure_does_not_leak_spool_fd(self):
+        real_open_subdir = client._open_subdir
+
+        def failing_open_subdir(parent_fd, name):
+            if name == "producer-seq":
+                raise OSError("boom")
+            return real_open_subdir(parent_fd, name)
+
+        def open_fd_count():
+            fd_dir = "/dev/fd" if os.path.isdir("/dev/fd") else f"/proc/{os.getpid()}/fd"
+            return len(os.listdir(fd_dir))
+
+        before = open_fd_count()
+        with mock.patch.object(client, "_open_subdir", side_effect=failing_open_subdir):
+            with self.assertRaises(OSError):
+                prepare_event(event(), self.home)
+        after = open_fd_count()
+        self.assertEqual(before, after)
+
+    def test_remove_reserved_is_idempotent_when_spool_entry_already_gone(self):
+        reserved = prepare_event(event(), self.home)
+        client._remove_reserved(reserved, self.home)
+        self.assertEqual([], self.spooled())
+        client._remove_reserved(reserved, self.home)
+
+    def test_send_cleanup_is_idempotent_for_concurrent_duplicate_ack(self):
+        path = self.home / "server.sock"
+        reply = lambda got: protocol.encode({"v": 1, "type": "ack", "event_id": got["event_id"], "durable_seq": 9}).encode()
+        with FakeServer(path, reply) as server:
+            result = ProducerClient(self.home, socket_path=path).send(event("dup"))
+        self.assertEqual(9, result["durable_seq"])
+        self.assertEqual([], self.spooled())
+        # A second caller that reserved and sent the identical envelope concurrently
+        # (e.g. a client-side retry racing the original) also observes a valid,
+        # matching ACK and must not fail its own cleanup of the already-removed entry.
+        client._remove_reserved(server.received, self.home)
+
     def test_created_state_directories_and_files_are_private(self):
         prepare_event(event(), self.home)
         for path in (self.home / "spool", self.home / "producer-seq"):
