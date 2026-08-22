@@ -334,30 +334,58 @@ class EventStore:
                 f"cannot upgrade schema 2: session {invalid_owner[0]!r} has invalid owner identity"
             )
 
-        # v2 allowed an upsert to replace identity. Compare every retained event
-        # with the latest session row so a contradictory legacy history is not
-        # blessed by installing the v3 immutability trigger.
-        identities = {
+        # v2 allowed an upsert to replace identity. Validate each event on its
+        # own, establish one identity per session from history, then compare it
+        # with the durable session anchor. Event-only histories are unsafe: v3
+        # triggers protect sessions, not orphan event rows.
+        session_anchors = {
             row["session_id"]: (row["harness"], row["role"], row["task_id"], row["driver_id"])
             for row in connection.execute(
                 "SELECT session_id,harness,role,task_id,driver_id FROM sessions"
             )
         }
-        for row in connection.execute("SELECT session_id,payload_json FROM events ORDER BY durable_seq"):
-            expected = identities.get(row["session_id"])
-            if expected is None:
-                continue
+        historical: dict[str, tuple[Any, ...]] = {}
+        for row in connection.execute(
+            """SELECT event_id,session_id,task_id,driver_id,event_type,payload_json
+               FROM events ORDER BY durable_seq"""
+        ):
             try:
                 payload = json.loads(row["payload_json"])
-                observed = (
+                if not isinstance(payload, dict):
+                    raise TypeError("event payload is not an object")
+                stored = (
+                    row["event_id"], row["session_id"], row["task_id"],
+                    row["driver_id"], row["event_type"],
+                )
+                embedded = (
+                    payload["event_id"], payload["session_id"], payload.get("task_id"),
+                    payload.get("driver_id"), payload["type"],
+                )
+                identity = (
                     payload["harness"], payload["role"],
                     payload.get("task_id"), payload.get("driver_id"),
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise RuntimeError("cannot upgrade schema 2: malformed event identity history") from exc
-            if observed != expected:
+            if embedded != stored:
                 raise RuntimeError(
-                    f"cannot upgrade schema 2: session {row['session_id']!r} has contradictory identity history"
+                    f"cannot upgrade schema 2: event {row['event_id']!r} payload identity disagrees with stored columns"
+                )
+            previous = historical.setdefault(row["session_id"], identity)
+            if previous != identity:
+                raise RuntimeError(
+                    f"cannot upgrade schema 2: session {row['session_id']!r} has contradictory event identities"
+                )
+
+        for session_id, identity in historical.items():
+            anchor = session_anchors.get(session_id)
+            if anchor is None:
+                raise RuntimeError(
+                    f"cannot upgrade schema 2: session {session_id!r} has orphan event history without an identity anchor"
+                )
+            if identity != anchor:
+                raise RuntimeError(
+                    f"cannot upgrade schema 2: session {session_id!r} has contradictory identity history"
                 )
 
         # v2 retained only each task's mutable latest projection. Once any

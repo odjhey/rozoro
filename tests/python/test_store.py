@@ -51,14 +51,28 @@ class StoreTests(unittest.TestCase):
         return connection
 
     def assert_database_remains_v2(self):
-        connection = sqlite3.connect(self.db)
+        connection = sqlite3.connect(self.db, timeout=0)
         try:
+            # Also proves failed EventStore construction closed its connection
+            # and released the migration write lock.
+            connection.execute("BEGIN IMMEDIATE")
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertIsNone(connection.execute(
                 "SELECT name FROM sqlite_master WHERE name='generation_task_snapshots'"
             ).fetchone())
+            connection.rollback()
         finally:
             connection.close()
+
+    @staticmethod
+    def insert_v2_event(connection, item):
+        connection.execute(
+            """INSERT INTO events(
+                   event_id,session_id,task_id,driver_id,event_type,payload_json)
+               VALUES(?,?,?,?,?,?)""",
+            (item["event_id"], item["session_id"], item.get("task_id"),
+             item.get("driver_id"), item["type"], json.dumps(item)),
+        )
 
     def test_reopen_and_upgrade_from_migration_one(self):
         self.home.mkdir(parents=True)
@@ -119,15 +133,64 @@ class StoreTests(unittest.TestCase):
             EventStore(self.db)
         self.assert_database_remains_v2()
 
-    def test_populated_v2_contradictory_identity_history_is_rejected(self):
+    def test_populated_v2_single_orphan_event_is_rejected_and_unlocks(self):
+        connection = self.create_v2_database()
+        self.insert_v2_event(connection, event())
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "orphan event history"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
+
+    def test_populated_v2_contradictory_orphan_events_are_rejected_and_unlock(self):
+        connection = self.create_v2_database()
+        self.insert_v2_event(connection, event())
+        self.insert_v2_event(connection, event("event-2", 2, task_id="task-2"))
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "contradictory event identities"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
+
+    def test_populated_v2_safe_anchored_history_upgrades(self):
+        connection = self.create_v2_database()
+        first = event()
+        self.insert_v2_event(connection, first)
+        connection.execute(
+            """INSERT INTO sessions(
+                   session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
+               VALUES('session-1','task-1',NULL,'claude','crew','{}',1)"""
+        )
+        connection.commit()
+        connection.close()
+
+        with EventStore(self.db) as store:
+            self.assertEqual(store.schema_version, 3)
+            self.assertIsNotNone(store._connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='generation_task_snapshots'"
+            ).fetchone())
+
+    def test_populated_v2_event_payload_column_mismatch_is_rejected(self):
         connection = self.create_v2_database()
         first = event()
         connection.execute(
             """INSERT INTO events(event_id,session_id,task_id,event_type,payload_json)
-               VALUES(?,?,?,?,?)""",
-            (first["event_id"], first["session_id"], first["task_id"], first["type"],
-             json.dumps(first)),
+               VALUES('stored-id','session-1','task-1','turn.start',?)""",
+            (json.dumps(first),),
         )
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "payload identity disagrees with stored columns"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
+
+    def test_populated_v2_contradictory_identity_history_is_rejected(self):
+        connection = self.create_v2_database()
+        first = event()
+        self.insert_v2_event(connection, first)
         connection.execute(
             """INSERT INTO sessions(
                    session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
