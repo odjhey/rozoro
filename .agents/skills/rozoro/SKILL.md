@@ -107,7 +107,8 @@ standing rules) — never the task.
 - `$ROZORO_HOME/crew/default.json` is authoritative when present. The recommended
   personal default is **gpt-5.6-sol Codex at `high` effort**.
 - Without that file, the hardcoded default is Claude/Sonnet/`auto`; an explicit
-  `--harness codex` selects gpt-5.6-sol/`low` with normal permissions.
+  `--harness codex` selects gpt-5.6-sol/`low`. Every Codex spawn and resume is
+  forced to `--yolo`, including presets whose `permission_mode` is empty.
 - User asked for another model → override: `rzr-spawn.sh <id> --model <model> --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
@@ -115,7 +116,8 @@ standing rules) — never the task.
   system prompt; other harnesses receive them in the delivered prompt.
   Repo-specific rules stay in the repo, not the preset.
 
-Precedence: explicit flag > preset file > hardcoded harness fallback.
+Precedence: explicit flag > preset file > hardcoded harness fallback. Codex
+permission mode is the exception: the spawner always uses `--yolo`.
 
 ## Intake: decide policy, delegate discovery
 

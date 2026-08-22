@@ -7,7 +7,8 @@
 #
 #   <id>        a task previously started (its tasks/<id>/session.json must exist)
 #   --cwd       working dir for the tab (default: the cwd recorded at link time)
-#   --permission-mode  autonomous permission signal for the run (default: auto)
+#   --permission-mode  autonomous permission signal for non-Codex harnesses;
+#               Codex always resumes with --yolo
 #   --model     model override for the resumed run (default: session's own)
 #   --label     tab label (default: the id)
 #   --prompt    a follow-up delivered VERBATIM once the resumed agent is ready
@@ -60,6 +61,7 @@ case "$HARNESS" in
   claude|codex) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
+[ "$HARNESS" = codex ] && PERMMODE="yolo"
 CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
@@ -125,7 +127,7 @@ do_resume() {
       ;;
     codex)
       pass=(resume "$UUID")
-      [ -n "$PERMMODE" ] && pass+=(--yolo)
+      pass+=(--yolo)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       ;;
   esac

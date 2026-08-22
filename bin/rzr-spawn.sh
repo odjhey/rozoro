@@ -18,16 +18,18 @@
 #               model/effort; other kinds have more limited mappings.
 #   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
 #   --effort    reasoning effort: low|medium|high|xhigh|max (overrides preset)
-#   --permission-mode  autonomous permission signal, e.g. auto (overrides preset)
+#   --permission-mode  autonomous permission signal for non-Codex harnesses;
+#               Codex always launches with --yolo
 #   --prompt    initial task, submitted VERBATIM once the agent is ready
 #   --brief     file whose contents become the initial prompt (also verbatim)
 #   --no-agent  create the tab + pane at a bare shell only (no agent)
 #
 # Precedence for harness/model/effort/permission-mode: explicit flag > preset >
-# built-in harness fallback. The claude system prompt is the rendered handoff
-# protocol plus any preset `rules`, delivered via --append-system-prompt-file;
-# the task prompt itself is passed verbatim (harnesses lacking a system-prompt
-# channel instead get the protocol folded into the prompt — see below).
+# built-in harness fallback, except Codex permission mode is always yolo. The
+# claude system prompt is the rendered handoff protocol plus any preset `rules`,
+# delivered via --append-system-prompt-file; the task prompt itself is passed
+# verbatim (harnesses lacking a system-prompt channel instead get the protocol
+# folded into the prompt — see below).
 #
 # Mechanism: one herdr `tab create` (a clickable tab in the orchestrator's own
 # workspace), then `agent start` to bring up the agent in that tab's pane, then
@@ -86,6 +88,11 @@ case "$HARNESS" in
   claude|codex|copilot|pi) ;;
   *) rzr_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to rzr_harness_args in rzr-lib.sh" ;;
 esac
+
+# Codex crews are an intentionally autonomous spawner contract. Normalize the
+# effective value after all preset/flag resolution so old personal presets with
+# an empty permission_mode cannot silently launch an approval-gated session.
+[ "$HARNESS" = codex ] && PERMMODE="yolo"
 
 # The handoff protocol is rozoro overhead, kept OUT of the verbatim task prompt.
 # claude gets it (plus any preset rules) as a system prompt via a single combined

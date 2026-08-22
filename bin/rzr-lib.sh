@@ -122,7 +122,7 @@ JSON
 {
   "harness": "codex",
   "model": "gpt-5.6-sol",
-  "permission_mode": "",
+  "permission_mode": "yolo",
   "effort": "low",
   "rules": []
 }
@@ -161,10 +161,12 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 # with the wrong flags.
 #
 # `permmode` is a generic "run autonomously" signal: when non-empty, claude
-# passes its literal value (--permission-mode <v>), codex uses --yolo, and
-# copilot uses --mode autopilot --allow-all. `effort` maps to a native flag for
-# claude and to Codex's model_reasoning_effort config override. Harnesses without
-# a system-prompt channel get the protocol folded into the delivered prompt.
+# passes its literal value (--permission-mode <v>) and copilot uses --mode
+# autopilot --allow-all. Codex is deliberately always launched with --yolo;
+# its permmode input cannot weaken that spawner invariant. `effort` maps to a
+# native flag for claude and to Codex's model_reasoning_effort config override.
+# Harnesses without a system-prompt channel get the protocol folded into the
+# delivered prompt.
 #
 # The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
 # preset rules), delivered via --append-system-prompt-file. claude rejects
@@ -183,7 +185,7 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$sysfile" ]  && printf '%s\0%s\0' --append-system-prompt-file "$sysfile"
       ;;
     codex)  # codex --yolo --model <m> --config model_reasoning_effort=<e> "prompt"
-      [ -n "$permmode" ] && printf '%s\0' --yolo
+      printf '%s\0' --yolo
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]   && printf '%s\0%s\0' --config "model_reasoning_effort=$effort"
       ;;
