@@ -40,6 +40,17 @@ block() { printf '%s\n' "## turn $1 — report" "verdict: $2" "reason: ${3:-}" "
   run rzr-status.sh task --json; assert_success; assert_output_contains '"action_reason":"inconsistent-wait"'; assert_output_contains '"supported":null'
 }
 
+@test "status task_status is case-insensitive on the verdict field" {
+  write_handoff task "$(block 1 Done)"
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"task_status":"reported-done"'; assert_output_contains '"handoff_verdict":"Done"'
+
+  write_handoff task '## turn 1 — report' 'verdict: FAILED' 'reason: broke' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: none'
+  run rzr-ack.sh task --through 1; assert_success
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"task_status":"reported-failed"'
+}
+
 @test "duplicate and skipped turns are deterministic protocol errors" {
   write_handoff task "$(block 1 done)" "$(block 3 done)"
   run rzr-status.sh task --json; assert_success; assert_output_contains 'turn sequence expected 2, got 3'

@@ -97,6 +97,38 @@ load test_helper/common
   [ "$(jq -r '.delivery_state' "$ledger")" = error ]
 }
 
+@test "watch fails fast instead of hanging when the only pane is already gone" {
+  write_meta task 'pane=p1' 'tab=t1'
+  start_event_server events
+  run rzr-watch.sh --once task
+  assert_failure
+  assert_output_contains "'task' has no agent to watch (gone); skipping"
+  assert_output_contains 'no live tasks to watch'
+}
+
+@test "watch fails fast instead of hanging when the only pane is a bare shell" {
+  write_meta task 'pane=p1' 'tab=t1'
+  printf '0\n' > "$FAKE_HERDR_ROOT/pane.get.p1.rc"
+  start_event_server events
+  run rzr-watch.sh --once task
+  assert_failure
+  assert_output_contains "'task' has no agent to watch (shell); skipping"
+  assert_output_contains 'no live tasks to watch'
+}
+
+@test "watch skips a gone pane but keeps watching the rest" {
+  write_meta alpha 'pane=p1' 'tab=t1'
+  write_meta beta 'pane=p2' 'tab=t2'
+  fake_status p2 idle
+  start_event_server events 'p2,w1,done,claude'
+  run rzr-watch.sh --once alpha beta
+  assert_success
+  assert_output_contains "'alpha' has no agent to watch (gone); skipping"
+  assert_output_contains $'beta\tdone'
+  [ "$(cat "$ROZORO_HOME/state/alpha.status")" = gone ]
+  [ "$(cat "$ROZORO_HOME/state/beta.status")" = done ]
+}
+
 @test "subscription precedes snapshot and queued older revision cannot regress it" {
   write_meta task 'pane=p1' 'tab=t1'; fake_status p1 done; printf '20\n' > "$FAKE_HERDR_ROOT/seq.p1"
   start_event_server events 'p1,w1,working,claude,19'

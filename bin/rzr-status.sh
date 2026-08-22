@@ -21,16 +21,17 @@ except Exception:
  try: fg=open(os.environ["RZR_LEGACY"]).read().strip(); runtime=fg or "unknown"; freshness="legacy"
  except Exception: pass
 latest=p["latest"]; f=(latest or {}).get("fields",{}); verdict=f.get("verdict") or None
+verdict_norm=(verdict or "").lower()
 inconsist=[]
-waiting_ok=(verdict=="waiting" and not p["unresolved"] and latest and latest["valid"] and freshness=="current" and bg.get("supported") is True and bg.get("state")=="active" and (bg.get("active_count") or 0)>0)
+waiting_ok=(verdict_norm=="waiting" and not p["unresolved"] and latest and latest["valid"] and freshness=="current" and bg.get("supported") is True and bg.get("state")=="active" and (bg.get("active_count") or 0)>0)
 if p["protocol_errors"]: task="protocol-error"
 elif not latest: task="no-handoff"
 elif p["unresolved"]: task="open-items"
-elif verdict=="waiting":
+elif verdict_norm=="waiting":
  task="waiting" if waiting_ok else "reported-incomplete"
  if not waiting_ok: inconsist.append("waiting handoff is not certified by current supported background activity")
-elif verdict=="done": task="reported-done"
-elif verdict=="failed": task="reported-failed"
+elif verdict_norm=="done": task="reported-done"
+elif verdict_norm=="failed": task="reported-failed"
 else: task="reported-incomplete"
 if inconsist and not action["required"]: action={"required":True,"reason":"inconsistent-wait"}
 out={"schema_version":2,"id":os.environ["RZR_ID"],"runtime_status":runtime,"foreground_status":fg,"runtime_freshness":freshness,"background_activity":bg,"task_status":task,"handoff_verdict":verdict,"verdict":verdict or "(no-handoff-yet)","turn_report_status":turn,"action_required":bool(action.get("required")),"action_reason":action.get("reason"),"blocks":p["blocks"],"acked_through":p["acked_through"],"acked_source":p["acked_source"],"unresolved":p["unresolved"],"open_items":p["open_items"],"protocol_errors":p["protocol_errors"],"inconsistencies":inconsist,"heading":(latest or {}).get("heading",""),"reason":f.get("reason",""),"pending":f.get("pending",""),"inputs_needed":f.get("inputs-needed",""),"artifacts":f.get("artifacts","")}

@@ -168,19 +168,32 @@ IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (s
 
 # Synchronized post-subscription level reconciliation. Herdr 0.8.2 exposes the
 # ordered foreground state_change_seq; queued events at or below this revision
-# are harmlessly rejected by the locked reducer.
+# are harmlessly rejected by the locked reducer. Panes already gone or shell at
+# this point never get a live agent to watch (a gone pane can never emit a
+# pane.agent_status_changed event), so drop them here rather than block forever
+# in the event loop below; a pane that is live now and disappears later is a
+# real edge and stays tracked so its eventual "gone" is reported normally.
 i=0
+declare -a LIVE_IDS=() LIVE_PANES=() LIVE_SEEN=()
 while [ "$i" -lt "${#PANES[@]}" ]; do
   id="${IDS[$i]}"; p="${PANES[$i]}"; snapshot=$(rzr_agent_snapshot "$p")
   IFS=$'\t' read -r s seq <<EOF
 $snapshot
 EOF
-  SEEN[$i]="$s"; rzr_status_set "$id" "$s"
+  rzr_status_set "$id" "$s"
   seq_args=(); [ -n "${seq:-}" ] && seq_args=(--seq "$seq")
   projection=$(python3 "$RZR_BIN/rzr-runtime.py" reconcile --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$s" ${seq_args[@]+"${seq_args[@]}"})
   if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"; fi
+  case "$s" in
+    gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2 ;;
+    *) LIVE_IDS+=("$id"); LIVE_PANES+=("$p"); LIVE_SEEN+=("$s") ;;
+  esac
   i=$((i + 1))
 done
+IDS=(${LIVE_IDS[@]+"${LIVE_IDS[@]}"})
+PANES=(${LIVE_PANES[@]+"${LIVE_PANES[@]}"})
+SEEN=(${LIVE_SEEN[@]+"${LIVE_SEEN[@]}"})
+[ "${#PANES[@]}" -gt 0 ] || rzr_die "no live tasks to watch"
 
 # Recover an undelivered generation from a previous watcher process. Subscribe
 # first, then level-check, so a simultaneous driver transition is either seen by
