@@ -139,7 +139,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-link.sh <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent unless `--refresh` deliberately replaces the link after a fresh restart |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `rzr-register.sh --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. A Claude watchtower launched with `ROZORO_ROLE=watchtower` (see "Launching the driver" above) runs this automatically via the `SessionStart` hook in `.claude/settings.json` (`hooks/claude-register-watchtower.sh`, run `async` so it can't block Claude Code's own startup, then retries past the boot readiness gap); without that marker the hook no-ops, so a plain dev/crew Claude session in this checkout never self-registers as a watchtower. The manual `!rozoro register --harness claude` at your first idle prompt is the fallback (see `templates/watchtower.md`) |
+| `rzr-register.sh --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the one documented registration path, not a fallback. A Claude watchtower is launched with `ROZORO_ROLE=watchtower` (see "Launching the driver" above) marking its session identity, independent of this registration step |
 | `rzr-watch.sh [--once] [--wake\|--wake-codex\|--wake-herdr] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; `--wake` delivers a fixed nudge through the REGISTERED backend via a durable at-least-once ledger (bursts coalesce; the Herdr backend defers while the driver is working/blocked). `--wake-codex`/`--wake-herdr` force an explicit backend |
 | `rzr-reconcile.sh [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' verdicts (`rzr-status --json`), flag vanished tasks, and ack exactly the snapshotted generation (never resolves a crew's OPEN items) |
 | `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
@@ -296,9 +296,14 @@ PATH="$PWD/bin:$PATH" ROZORO_ROLE=watchtower claude \
   --append-system-prompt-file "$PWD/templates/watchtower.md"
 ```
 
-`ROZORO_ROLE=watchtower` is what gates the Claude `SessionStart` auto-register
-hook (see the `rzr-register.sh` row below) — without it, a Claude session in
-this checkout is assumed to be a plain dev/crew session and the hook no-ops.
+`ROZORO_ROLE=watchtower` marks this Claude session's identity as a
+watchtower, distinct from a rozoro-spawned crew or a plain dev session opened
+in the same checkout. Nothing reads it yet, but it's reserved for
+watchtower-scoped tooling, such as the planned long-lived monitor daemon
+(#25). A Claude watchtower still registers its wake target by hand at its
+first idle prompt (`!rozoro register --harness claude`, see the
+`rzr-register.sh` row below and `templates/watchtower.md`) — there is no
+automatic registration to opt into.
 
 Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
 command supplies the control-tower prompt, puts Rozoro's commands on `PATH`, and
