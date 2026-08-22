@@ -20,5 +20,6 @@ jobs:
         run: |
           for file in bin/* hooks/*.sh tests/run.sh tests/fakes/herdr tests/test_helper/common.bash; do
             [ -f "$file" ] || continue
+            case "$file" in *.py) continue ;; esac
             bash -n "$file"
           done
