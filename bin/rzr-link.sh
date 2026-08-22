@@ -34,16 +34,22 @@ if rzr_task_exists "$ID"; then
   rzr_profile_validate "$HARNESS" "$PROFILE_MODEL" "$PROFILE_EFFORT" "$PROFILE_FAST"
 fi
 
-# idempotent: a valid link for this harness/cwd already captured -> nothing to do.
+# A matching link keeps its session identity, but its durable launch profile must
+# track the currently effective live metadata (resume flags may have changed it).
 if [ -s "$OUT" ] && RZR_EXPECT_HARNESS="$HARNESS" RZR_EXPECT_CWD="$CWD" \
   python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("session_id") and d.get("harness") == os.environ["RZR_EXPECT_HARNESS"] and d.get("cwd") == os.environ["RZR_EXPECT_CWD"] else 1)' \
   "$OUT" 2>/dev/null; then
-  if [ "$HAVE_PROFILE" -eq 1 ] && ! jq -e '.profile | type == "object"' "$OUT" >/dev/null 2>&1; then
+  if [ "$HAVE_PROFILE" -eq 1 ]; then
     tmp="$OUT.tmp.$$"
-    jq --arg harness "$HARNESS" --arg model "$PROFILE_MODEL" --arg effort "$PROFILE_EFFORT" \
+    if jq --arg harness "$HARNESS" --arg model "$PROFILE_MODEL" --arg effort "$PROFILE_EFFORT" \
       --arg permission_mode "$PROFILE_PERMMODE" --argjson fast "$PROFILE_FAST" \
       '.profile = {harness:$harness, model:$model, effort:$effort, permission_mode:$permission_mode, fast:$fast}' \
-      "$OUT" > "$tmp" && mv "$tmp" "$OUT"
+      "$OUT" > "$tmp"; then
+      mv "$tmp" "$OUT"
+    else
+      rm -f "$tmp"
+      rzr_die "could not update durable profile in $OUT"
+    fi
   fi
   echo "rzr-link: $ID already linked ($(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["session_id"])' "$OUT"))"
   exit 0

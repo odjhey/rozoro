@@ -246,6 +246,31 @@ JSON
   ! grep -F 'service_tier=' "$FAKE_HERDR_LOG"
 }
 
+@test "relink persists resume overrides for the next plain resume" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
+{"session_id":"uuid-codex","harness":"codex","cwd":"$TEST_ROOT","profile":{"harness":"codex","model":"gpt-5.6-sol","effort":"high","permission_mode":"yolo","fast":true}}
+JSON
+  run rzr-resume.sh task --effort low --no-fast
+  assert_success
+
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  descriptor="$ROZORO_HOME/tasks/task/session.json"
+  [ "$(jq -r '.profile.effort' "$descriptor")" = low ]
+  [ "$(jq -r '.profile.fast' "$descriptor")" = false ]
+
+  run rzr-teardown.sh task --force
+  assert_success
+  : > "$FAKE_HERDR_LOG"
+  run rzr-resume.sh task
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=low'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=false'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--config\tmodel_reasoning_effort=low'
+  ! grep -F 'service_tier=' "$FAKE_HERDR_LOG"
+}
+
 @test "legacy Codex descriptor resumes without injecting model effort or tier" {
   mkdir -p "$ROZORO_HOME/tasks/task"
   printf '{"session_id":"uuid-codex","harness":"codex","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
@@ -293,6 +318,24 @@ JSON
   run rzr-resume.sh task
   assert_failure
   assert_output_contains "still tracked"
+}
+
+@test "spawn and resume help stop before executable source" {
+  run rzr-spawn.sh --help
+  assert_success
+  assert_output_contains '--fast'
+  [[ "$output" != *'set -euo pipefail'* ]]
+  [[ "$output" != *'BASH_SOURCE'* ]]
+  [[ "$output" != *'ID=""'* ]]
+  [[ "$output" != *'while [ $# -gt 0 ]'* ]]
+
+  run rzr-resume.sh --help
+  assert_success
+  assert_output_contains '--no-fast'
+  [[ "$output" != *'set -euo pipefail'* ]]
+  [[ "$output" != *'BASH_SOURCE'* ]]
+  [[ "$output" != *'ID=""'* ]]
+  [[ "$output" != *'while [ $# -gt 0 ]'* ]]
 }
 
 @test "restart preserves Codex fast profile" {

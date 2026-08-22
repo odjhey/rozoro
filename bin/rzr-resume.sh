@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --label)           LABEL="$2"; shift 2 ;;
     --prompt)          PROMPT="$2"; shift 2 ;;
     --brief)           BRIEF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
     *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
   esac
