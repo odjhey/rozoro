@@ -2,6 +2,7 @@
   "fixture_version": 2,
   "claude_code_version": "2.1.240",
   "captured_with": [
+    "--no-session-persistence",
     "--setting-sources=",
     "--settings=<temporary-file>",
     "--include-hook-events",
@@ -59,6 +60,13 @@
           "status": "running",
           "description": "<redacted>",
           "agent_type": "general-purpose"
+        },
+        {
+          "id": "shell-redacted-1",
+          "type": "shell",
+          "status": "running",
+          "description": "<redacted>",
+          "command": "<redacted>"
         }
       ],
       "session_crons": [],
@@ -79,13 +87,6 @@
           "status": "running",
           "description": "<redacted>",
           "agent_type": "general-purpose"
-        },
-        {
-          "id": "shell-redacted-1",
-          "type": "shell",
-          "status": "running",
-          "description": "<redacted>",
-          "command": "<redacted>"
         }
       ],
       "session_crons": [],
@@ -165,11 +166,6 @@
           {
             "id": "agent-redacted-1",
             "type": "subagent",
-            "status": "running"
-          },
-          {
-            "id": "shell-redacted-1",
-            "type": "shell",
             "status": "running"
           }
         ],

@@ -55,6 +55,7 @@ PY
 run_claude() {
   local settings="$1" prompt="$2" stem="$3"
   PROBE_LOG="$work/$stem.hooks.ndjson" claude -p --verbose \
+    --no-session-persistence \
     --model haiku --permission-mode bypassPermissions \
     --setting-sources '' --settings "$settings" \
     --debug hooks --debug-file "$work/$stem.debug.log" \

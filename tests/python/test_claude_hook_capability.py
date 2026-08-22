@@ -36,14 +36,18 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
         for payload in self.payloads:
             with self.subTest(event=payload["hook_event_name"]):
                 self.assertEqual(set(payload), EXPECTED_FIELDS[payload["hook_event_name"]])
+        self.assertEqual(self.payloads[0]["source"], "startup")
+        self.assertEqual(self.payloads[-1]["reason"], "other")
+        for payload in self.payloads:
+            if "permission_mode" in payload:
+                self.assertEqual(payload["permission_mode"], "bypassPermissions")
 
     def test_three_stage_stop_snapshots_certify_active_active_clear(self) -> None:
         stops = [p for p in self.payloads if p["hook_event_name"] == "Stop"]
         snapshots = [[(t["id"], t["type"], t["status"])
                       for t in p["background_tasks"]] for p in stops]
         self.assertEqual(snapshots, [
-            [("agent-redacted-1", "subagent", "running"),
-             ("shell-redacted-1", "shell", "running")],
+            [("agent-redacted-1", "subagent", "running")],
             [("shell-redacted-1", "shell", "running")],
             [],
         ])
@@ -54,13 +58,41 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
              for snapshot in evidence["stop_snapshots"]], snapshots)
         self.assertTrue(all(p["stop_hook_active"] is False for p in stops))
 
-    def test_subagent_stop_does_not_imply_background_clear(self) -> None:
-        payload = next(p for p in self.payloads
+    def test_subagent_identity_and_crons_are_structurally_redacted(self) -> None:
+        starts = [p for p in self.payloads
+                  if p["hook_event_name"] == "SubagentStart"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(starts[0]["agent_id"], "agent-redacted-1")
+        self.assertEqual(starts[0]["agent_type"], "general-purpose")
+
+        stopped = next(p for p in self.payloads
                        if p["hook_event_name"] == "SubagentStop")
-        self.assertIn(payload["agent_id"], {
-            task["id"] for task in payload["background_tasks"]
+        self.assertEqual(stopped["agent_id"], "agent-redacted-1")
+        self.assertEqual(stopped["agent_type"], "general-purpose")
+        self.assertIn(stopped["agent_id"], {
+            task["id"] for task in stopped["background_tasks"]
             if task["status"] == "running"
         })
+        for payload in self.payloads:
+            if "session_crons" in payload:
+                self.assertEqual(payload["session_crons"], [])
+
+    def test_background_task_shapes_and_prose_placeholders_are_exact(self) -> None:
+        for payload in self.payloads:
+            for task in payload.get("background_tasks", []):
+                common = {"id", "type", "status", "description"}
+                expected = common | ({"agent_type"} if task["type"] == "subagent"
+                                     else {"command"})
+                self.assertEqual(set(task), expected)
+                self.assertEqual(task["status"], "running")
+                self.assertEqual(task["description"], "<redacted>")
+                if task["type"] == "subagent":
+                    self.assertEqual(task["id"], "agent-redacted-1")
+                    self.assertEqual(task["agent_type"], "general-purpose")
+                else:
+                    self.assertEqual(task["type"], "shell")
+                    self.assertEqual(task["id"], "shell-redacted-1")
+                    self.assertEqual(task["command"], "<redacted>")
 
     def test_placeholders_are_complete_and_no_identity_or_prose_leaks(self) -> None:
         self.assertEqual(set(self.fixture), {
@@ -68,6 +100,7 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
             "redactions", "payloads", "stream_hook_events", "outcome_evidence",
         })
         self.assertEqual(self.fixture["claude_code_version"], "2.1.240")
+        self.assertIn("--no-session-persistence", self.fixture["captured_with"])
         redactions = self.fixture["redactions"]
         self.assertEqual(redactions, {
             "session_id": "00000000-0000-4000-8000-000000000001",
@@ -138,17 +171,39 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
         self.assertEqual(evidence["result"], "<redacted-continuation-result>")
         self.assertEqual(evidence["num_turns"], 2)
 
-    def test_include_hook_events_has_started_response_pair(self) -> None:
-        events = self.fixture["stream_hook_events"]
-        self.assertEqual([e["subtype"] for e in events],
-                         ["hook_started", "hook_response"])
-        self.assertEqual((events[1]["outcome"], events[1]["exit_code"]),
+    def test_include_hook_events_identity_and_output_are_fully_redacted(self) -> None:
+        started, response = self.fixture["stream_hook_events"]
+        self.assertEqual(set(started), {
+            "type", "subtype", "hook_name", "hook_event", "hook_id",
+            "session_id", "uuid",
+        })
+        self.assertEqual(set(response), set(started) | {
+            "exit_code", "outcome", "stdout", "stderr", "output",
+        })
+        self.assertEqual((started["subtype"], response["subtype"]),
+                         ("hook_started", "hook_response"))
+        for event, uuid in zip((started, response), (
+                "00000000-0000-4000-8000-000000000003",
+                "00000000-0000-4000-8000-000000000004"), strict=True):
+            self.assertEqual(event["type"], "system")
+            self.assertEqual(event["hook_name"], "Stop")
+            self.assertEqual(event["hook_event"], "Stop")
+            self.assertEqual(event["hook_id"], "hook-redacted-1")
+            self.assertEqual(event["session_id"],
+                             "00000000-0000-4000-8000-000000000001")
+            self.assertEqual(event["uuid"], uuid)
+        self.assertEqual((response["outcome"], response["exit_code"]),
                          ("success", 0))
+        self.assertEqual(
+            (response["stdout"], response["stderr"], response["output"]),
+            ("", "", ""),
+        )
 
     def test_reproduction_script_is_isolated_and_contains_all_experiments(self) -> None:
         script = PROBE.read_text()
         for required in ("--setting-sources ''", "--settings", "--debug hooks",
-                         "--include-hook-events", "timeout.settings.json",
+                         "--include-hook-events", "--no-session-persistence",
+                         "timeout.settings.json",
                          "continuation.settings.json", "stop_hook_active",
                          "raise SystemExit(2)"):
             self.assertIn(required, script)

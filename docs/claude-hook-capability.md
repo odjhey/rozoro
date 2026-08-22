@@ -9,12 +9,13 @@ The live probe ran against Claude Code **2.1.240** (the installed version on
 this proof ran. The committed fixture is therefore version-labelled rather than
 claiming an unobserved 2.1.239 payload.
 
-The probe supplied a temporary `--settings` file and `--setting-sources ''`, so
-no user, project, or local settings were loaded. It used `--debug hooks` and
-`--include-hook-events --output-format=stream-json --verbose`. It did not edit or
-invoke the Herdr-managed user hook or user configuration. Prompts, messages,
-paths, UUIDs, agent IDs, descriptions, and shell commands are redacted in the
-fixture.
+The probe supplied a temporary `--settings` file, `--setting-sources ''`, and
+`--no-session-persistence`, so no user, project, or local settings were loaded
+and Claude did not persist the probe sessions. It used `--debug hooks` and
+`--include-hook-events --output-format=stream-json --verbose`. It did not edit,
+load, or invoke the Herdr-managed user hook or user configuration. Prompts,
+messages, paths, UUIDs, agent IDs, descriptions, and shell commands are redacted
+in the fixture.
 
 ## Reproduce and inspect the evidence
 
@@ -30,7 +31,11 @@ It reproduces (1) the background snapshot sequence, (2) a 3-second hook with a
 1-second timeout, and (3) a guarded exit-2 Stop continuation. Raw hook/debug and
 stream NDJSON stays in the printed temporary directory because it contains local
 paths and model prose; inspect it there and delete it with the command printed by
-the script. Nothing is written under `~/.claude` or into project settings.
+the script. Every Claude invocation includes `--no-session-persistence`; the
+probe neither loads nor writes user/project settings or persistent session
+transcripts. Claude may still perform its normal non-session runtime/cache
+activity, so this proof makes no broader claim that the CLI performs zero writes
+anywhere under the user's home directory.
 
 The reviewed, redacted result is committed in
 `tests/fixtures/claude-hooks-2.1.240.json`. Its `outcome_evidence` object records
@@ -66,8 +71,8 @@ With hook event inclusion enabled, stream JSON emits paired `system` records:
 `Stop.background_tasks` is an authoritative point-in-time snapshot exposed by
 this installed build. A live native background-agent probe observed, in order:
 
-1. `Stop` with a running subagent (and its running nested shell task);
-2. a later `Stop` with only the shell task still running; and
+1. `Stop` with the subagent still running;
+2. a later `Stop` with only its shell task still running; and
 3. a final `Stop` with `background_tasks: []`.
 
 Entries expose opaque `id`, `type` (`subagent` or `shell`), `status`, and a
