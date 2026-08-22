@@ -381,9 +381,10 @@ rzr_unlanded_reasons() {  # <cwd>
 # harness is validated against live herdr state, and auto backend selection
 # refuses to guess from raw environment variables.
 #
-# Files (single writer each, so no lock is needed):
+# Files:
 #   target.json  - driver identity + backend (written once by rzr-register)
-#   pending.json - generation/delivered + affected tasks (written by the watcher)
+#   pending.json - generation/delivered + affected tasks (locked read-modify-write;
+#                  overlapping watchers for one driver are supported)
 #   ack          - last generation the driver reconciled (written by reconcile)
 #
 # Delivery is at-least-once and coalesced. Let g=generation (bumped on every
@@ -468,8 +469,10 @@ rzr_ledger_bump() {  # <driver-dir> <task-id> <status>
   mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import json, os
+import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
 except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {},
@@ -482,6 +485,7 @@ tmp = p + ".tmp.%d" % os.getpid()
 os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
+os.close(lock_fd)
 PY
 }
 
@@ -492,8 +496,10 @@ rzr_ledger_record() {  # <driver-dir> <state:delivered|deferred|blocked-target|e
   local dir="$1" state="$2" err="${3:-}"
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_STATE="$state" RZR_LEDGER_ERR="$err" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import json, os
+import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
 except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {}, "retries": 0}
@@ -510,6 +516,7 @@ tmp = p + ".tmp.%d" % os.getpid()
 os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
+os.close(lock_fd)
 PY
 }
 

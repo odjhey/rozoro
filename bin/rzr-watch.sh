@@ -79,14 +79,14 @@ esac
 # normal, expected wait that must NOT crash the watcher); 2 hard backend error
 # (surfaced by the caller). In every non-zero case the generation is already
 # persisted, so nothing is lost and the next edge retries.
-deliver_wake() {
+deliver_wake() {  # [known-herdr-status]
   case "$WAKE_BACKEND" in
     codex)  # Codex owns serialization: queue immediately, busy or not.
       if codex queue --thread "$WAKE_IDENTITY" --message "$RZR_WAKE_MESSAGE"; then
         rzr_ledger_record "$DRIVER_DIR" delivered; return 0
       else rzr_ledger_record "$DRIVER_DIR" error "codex queue failed"; return 2; fi ;;
     herdr)  # Never prompt into a working/blocked driver's turn; retain instead.
-      local ds; ds=$(rzr_agent_status "$WAKE_IDENTITY")
+      local ds="${1:-}"; [ -n "$ds" ] || ds=$(rzr_agent_status "$WAKE_IDENTITY")
       case "$ds" in
         idle|done)
           if rzr_herdr agent prompt "$WAKE_IDENTITY" "$RZR_WAKE_MESSAGE" >/dev/null; then
@@ -156,12 +156,32 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 "$(rzr_eventwait_py)" "$SOCK" 0 "${PANES[@]}" > "$PIPE" 2>/dev/null &
+# A Herdr-backed wake also watches the driver's pane. That edge is what releases
+# a notification retained while the driver was working/blocked; waiting only for
+# another crew edge could otherwise strand the pending generation forever.
+declare -a SUBSCRIBE_PANES=("${PANES[@]}")
+if [ "$WAKE_BACKEND" = herdr ]; then
+  found_driver=0
+  for p in "${SUBSCRIBE_PANES[@]}"; do [ "$p" = "$WAKE_IDENTITY" ] && found_driver=1; done
+  [ "$found_driver" -eq 1 ] || SUBSCRIBE_PANES+=("$WAKE_IDENTITY")
+fi
+python3 "$(rzr_eventwait_py)" "$SOCK" 0 "${SUBSCRIBE_PANES[@]}" > "$PIPE" 2>/dev/null &
 SUBPID=$!
 exec 3< "$PIPE"
 
 IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (socket $SOCK)"
 [ "$ack" = "@subscribed" ] || rzr_die "unexpected event subscriber output: $ack"
+
+# Recover an undelivered generation from a previous watcher process. Subscribe
+# first, then level-check, so a simultaneous driver transition is either seen by
+# this check or queued on the stream. Duplicate delivery remains acceptable under
+# the ledger's at-least-once contract.
+if [ -n "$WAKE_BACKEND" ] && rzr_ledger_should_deliver "$DRIVER_DIR"; then
+  deliver_wake && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ] && [ "$ONCE" -eq 1 ]; then exit 0
+  elif [ "$rc" -eq 2 ]; then rzr_die "wake delivery failed for driver $(basename "$DRIVER_DIR") (edge retained pending)"
+  fi
+fi
 
 # Event loop: block on the next pushed edge, print+persist only REAL changes.
 # A `<pane> <ws> <status> <agent>` line whose status equals THIS PROCESS's last
@@ -176,6 +196,16 @@ IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (s
 # reconcile crew state. When the subscriber exits (socket closed / all panes
 # gone) the read returns EOF and we stop.
 while IFS=$'\t' read -r pane ws st agent <&3; do
+  # Driver status edges retry a retained Herdr wake even when no further crew
+  # changes occur. Use the pushed status directly to avoid a stale follow-up
+  # query racing the event we just received.
+  if [ "$WAKE_BACKEND" = herdr ] && [ "$pane" = "$WAKE_IDENTITY" ] && \
+     rzr_ledger_should_deliver "$DRIVER_DIR"; then
+    deliver_wake "$st" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$ONCE" -eq 1 ]; then break
+    elif [ "$rc" -eq 2 ]; then rzr_die "wake delivery failed for driver $(basename "$DRIVER_DIR") (edge retained pending)"
+    fi
+  fi
   i=$(idx_for_pane "$pane") || continue
   [ "$st" = "${SEEN[$i]}" ] && continue
   id="${IDS[$i]}"

@@ -50,6 +50,33 @@ register_claude_driver() {
   [ "$(jq -r '.delivery_state' "$ledger")" = deferred ]
 }
 
+@test "Herdr wake retries when the busy driver becomes idle without another crew edge" {
+  register_claude_driver working
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 working
+  start_event_server events 'p1,w1,done,claude' 'driver-pane,w1,idle,claude'
+  run rzr-watch.sh --once --wake task
+  assert_success
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run rozoro reconcile.' "$FAKE_HERDR_LOG"
+  ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
+  [ "$(jq -r '.generation' "$ledger")" -eq 1 ]
+  [ "$(jq -r '.delivered' "$ledger")" -eq 1 ]
+}
+
+@test "a restarted watcher delivers an older pending generation" {
+  register_claude_driver idle
+  ledger="$ROZORO_HOME/watchtowers/$driver"
+  bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ledger' task done"
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 working
+  start_event_server hold
+  run rzr-watch.sh --once --wake task
+  assert_success
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro notification pending; run rozoro reconcile.' "$FAKE_HERDR_LOG"
+  [ "$(jq -r '.generation' "$ledger/pending.json")" -eq 1 ]
+  [ "$(jq -r '.delivered' "$ledger/pending.json")" -eq 1 ]
+}
+
 @test "Herdr wake retains a pending edge when the driver is blocked" {
   register_claude_driver blocked
   write_meta task 'pane=p1' 'tab=t1'

@@ -42,3 +42,14 @@ drive() { run bash -c ". \"$REPO_ROOT/bin/rzr-lib.sh\"; dir=\"$ROZORO_HOME/watch
   [ "$(file_perm "$ROZORO_HOME/watchtowers/d/pending.json")" = 600 ]
   [ "$(file_perm "$ROZORO_HOME/watchtowers/d/ack")" = 600 ]
 }
+
+@test "concurrent watcher bumps do not lose generations or affected tasks" {
+  drive '
+    mkdir -p "$dir"
+    for i in $(seq 1 24); do (rzr_ledger_bump "$dir" "t$i" done) & done
+    wait
+    echo "gen=$(rzr_ledger_int "$dir" generation) tasks=$(jq ".tasks | length" "$dir/pending.json")"
+  '
+  assert_success
+  assert_output_contains 'gen=24 tasks=24'
+}
