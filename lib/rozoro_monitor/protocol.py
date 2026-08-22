@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 VERSION = 1
+# Integers cross Python, Node, JSON, and SQLite boundaries.  The JavaScript
+# safe-integer limit is the narrowest exact range.
+MAX_INTEGER = 9_007_199_254_740_991
 
 # IDs are opaque but deliberately safe to use in logs and (for event_id) spool
 # filenames. Whitespace, path separators, and control characters are excluded.
@@ -47,13 +50,13 @@ def _string(value: Any, field: str) -> None:
 
 
 def _positive(value: Any, field: str) -> None:
-    if not _is_int(value) or value < 1:
-        _fail("invalid-field", f"{field} must be a positive integer", field)
+    if not _is_int(value) or not 1 <= value <= MAX_INTEGER:
+        _fail("invalid-field", f"{field} must be an integer from 1 through {MAX_INTEGER}", field)
 
 
 def _nonnegative(value: Any, field: str) -> None:
-    if not _is_int(value) or value < 0:
-        _fail("invalid-field", f"{field} must be a non-negative integer", field)
+    if not _is_int(value) or not 0 <= value <= MAX_INTEGER:
+        _fail("invalid-field", f"{field} must be an integer from 0 through {MAX_INTEGER}", field)
 
 
 def _boolean(value: Any, field: str) -> None:
@@ -61,14 +64,29 @@ def _boolean(value: Any, field: str) -> None:
         _fail("invalid-field", f"{field} must be a boolean", field)
 
 
+def _known_or_unknown_boolean(value: Any, field: str) -> None:
+    if value is not None and not isinstance(value, bool):
+        _fail("invalid-field", f"{field} must be true, false, or null (unknown)", field)
+
+
 def _enum(*values: str) -> Callable[[Any, str], None]:
     allowed = frozenset(values)
 
     def check(value: Any, field: str) -> None:
-        if value not in allowed or not isinstance(value, str):
+        # Check the type first: lists and objects are unhashable and must still
+        # take the deterministic ProtocolError path.
+        if not isinstance(value, str) or value not in allowed:
             _fail("invalid-field", f"{field} must be one of {sorted(allowed)}", field)
 
     return check
+
+
+def _nullable(check: Callable[[Any, str], None]) -> Callable[[Any, str], None]:
+    def nullable_check(value: Any, field: str) -> None:
+        if value is not None:
+            check(value, field)
+
+    return nullable_check
 
 
 _ID = _id
@@ -80,6 +98,8 @@ _HARNESS = _enum("claude", "pi", "codex", "copilot")
 _ROLE = _enum("crew", "watchtower")
 _PRIORITY = _enum("normal", "urgent")
 _RESULT = _enum("success", "failed", "cancelled", "unknown")
+_AVAILABILITY = _enum("busy", "waiting-background", "quiescent", "blocked", "gone", "unknown")
+_VERDICT = _enum("done", "waiting", "needs-action", "failed", "blocked")
 
 # type -> (required fields, optional fields). Unknown fields are rejected so a
 # misspelling cannot silently weaken lifecycle or generation semantics.
@@ -89,7 +109,7 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "background.start": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "job_id": _ID, "job_kind": _STRING}, {"task_id": _ID, "driver_id": _ID}),
     "background.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "job_id": _ID, "result": _RESULT}, {"task_id": _ID, "driver_id": _ID}),
     "background.snapshot": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "active_count": _NONNEGATIVE}, {"task_id": _ID, "driver_id": _ID}),
-    "turn.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "background_active": _BOOL}, {"task_id": _ID, "driver_id": _ID, "turn_id": _ID}),
+    "turn.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "background_active": _known_or_unknown_boolean}, {"task_id": _ID, "driver_id": _ID, "turn_id": _ID}),
     "session.end": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE}, {"task_id": _ID, "driver_id": _ID}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
     "notification": ({"generation": _POSITIVE, "priority": _PRIORITY, "task_count": _NONNEGATIVE}, {}),
@@ -103,12 +123,30 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
 }
 
 
+_REPORT_SCHEMA: dict[str, Callable[[Any, str], None]] = {
+    "task_id": _ID,
+    "generation": _POSITIVE,
+    "availability": _AVAILABILITY,
+    "verdict": _nullable(_VERDICT),
+    "action_required": _BOOL,
+}
+
+
 def _reports(value: Any, field: str) -> None:
     if not isinstance(value, list):
         _fail("invalid-field", f"{field} must be an array", field)
-    for report in value:
+    for index, report in enumerate(value):
+        item_field = f"{field}[{index}]"
         if not isinstance(report, dict):
-            _fail("invalid-field", f"each {field} entry must be an object", field)
+            _fail("invalid-field", f"{item_field} must be an object", item_field)
+        missing = sorted(set(_REPORT_SCHEMA) - set(report))
+        unknown = sorted(set(report) - set(_REPORT_SCHEMA))
+        if missing:
+            _fail("invalid-field", f"{item_field} missing field(s): {', '.join(missing)}", item_field)
+        if unknown:
+            _fail("invalid-field", f"{item_field} has unknown field(s): {', '.join(unknown)}", item_field)
+        for name, check in _REPORT_SCHEMA.items():
+            check(report[name], f"{item_field}.{name}")
 
 
 def validate(message: Any) -> dict[str, Any]:
@@ -142,21 +180,24 @@ def validate(message: Any) -> dict[str, Any]:
         other = "driver_id" if identity == "task_id" else "task_id"
         if identity not in message or other in message:
             _fail("invalid-event", f"role {message['role']!r} requires {identity} and forbids {other}", identity)
-    if message_type == "error" and ("event_id" in message) == ("request_id" in message):
-        _fail("invalid-message", "error must correlate exactly one event_id or request_id")
+    if message_type == "error" and "event_id" in message and "request_id" in message:
+        _fail("invalid-message", "error may correlate at most one event_id or request_id")
     return message
 
 
 def decode(line: str | bytes) -> dict[str, Any]:
     """Decode one JSON frame and validate it."""
     try:
-        message = json.loads(line)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ProtocolError("invalid-json", "frame is not valid JSON") from exc
+        message = json.loads(
+            line,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise ProtocolError("invalid-json", "frame is not valid finite JSON") from exc
     return validate(message)
 
 
 def encode(message: Any) -> str:
     """Validate and encode one canonical, newline-terminated NDJSON frame."""
     validate(message)
-    return json.dumps(message, sort_keys=True, separators=(",", ":")) + "\n"
+    return json.dumps(message, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
