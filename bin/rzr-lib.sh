@@ -47,10 +47,37 @@ rzr_validate_task_component() {  # <value> [description]
 # Path to a task's durable folder (does not create it).
 rzr_task_dir() { rzr_validate_task_component "$1"; printf '%s/%s' "$RZR_TASKS" "$1"; }
 
+# Herdr agent names are a transport identity, not a task identity: they are
+# limited to 32 lowercase ASCII letters/digits/dashes/underscores. Derive a
+# stable, namespaced 112-bit digest from the immutable task key so every valid
+# legacy id and every new ULID-suffixed key can use the same safe path.
+rzr_herdr_agent_name() {  # <task-key>
+  RZR_AGENT_TASK_KEY="$1" python3 - <<'PY'
+import hashlib, os
+digest = hashlib.sha256(os.environ["RZR_AGENT_TASK_KEY"].encode()).hexdigest()[:28]
+print("rzr-" + digest)
+PY
+}
+
+# Prefer the durable identity recorded at reservation time. Older task folders
+# have no such field, so derive the same safe identity without migrating them.
+rzr_task_agent_name() {  # <task-key>
+  local id="$1" identity recorded=""
+  identity="$(rzr_task_dir "$id")/identity.json"
+  [ -s "$identity" ] && recorded="$(jq -r '.herdr_agent_name // empty' "$identity" 2>/dev/null || true)"
+  case "$recorded" in
+    ''|*[!a-z0-9_-]*) recorded="" ;;
+  esac
+  [ "${#recorded}" -le 32 ] || recorded=""
+  if [ -n "$recorded" ]; then printf '%s\n' "$recorded"
+  else rzr_herdr_agent_name "$id"
+  fi
+}
+
 # Reserve a fresh durable identity with an atomic mkdir. The time-sortable ULID
 # suffix supplies 80 bits of randomness; mkdir remains the collision arbiter.
 rzr_task_reserve() {  # <display-name> <cwd> -> task key
-  local display="$1" cwd="$2" suffix key folder attempt=0 tmp
+  local display="$1" cwd="$2" suffix key folder agent_name attempt=0 tmp
   rzr_validate_task_component "$display" "display name"
   [ "${#display}" -le 80 ] || rzr_die "display name is too long (maximum 80 characters)"
   mkdir -p "$RZR_TASKS"
@@ -68,11 +95,13 @@ PY
     key="$display--$suffix"
     folder="$RZR_TASKS/$key"
     if mkdir "$folder" 2>/dev/null; then
+      agent_name="$(rzr_herdr_agent_name "$key")"
       tmp="$folder/identity.json.tmp.$$"
-      RZR_IDENTITY_OUT="$tmp" RZR_TASK_KEY="$key" RZR_DISPLAY_NAME="$display" RZR_CWD="$cwd" python3 - <<'PY'
+      RZR_IDENTITY_OUT="$tmp" RZR_TASK_KEY="$key" RZR_DISPLAY_NAME="$display" RZR_CWD="$cwd" RZR_HERDR_AGENT_NAME="$agent_name" python3 - <<'PY'
 import json, os
 json.dump({"schema": 1, "task_key": os.environ["RZR_TASK_KEY"],
-           "display_name": os.environ["RZR_DISPLAY_NAME"], "cwd": os.environ["RZR_CWD"]},
+           "display_name": os.environ["RZR_DISPLAY_NAME"], "cwd": os.environ["RZR_CWD"],
+           "herdr_agent_name": os.environ["RZR_HERDR_AGENT_NAME"]},
           open(os.environ["RZR_IDENTITY_OUT"], "w"), indent=2)
 PY
       mv "$tmp" "$folder/identity.json"
@@ -210,22 +239,22 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 # with the wrong flags.
 #
 # `permmode` is a generic "run autonomously" signal: when non-empty, claude
-# passes its literal value (--permission-mode <v>) and copilot uses --mode
-# autopilot --allow-all. Codex is deliberately always launched with --yolo;
-# its permmode input cannot weaken that spawner invariant. `effort` maps to a
-# native flag for claude and to Codex's model_reasoning_effort config override.
-# Harnesses without a system-prompt channel get the protocol folded into the
-# delivered prompt.
+# passes its literal value (--permission-mode <v>), copilot uses --mode
+# autopilot --allow-all, and pi uses --approve so project-local resources load
+# without an interactive trust gate. Codex is deliberately always launched with
+# --yolo; its permmode input cannot weaken that spawner invariant. `effort` maps
+# to a native flag for claude, Pi's --thinking, and Codex's
+# model_reasoning_effort config override.
 #
 # The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
-# preset rules), delivered via --append-system-prompt-file. claude rejects
-# --append-system-prompt together with --append-system-prompt-file, so the two
-# must already be combined into this one file (rzr-spawn does that).
+# preset rules). Claude takes it through --append-system-prompt-file; Pi's
+# --append-system-prompt accepts either text or a file path. The 6th optional arg
+# is a preallocated harness session id (currently used by Pi for exact linking).
 #
-# Verified on this machine: claude and Codex argument parsing. Wired from the
-# operator's known invocations but NOT verified here: copilot, pi.
-rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file>
-  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5"
+# Verified on this machine: Claude, Codex, and Pi argument parsing. Wired from
+# the operator's known invocation but NOT verified here: Copilot.
+rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id]
+  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}"
   case "$harness" in
     claude)
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
@@ -242,8 +271,13 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$permmode" ] && printf '%s\0%s\0%s\0' --mode autopilot --allow-all
       ;;
-    pi)  # pi takes no launch flags; model/effort/permission are ignored
-      : ;;
+    pi)
+      [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
+      [ -n "$effort" ]     && printf '%s\0%s\0' --thinking "$effort"
+      [ -n "$permmode" ]   && printf '%s\0' --approve
+      [ -n "$sysfile" ]    && printf '%s\0%s\0' --append-system-prompt "$sysfile"
+      [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
+      ;;
     *) return 1 ;;
   esac
   # Known harness: succeed regardless of which optional fields were empty (a

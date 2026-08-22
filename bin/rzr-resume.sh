@@ -17,14 +17,14 @@
 # Why this exists: a `done` crew that was reaped still holds its whole
 # conversation on disk (the harness transcript linked in tasks/<id>/session.json).
 # When follow-up arrives, re-spawning a NEW crew starts cold — it has to rebuild
-# context from handoff.md. `resume` instead relaunches the recorded Claude or
-# Codex session in a new pane, so the crew picks up with full memory.
+# context from handoff.md. `resume` instead relaunches the recorded Claude,
+# Codex, or Pi session in a new pane, so the crew picks up with full memory.
 #
 # Prefer NOT closing over closing-and-resuming: if the crew is still live, use
 # rzr-send.sh (same live context) rather than tearing down and resuming. This
 # verb is for the case where teardown already happened.
 #
-# Claude and Codex sessions are supported. The task must NOT be currently tracked
+# Claude, Codex, and Pi sessions are supported. The task must NOT be currently tracked
 # — a live agent already owns the unique name; resume is for a reaped task whose
 # name is free again.
 set -euo pipefail
@@ -46,6 +46,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-resume.sh <id> ...)"
 rzr_validate_task_component "$ID"
+AGENT_NAME="$(rzr_task_agent_name "$ID")"
 if [ -z "$LABEL" ]; then
   IDENTITY="$(rzr_task_dir "$ID")/identity.json"
   [ -s "$IDENTITY" ] && LABEL="$(jq -r '.display_name // empty' "$IDENTITY" 2>/dev/null || true)"
@@ -63,7 +64,7 @@ UUID="$(jq -r '.session_id // empty' "$SESS" 2>/dev/null)"
 [ -n "$UUID" ] || rzr_die "$SESS has no session_id — cannot resume; start '$ID' fresh instead"
 HARNESS="$(jq -r '.harness // "claude"' "$SESS" 2>/dev/null)"
 case "$HARNESS" in
-  claude|codex) ;;
+  claude|codex|pi) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
 [ "$HARNESS" = codex ] && PERMMODE="yolo"
@@ -78,7 +79,7 @@ fi
 
 # Re-inject the handoff protocol as a preamble to the follow-up. This is required
 # for Claude because `claude --resume` does not re-apply its original system
-# prompt, and keeps the contract explicit for Codex resumes too. The follow-up
+# prompt, and keeps the contract explicit for Codex and Pi resumes too. The follow-up
 # itself remains verbatim after the delimiter.
 if [ -n "$PROMPT" ]; then
   rzr_render_handoff_protocol "$ID"
@@ -109,6 +110,7 @@ do_resume() {
 
   rzr_meta_set "$ID" id "$ID"
   rzr_meta_set "$ID" display_name "$LABEL"
+  rzr_meta_set "$ID" herdr_agent_name "$AGENT_NAME"
   rzr_meta_set "$ID" pane "$pane"
   rzr_meta_set "$ID" tab "${tab:-}"
   rzr_meta_set "$ID" workspace "${ws:-}"
@@ -136,8 +138,17 @@ do_resume() {
       pass+=(--yolo)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       ;;
+    pi)
+      pass=(--session "$UUID")
+      [ -n "$PERMMODE" ] && pass+=(--approve)
+      [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      # Pi rebuilds its system prompt on startup. Reapply the persisted handoff
+      # protocol and crew rules when the original launch sysprompt survives.
+      [ -s "$(rzr_task_dir "$ID")/sysprompt.md" ] && \
+        pass+=(--append-system-prompt "$(rzr_task_dir "$ID")/sysprompt.md")
+      ;;
   esac
-  start=(agent start "$ID" --kind "$HARNESS" --pane "$pane" -- "${pass[@]}")
+  start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane" -- "${pass[@]}")
 
   # Same transient-busy retry as spawn: `tab create` can return before the shell
   # is ready.

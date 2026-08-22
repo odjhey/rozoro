@@ -6,10 +6,32 @@ load test_helper/common
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'pane=p1'
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'harness=claude'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tcreate'
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tclaude\t--pane\tp1'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
+}
+
+@test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
+  mkdir -p "$ROZORO_HOME/crew"
+  cat > "$ROZORO_HOME/crew/pi-worker.json" <<'JSON'
+{"harness":"pi","model":"anthropic/claude-sonnet-4-6","effort":"high","permission_mode":"auto","rules":["never push"]}
+JSON
+  run rzr-spawn.sh task --crew pi-worker --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'harness=pi'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'model=anthropic/claude-sonnet-4-6'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=high'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'session='
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
+  assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'never push'
+  ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--session-id\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
 }
 
 @test "spawn retries transient pane busy" {
@@ -26,6 +48,16 @@ load test_helper/common
   assert_failure
   assert_output_contains 'terminal start error'
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'agent_start=failed'
+}
+
+@test "fake Herdr counter tolerates long agent-start argv while validating the name" {
+  long_arg="$(printf '%0300d' 0)"
+  run herdr agent start valid-agent --kind claude --pane p1 -- "$long_arg"
+  assert_success
+
+  run herdr agent start 'INVALID-AGENT' --kind claude --pane p1
+  assert_failure
+  assert_output_contains 'invalid_agent_name'
 }
 
 @test "send fails closed for unknown and dead targets" {
@@ -68,13 +100,72 @@ load test_helper/common
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tclose\tt1'
 }
 
+@test "Pi session link uses the preallocated native UUID" {
+  uuid='11111111-2222-4333-8444-555555555555'
+  write_meta task 'harness=pi' "session=$uuid"
+  store="$HOME/.pi/agent/sessions/--fixture--"
+  mkdir -p "$store"
+  printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/pi.jsonl"
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  assert_output_contains "$uuid"
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"harness": "pi"'
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_id\": \"$uuid\""
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_path\": \"$store/pi.jsonl\""
+}
+
+@test "Pi session link falls back to an isolated real user marker" {
+  write_meta task 'harness=pi'
+  export PI_CODING_AGENT_SESSION_DIR="$TEST_ROOT/pi-sessions"
+  mkdir -p "$PI_CODING_AGENT_SESSION_DIR/project"
+  cat > "$PI_CODING_AGENT_SESSION_DIR/project/pi.jsonl" <<JSON
+{"type":"session","version":3,"id":"legacy-pi","cwd":"$TEST_ROOT"}
+{"type":"message","id":"12345678","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"rozoro-task: task\\nbody"}]}}
+JSON
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"session_id": "legacy-pi"'
+}
+
 @test "legacy Claude session link can be resumed" {
   mkdir -p "$ROZORO_HOME/tasks/task"
   printf '{"session_id":"uuid-1","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
   run rzr-resume.sh task --prompt 'continue'
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-1'
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+}
+
+@test "ULID durable task key launches and resumes with one Herdr-safe identity" {
+  id='fix-syntax-isolation--01M0KK771Z1PV4428XKJ3MJPC7'
+  mkdir -p "$ROZORO_HOME/tasks/$id"
+  printf '{"session_id":"uuid-2","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/$id/session.json"
+
+  run rzr-spawn.sh "$id" --cwd "$TEST_ROOT"
+  assert_success
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$id.meta")"
+  [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
+  [ "$agent_name" != "$id" ]
+
+  run rzr-teardown.sh "$id" --force
+  assert_success
+  run rzr-resume.sh "$id"
+  assert_success
+  [ "$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$id.meta")" = "$agent_name" ]
+  [ "$(grep -F $'CALL\tagent\tstart\t'"$agent_name" "$FAKE_HERDR_LOG" | wc -l)" -eq 2 ]
+}
+
+@test "Pi session can be resumed with trust, model override, and persisted system prompt" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf 'handoff rules\n' > "$ROZORO_HOME/tasks/task/sysprompt.md"
+  printf '{"session_id":"uuid-pi","harness":"pi","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run rzr-resume.sh task --model anthropic/claude-sonnet-4-6 --prompt 'continue'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-pi'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
 @test "resume refuses a currently tracked task" {
@@ -96,6 +187,11 @@ load test_helper/common
   [ -f "$ROZORO_HOME/tasks/$key1/brief.md" ]
   [ -f "$ROZORO_HOME/tasks/$key2/brief.md" ]
   assert_file_contains "$ROZORO_HOME/state/$key1.meta" 'display_name=same-name'
+  agent_name1="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$key1.meta")"
+  agent_name2="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$key2.meta")"
+  [[ "$agent_name1" =~ ^[a-z0-9_-]{1,32}$ ]]
+  [ "$agent_name1" != "$agent_name2" ]
+  assert_file_contains "$ROZORO_HOME/tasks/$key1/identity.json" '"herdr_agent_name"'
 }
 
 @test "reuse after teardown preserves the old durable record" {

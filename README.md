@@ -136,13 +136,13 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-start.sh <display-name> --body <file> [opts]` | blessed start: atomically reserve a unique task key → `rzr-render` → `rzr-spawn` → `rzr-link`; prints the key used by every later command |
 | `rzr-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `rzr-render.sh <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
-| `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude or Codex via marker-grep; idempotent |
+| `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `rzr-watch.sh [--once] [--wake-codex] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; optionally queues a safe wake nudge to the resident Codex thread |
 | `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `rzr-control.sh <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
-| `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped Claude or Codex task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
+| `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped Claude, Codex, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
 | `rzr-crew.sh list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `rzr-lock.sh status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `rzr-list.sh` | known tasks + live agent state |
@@ -168,7 +168,10 @@ The key is reserved with an atomic directory creation before any brief or
 handoff file is rendered. Repeated names, concurrent starts, and starts from
 different repositories therefore always receive different folders. Repository
 context is recorded in `identity.json` for discovery, but is not the uniqueness
-boundary.
+boundary. Because Herdr agent names have a stricter 32-character lowercase
+syntax, `identity.json` also records a separate collision-safe transport name.
+The durable task key remains the lifecycle address and the display name remains
+the tab label; fresh spawn and resume reuse the transport name internally.
 
 Each task has a folder under `$ROZORO_HOME/tasks/<task-key>/` so teardown is
 non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
@@ -222,15 +225,16 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 
 | harness | maps to | notes |
 |---|---|---|
-| `claude` | `--model --effort --permission-mode --append-system-prompt` | verified on this machine |
+| `claude` | `--model --effort --permission-mode --append-system-prompt-file` | verified on this machine |
 | `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e>` | `--yolo` is unconditional; model and effort verified against the local CLI |
 | `copilot`| `--model <m> --mode autopilot --allow-all` | wired; not verified here |
-| `pi`     | *(no flags)* | `pi` takes none; model/effort/rules ignored |
+| `pi`     | `--model <m> --thinking <e> --approve --append-system-prompt <file> --session-id <uuid>` | project trust is approved when permission mode is non-empty; native UUID enables exact linking/resume |
 
-Claude and Codex support `effort`; only Claude has a dedicated system-prompt
-channel for `rules`. Harnesses without one receive the protocol and rules in the
-delivered prompt. An unmapped harness fails loudly rather than launching with
-wrong flags.
+Claude, Codex, and Pi support `effort` (Pi names it `thinking`). Claude and Pi
+receive the handoff protocol and preset `rules` through dedicated system-prompt
+channels, leaving the task prompt verbatim. Harnesses without one receive the
+protocol and rules in the delivered prompt. An unmapped harness fails loudly
+rather than launching with wrong flags.
 
 ## Instructing rozoro (the control tower)
 
@@ -268,9 +272,30 @@ repo at [`templates/watchtower.md`](templates/watchtower.md) — maintain it the
 not inline. Launch the driver **inside a herdr session**, from a repo whose skills
 path ships the skill (this repo's `.claude/skills/rozoro/` does):
 
+From the Rozoro checkout:
+
 ```sh
-claude --append-system-prompt-file templates/watchtower.md
+# Pi watchtower (recommended)
+PATH="$PWD/bin:$PATH" pi \
+  --approve \
+  --append-system-prompt "$PWD/templates/watchtower.md"
+
+# Or Claude
+PATH="$PWD/bin:$PATH" claude \
+  --append-system-prompt-file "$PWD/templates/watchtower.md"
 ```
+
+Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
+command supplies the control-tower prompt, puts Rozoro's commands on `PATH`, and
+approves the project-local extension for this run.
+
+The Pi launch also loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
+When it detects the watchtower system prompt, the extension starts `rzr-watch`
+as an owned asynchronous child, keeps the editor responsive, and injects a
+`[rozoro event]` message on actionable crew edges. This is deliberately different
+from calling `rzr-watch` through Pi's foreground bash tool, which would occupy the
+agent turn and queue operator messages. Use `/rozoro-monitor status|on|off` to
+inspect or control the monitor.
 
 Editing `templates/watchtower.md` and committing it is how you evolve the driver's
 standing behavior; every watchtower booted from the file inherits the change. Keep
@@ -414,6 +439,9 @@ bin/rzr-spawn.sh t1 --cwd /some/repo --prompt 'List the files in this repo, then
 # With no default.json, explicitly select the Codex low fallback:
 bin/rzr-spawn.sh t2 --cwd /some/repo --harness codex --prompt 'Resolve issue #42.'
 
+# Pi gets the same model/effort/rules/session lifecycle support as Claude:
+bin/rzr-spawn.sh t3 --cwd /some/repo --harness pi --model openai-codex/gpt-5.6-sol --effort low --prompt 'Resolve issue #43.'
+
 # 2. watch the fleet event-driven (blocks, prints on each real transition):
 bin/rzr-watch.sh t1 t2
 #    06:01:03  t1  working
@@ -437,7 +465,7 @@ bin/rzr-teardown.sh t1
 ## Verified on herdr 0.8.2 (macOS)
 
 - ✅ tab create + pane/tab id parsing, meta on disk; `agent start` with per-preset
-  passthrough (`-- --model/--effort/--permission-mode/--append-system-prompt`)
+  harness-specific model/effort/permission/system-prompt passthrough
 - ✅ unique-name spawn → multiple live crew concurrently
 - ✅ push-stream watcher: real `working`/`idle`/`done` edges, deduped, no flood,
   clean process teardown; concurrent multi-pane attribution
@@ -445,8 +473,11 @@ bin/rzr-teardown.sh t1
 - ✅ `rzr-control.sh` (CONTROL) `interrupt`/`cancel`/`key`/`stop`/`restart`, each
   against a live throwaway task, each verifying its own postcondition
 - ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
+- ✅ Pi with gpt-5.6-sol/low: model/thinking/trust/system-prompt passthrough,
+  native session linking, teardown, exact resume, and continued handoff context
+- ✅ Pi watchtower monitor: Herdr push subscription runs outside tool execution,
+  preserving interactive operator input while actionable edges trigger a turn
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
-Not verified here: `copilot` and `pi` harness launches — their flag mappings are
-wired from known invocations but untested on this machine.
+Not verified here: `copilot` harness launches.
