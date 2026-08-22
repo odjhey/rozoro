@@ -15,14 +15,20 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 print_row() {  # <name>
-  local name="$1" json
+  local name="$1" json harness perm
   json="$(rzr_crew_json "$name")"
+  harness="$(printf '%s' "$json" | jq -r '.harness // "-"' 2>/dev/null)"
+  if [ "$harness" = codex ]; then
+    perm="yolo"
+  else
+    perm="$(printf '%s' "$json" | jq -r 'if (.permission_mode // "") == "" then "-" else .permission_mode end' 2>/dev/null)"
+  fi
   printf '%-14s %-8s %-10s %-6s %-6s %s\n' \
     "$name" \
-    "$(printf '%s' "$json" | jq -r '.harness // "-"' 2>/dev/null)" \
+    "$harness" \
     "$(printf '%s' "$json" | jq -r '.model // "-"' 2>/dev/null)" \
     "$(printf '%s' "$json" | jq -r 'if (.effort // "") == "" then "-" else .effort end' 2>/dev/null)" \
-    "$(printf '%s' "$json" | jq -r 'if (.permission_mode // "") == "" then "-" else .permission_mode end' 2>/dev/null)" \
+    "$perm" \
     "$(printf '%s' "$json" | jq -r '(.rules // []) | length' 2>/dev/null)"
 }
 

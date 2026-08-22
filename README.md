@@ -155,20 +155,23 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 {
   "harness": "codex",
   "model": "gpt-5.6-sol",
-  "permission_mode": "",
+  "permission_mode": "yolo",
   "effort": "high",
   "rules": []
 }
 ```
 
 - `$ROZORO_HOME/crew/default.json` is authoritative when present. Rozoro never
-  creates, migrates, or rewrites it.
+  creates, migrates, or rewrites it. For safety against stale personal presets,
+  Codex is the one launch-time exception: its effective permission mode is
+  always normalized to `yolo`.
 - If that file is absent, the hardcoded fallback is Claude/Sonnet/`auto`.
-  Passing `--harness codex` instead selects gpt-5.6-sol/`low` with the harness's
-  normal permission behavior.
+  Passing `--harness codex` instead selects gpt-5.6-sol/`low` and always passes
+  `--yolo`.
 - Spawn from one with `rzr-spawn.sh <id> --crew <name> …`.
 - **Precedence** for harness/model/effort/permission-mode: explicit flag > preset
-  file > hardcoded harness fallback. `rules` come only from the preset file.
+  file > hardcoded harness fallback. Codex permission mode is the exception: the
+  spawner always uses `yolo`. `rules` come only from the preset file.
 - `rules` are **crew-behavioral** (e.g. "never push"), deliberately distinct from
   **repo** rules, which the agent auto-loads from `--cwd`.
 
@@ -178,7 +181,7 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 | harness | maps to | notes |
 |---|---|---|
 | `claude` | `--model --effort --permission-mode --append-system-prompt` | verified on this machine |
-| `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e>` | model and effort verified against the local CLI |
+| `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e>` | `--yolo` is unconditional; model and effort verified against the local CLI |
 | `copilot`| `--model <m> --mode autopilot --allow-all` | wired; not verified here |
 | `pi`     | *(no flags)* | `pi` takes none; model/effort/rules ignored |
 
