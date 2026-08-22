@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isTaskKey, observeProjection, type WatchProjection } from "./rozoro-watchtower-observer.ts";
+import { isTaskKey, observeProjection, type WatchProjection } from "../lib/rozoro-watchtower-observer.ts";
 
 const WATCHTOWER_MARKER = "rozoro **watchtower**";
 const STATUS_KEY = "rozoro-monitor";

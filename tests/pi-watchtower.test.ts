@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { observeProjection } from "../.pi/extensions/rozoro-watchtower-observer.ts";
+import { observeProjection } from "../.pi/lib/rozoro-watchtower-observer.ts";
 
 const action = (id: string, edgeId: unknown, required: unknown = true) => ({
 	id,
