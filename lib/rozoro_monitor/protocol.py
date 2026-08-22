@@ -15,6 +15,7 @@ VERSION = 1
 # Integers cross Python, Node, JSON, and SQLite boundaries.  The JavaScript
 # safe-integer limit is the narrowest exact range.
 MAX_INTEGER = 9_007_199_254_740_991
+MAX_FRAME_BYTES = 1_048_576
 
 # IDs are opaque but deliberately safe to use in logs and (for event_id) spool
 # filenames. Whitespace, path separators, and control characters are excluded.
@@ -105,6 +106,22 @@ _ACTIONABLE_REASON = _enum(
     "none", "quiescent", "missing-report", "malformed-report", "waiting-background",
     "blocked", "failed", "needs-action", "gone", "unknown",
 )
+_REPORT_TUPLES = frozenset({
+    ("missing", None, "missing-report"),
+    ("malformed", None, "malformed-report"),
+    ("valid", "done", "none"),
+    ("valid", "done", "quiescent"),
+    ("valid", "done", "gone"),
+    ("valid", "waiting", "waiting-background"),
+    ("valid", "waiting", "unknown"),
+    ("valid", "waiting", "gone"),
+    ("valid", "needs-action", "needs-action"),
+    ("valid", "needs-action", "gone"),
+    ("valid", "failed", "failed"),
+    ("valid", "failed", "gone"),
+    ("valid", "blocked", "blocked"),
+    ("valid", "blocked", "gone"),
+})
 
 # type -> (required fields, optional fields). Unknown fields are rejected so a
 # misspelling cannot silently weaken lifecycle or generation semantics.
@@ -124,7 +141,9 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "ack-generation": ({"request_id": _ID, "driver_id": _ID, "through": _POSITIVE}, {}),
     "ok": ({"request_id": _ID}, {}),
     "ack": ({"event_id": _ID, "durable_seq": _POSITIVE}, {}),
-    "frame.error": ({"code": _enum("invalid-json", "invalid-message", "invalid-version")}, {}),
+    # frame.error is the complete no-safe-correlation path.  It intentionally
+    # supports every validation/framing code and carries no invented ID.
+    "frame.error": ({"code": _enum("invalid-json", "frame-too-large", "invalid-message", "invalid-version", "invalid-event", "invalid-field", "unsupported-type")}, {}),
     "event.error": ({"event_id": _ID, "code": _enum("invalid-event", "invalid-field", "unsupported-type")}, {}),
     "request.error": ({"request_id": _ID, "code": _enum("invalid-message", "invalid-field", "unsupported-type")}, {}),
 }
@@ -136,7 +155,6 @@ _REPORT_SCHEMA: dict[str, Callable[[Any, str], None]] = {
     "availability": _AVAILABILITY,
     "report_state": _REPORT_STATE,
     "verdict": _nullable(_VERDICT),
-    "action_required": _BOOL,
     "actionable_reason": _ACTIONABLE_REASON,
 }
 
@@ -156,11 +174,12 @@ def _reports(value: Any, field: str) -> None:
             _fail("invalid-field", f"{item_field} has unknown field(s): {', '.join(unknown)}", item_field)
         for name, check in _REPORT_SCHEMA.items():
             check(report[name], f"{item_field}.{name}")
-        if (report["report_state"] == "valid") != (report["verdict"] is not None):
+        report_tuple = (report["report_state"], report["verdict"], report["actionable_reason"])
+        if report_tuple not in _REPORT_TUPLES:
             _fail(
                 "invalid-field",
-                f"{item_field}.verdict must be present only when report_state is valid",
-                f"{item_field}.verdict",
+                f"{item_field} has contradictory report state, verdict, and actionable reason",
+                item_field,
             )
 
 
@@ -224,7 +243,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def decode(line: str | bytes) -> dict[str, Any]:
-    """Decode one JSON frame and validate it."""
+    """Decode one bounded JSON frame and validate it."""
+    size = len(line) if isinstance(line, bytes) else len(line.encode("utf-8"))
+    if size > MAX_FRAME_BYTES:
+        _fail("frame-too-large", f"frame exceeds {MAX_FRAME_BYTES} bytes")
     try:
         message = json.loads(
             line,

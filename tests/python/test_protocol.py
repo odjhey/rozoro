@@ -8,7 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
 
-from rozoro_monitor.protocol import MAX_INTEGER, ProtocolError, decode, encode, validate  # noqa: E402
+from rozoro_monitor.protocol import (  # noqa: E402
+    MAX_FRAME_BYTES, MAX_INTEGER, ProtocolError, decode, encode, validate,
+)
 
 
 class ProtocolFixturesTest(unittest.TestCase):
@@ -132,7 +134,7 @@ class StrictValidationTest(unittest.TestCase):
 
     def test_reconcile_reports_are_exact_structured_snapshots(self) -> None:
         report = {"task_id": "task-1", "generation": 4, "availability": "unknown",
-                  "report_state": "missing", "verdict": None, "action_required": False,
+                  "report_state": "missing", "verdict": None,
                   "actionable_reason": "missing-report"}
         result = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
                   "through": 4, "reports": [report]}
@@ -154,15 +156,54 @@ class StrictValidationTest(unittest.TestCase):
 
     def test_reconcile_snapshot_enforces_cursor_and_unique_tasks(self) -> None:
         report = {"task_id": "task-1", "generation": 4, "availability": "unknown",
-                  "report_state": "missing", "verdict": None, "action_required": True,
+                  "report_state": "missing", "verdict": None,
                   "actionable_reason": "missing-report"}
         result = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
                   "through": 4, "reports": [report]}
         self.assertIs(validate(result), result)
         self.assert_code("invalid-field", {**result, "through": 3})
         self.assert_code("invalid-field", {**result, "reports": [report, report]})
-        conflicting = {**report, "availability": "blocked", "actionable_reason": "blocked"}
+        conflicting = {**report, "availability": "blocked"}
         self.assert_code("invalid-field", {**result, "reports": [report, conflicting]})
+
+    def test_reconcile_report_tuple_matrix_rejects_contradictions(self) -> None:
+        base = {"task_id": "task-1", "generation": 1, "availability": "unknown",
+                "report_state": "missing", "verdict": None,
+                "actionable_reason": "missing-report"}
+        result = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
+                  "through": 1, "reports": [base]}
+        self.assertIs(validate(result), result)
+        contradictions = (
+            {**base, "actionable_reason": "none"},
+            {**base, "verdict": "done"},
+            {**base, "report_state": "valid"},
+            {**base, "report_state": "malformed"},
+            {**base, "report_state": "valid", "verdict": "failed",
+             "actionable_reason": "quiescent"},
+            {**base, "report_state": "valid", "verdict": "blocked",
+             "actionable_reason": "failed"},
+        )
+        for report in contradictions:
+            self.assert_code("invalid-field", {**result, "reports": [report]})
+        valid = {**base, "report_state": "valid", "verdict": "failed",
+                 "actionable_reason": "failed"}
+        valid_result = {**result, "reports": [valid]}
+        self.assertIs(validate(valid_result), valid_result)
+
+    def test_frame_error_covers_every_uncorrelatable_failure_without_id(self) -> None:
+        codes = ("invalid-json", "frame-too-large", "invalid-message", "invalid-version",
+                 "invalid-event", "invalid-field", "unsupported-type")
+        for code in codes:
+            error = {"v": 1, "type": "frame.error", "code": code}
+            self.assertEqual(decode(encode(error)), error)
+        for invented in ("event_id", "request_id"):
+            self.assert_code("invalid-field", {"v": 1, "type": "frame.error",
+                                               "code": "invalid-field", invented: "unsafe"})
+
+    def test_decode_rejects_oversized_frames_before_json_parsing(self) -> None:
+        with self.assertRaises(ProtocolError) as caught:
+            decode("x" * (MAX_FRAME_BYTES + 1))
+        self.assertEqual(caught.exception.code, "frame-too-large")
 
     def test_decode_rejects_duplicate_object_members_at_any_depth(self) -> None:
         frames = (
