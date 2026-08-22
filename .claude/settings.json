@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/hooks/claude-register-watchtower.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

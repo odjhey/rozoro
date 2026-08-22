@@ -55,6 +55,32 @@ are passed to the crew verbatim.
    genuinely external background waiter — the nudge is durable (at-least-once).
    When it arrives, run `rozoro reconcile` to read verdicts and ack it.
    `state/<id>.status` remains the non-blocking current-state snapshot.
+
+   **Claude registration.** `rozoro register --harness claude` requires the
+   herdr pane to report `interactive_ready`, which a Claude pane only does once
+   it reaches its own idle prompt — never mid-turn. A Claude watchtower booted
+   from this checkout with the `ROZORO_ROLE=watchtower` marker gets this
+   handled automatically:
+
+   ```sh
+   ROZORO_ROLE=watchtower claude --model opus --permission-mode auto \
+     --append-system-prompt-file ./templates/watchtower.md
+   ```
+
+   `.claude/settings.json` ships a `SessionStart` hook
+   (`hooks/claude-register-watchtower.sh`) that retries registration for a few
+   seconds at boot, past the gap between SessionStart firing and herdr's
+   readiness probe flipping true (measured ~2-3s in testing). The hook checks
+   for `ROZORO_ROLE=watchtower` before doing anything else — a plain Claude
+   dev/crew session opened in this checkout (no marker) hits that check and
+   no-ops immediately, so it never self-registers a stray wake target. It is
+   silent and best-effort even when the marker is set — it never blocks or
+   fails session start. **If it hasn't registered** (checked via
+   `ls ~/.rozoro/watchtowers/*/target.json`, or a wake never arrives), fall
+   back to the manual step at your first idle prompt:
+   `!rozoro register --harness claude`. This always works once you're idle,
+   requires no setup, and is the one path a human can rely on regardless of
+   which settings file loaded.
 3. On each edge, `rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
    `needs-action` → answer with `rozoro send <id> "..."`; a no-new-block on an idle
