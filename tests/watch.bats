@@ -59,6 +59,44 @@ load test_helper/common
   [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro watch edge: reconcile crew status.' ]
 }
 
+@test "generic wake prefers Codex native queue when both backends are available" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 working
+  export CODEX_THREAD_ID=thread-123 HERDR_PANE_ID=driver-pane
+  start_event_server events 'p1,w1,done,codex'
+  run rzr-watch.sh --once --wake task
+  assert_success
+  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro watch edge: reconcile crew status.' ]
+  ! grep -F $'agent\tprompt\tdriver-pane' "$FAKE_HERDR_LOG"
+}
+
+@test "generic Herdr wake resumes a resident Claude or Pi pane on a settled edge" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 idle
+  export HERDR_PANE_ID=driver-pane
+  start_event_server events 'p1,w1,working,claude' 'p1,w1,done,claude'
+  run rzr-watch.sh --once --wake task
+  assert_success
+  assert_output_contains $'task\tworking'
+  assert_output_contains $'task\tdone'
+  grep -F $'CALL\tagent\tprompt\tdriver-pane\tRozoro watch edge: reconcile crew status.' "$FAKE_HERDR_LOG"
+}
+
+@test "Herdr wake fails closed without a resident pane or on delivery failure" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 working
+  run rzr-watch.sh --wake-herdr task
+  assert_failure
+  assert_output_contains 'requires HERDR_PANE_ID'
+
+  export HERDR_PANE_ID=driver-pane
+  export FAKE_HERDR_FAIL_MATCH=' agent prompt driver-pane '
+  start_event_server events 'p1,w1,blocked,pi'
+  run rzr-watch.sh --once --wake-herdr task
+  assert_failure
+  assert_output_contains "could not wake resident Herdr pane 'driver-pane'"
+}
+
 @test "Codex wake requires a resident thread and queue capability" {
   write_meta task 'pane=p1' 'tab=t1'
   fake_status p1 idle

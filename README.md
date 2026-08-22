@@ -139,7 +139,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `rzr-watch.sh [--once] [--wake-codex] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; optionally queues a safe wake nudge to the resident Codex thread |
+| `rzr-watch.sh [--once] [--wake] [id…]` | subscribes to Herdr's `pane.agent_status_changed` push stream; prints real state changes; optionally wakes a resident Codex, Claude, or Pi watchtower (`--wake-codex` and `--wake-herdr` force a backend) |
 | `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `rzr-control.sh <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped Claude, Codex, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
@@ -280,6 +280,9 @@ PATH="$PWD/bin:$PATH" pi \
 # Or Claude
 PATH="$PWD/bin:$PATH" claude \
   --append-system-prompt-file "$PWD/templates/watchtower.md"
+
+# Or Codex
+PATH="$PWD/bin:$PATH" codex --yolo
 ```
 
 Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
@@ -394,16 +397,17 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   `pane.agent_status_changed` push stream over the control socket (via
   `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
   nothing to spin. Each edge is deduped against this watch process's last-seen
-  state; only real changes are printed and persisted. Buffered stdout from a
-  background watcher cannot wake a Codex thread after its turn has completed.
-  Opt in with `--wake-codex`: the watcher uses the host's `CODEX_THREAD_ID` and
-  `codex queue` to send a fixed reconciliation nudge on `idle`, `done`, or
-  `blocked` edges. Initial reconciliation and `working` edges never wake Codex,
-  and no handoff or event contents are queued. The option fails up front if the
-  thread id or queue capability is unavailable. In combined `--once
-  --wake-codex` mode, the watcher continues past non-settled edges and exits only
-  after a settled-edge nudge is queued successfully; plain `--once` retains its
-  first-real-edge behavior.
+  state; only real changes are printed and persisted. Buffered stdout cannot
+  wake a watchtower after its turn completes, so `--wake` adds a fixed,
+  content-free reconciliation nudge on `idle`, `done`, or `blocked`. It prefers
+  Codex's native `codex queue` when `CODEX_THREAD_ID` is available; otherwise it
+  uses `herdr agent prompt` on the inherited `HERDR_PANE_ID`, which wakes live
+  Claude, Codex, and Pi panes. `--wake-codex` and `--wake-herdr` force one
+  backend and fail closed when unavailable. Initial reconciliation and `working`
+  edges do not wake the driver. Combined `--once --wake` waits through those
+  edges and exits only after delivering one settled-edge nudge. Pi's bundled
+  extension uses its native `sendMessage(..., { triggerTurn: true })` API instead
+  and owns a persistent push subscriber.
 - **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
   atomically, and is rejected up front if the agent is blocked.
 - **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
@@ -444,9 +448,9 @@ bin/rzr-watch.sh t1 t2
 #    06:01:03  t1  working
 #    06:01:07  t1  done
 
-# From a resident Codex watchtower, opt in to an actual post-turn wake:
-bin/rzr-watch.sh --once --wake-codex t1 t2 &
-# Requires CODEX_THREAD_ID in the environment and a Codex CLI with `queue`.
+# From a resident Codex, Claude, or Pi watchtower, request a post-turn wake:
+bin/rzr-watch.sh --once --wake t1 t2 &
+# Codex uses its native queue; other Herdr-hosted sessions use their current pane.
 
 # 3. send a follow-up (DATA); --wait blocks until it settles:
 bin/rzr-send.sh t1 'Now count the lines in README.' --wait

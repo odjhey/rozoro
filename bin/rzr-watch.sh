@@ -2,12 +2,15 @@
 # rzr-watch.sh - event-driven fleet monitor.
 #
 # Usage:
-#   rzr-watch.sh [--once] [--wake-codex] [id ...]
+#   rzr-watch.sh [--once] [--wake|--wake-codex|--wake-herdr] [id ...]
 #     (no ids) watch every known task; otherwise just the listed ids
 #     --once   exit after the first real edge (or first queued settled edge when
-#              combined with --wake-codex)
-#     --wake-codex  queue a fixed reconciliation nudge to $CODEX_THREAD_ID on
-#                   settled edges (idle, done, or blocked)
+#              combined with a wake option)
+#     --wake        wake the resident watchtower on settled edges. Prefer the
+#                   Codex queue API when available; otherwise prompt the current
+#                   Herdr pane (works for live Claude, Codex, and Pi sessions)
+#     --wake-codex  require the Codex queue backend (compatibility option)
+#     --wake-herdr  require the Herdr current-pane backend
 #
 # Zero polling, genuinely: it consumes herdr's native pane.agent_status_changed
 # PUSH stream over the control socket (via bin/herdr-eventwait.py). Every stream
@@ -26,24 +29,48 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-ONCE=0 WAKE_CODEX=0 ; declare -a WANT=()
+ONCE=0 WAKE_REQUEST="" WAKE_BACKEND="" ; declare -a WANT=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) ONCE=1; shift ;;
-    --wake-codex) WAKE_CODEX=1; shift ;;
+    --wake) WAKE_REQUEST=auto; shift ;;
+    --wake-codex) WAKE_REQUEST=codex; shift ;;
+    --wake-herdr) WAKE_REQUEST=herdr; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
     *)  WANT+=("$1"); shift ;;
   esac
 done
 
-# This is intentionally a fixed adapter, not a configurable command or message:
-# event/task/handoff data must never become instructions queued into Codex.
-if [ "$WAKE_CODEX" -eq 1 ]; then
-  [ -n "${CODEX_THREAD_ID:-}" ] || rzr_die "--wake-codex requires CODEX_THREAD_ID from the resident Codex thread"
-  command -v codex >/dev/null 2>&1 || rzr_die "--wake-codex requires 'codex' on PATH"
-  codex queue --help >/dev/null 2>&1 || rzr_die "installed 'codex' does not provide the queue capability"
-fi
+# Wake messages are fixed and content-free: event/task/handoff data must never
+# become instructions injected into the resident watchtower. Codex has a native
+# out-of-turn queue. Claude and Pi do not expose an equivalent external CLI, but
+# Herdr can submit a prompt to the live pane that launched this background
+# watcher. Explicit backend flags fail closed; --wake chooses the best available.
+codex_wake_available() {
+  [ -n "${CODEX_THREAD_ID:-}" ] && command -v codex >/dev/null 2>&1 \
+    && codex queue --help >/dev/null 2>&1
+}
+herdr_wake_available() {
+  [ -n "${HERDR_PANE_ID:-}" ] && command -v herdr >/dev/null 2>&1
+}
+case "$WAKE_REQUEST" in
+  "") ;;
+  auto)
+    if codex_wake_available; then WAKE_BACKEND=codex
+    elif herdr_wake_available; then WAKE_BACKEND=herdr
+    else rzr_die "--wake requires either Codex queue (CODEX_THREAD_ID) or a resident Herdr pane (HERDR_PANE_ID)"
+    fi ;;
+  codex)
+    [ -n "${CODEX_THREAD_ID:-}" ] || rzr_die "--wake-codex requires CODEX_THREAD_ID from the resident Codex thread"
+    command -v codex >/dev/null 2>&1 || rzr_die "--wake-codex requires 'codex' on PATH"
+    codex queue --help >/dev/null 2>&1 || rzr_die "installed 'codex' does not provide the queue capability"
+    WAKE_BACKEND=codex ;;
+  herdr)
+    [ -n "${HERDR_PANE_ID:-}" ] || rzr_die "--wake-herdr requires HERDR_PANE_ID from the resident Herdr pane"
+    command -v herdr >/dev/null 2>&1 || rzr_die "--wake-herdr requires 'herdr' on PATH"
+    WAKE_BACKEND=herdr ;;
+esac
 # (no ids given) watch every known task. Read loop instead of `mapfile` so this
 # runs on stock macOS bash 3.2, which has no mapfile/readarray.
 if [ "${#WANT[@]}" -eq 0 ]; then
@@ -127,17 +154,23 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
   SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
-  QUEUED_WAKE=0
-  if [ "$WAKE_CODEX" -eq 1 ]; then
+  DELIVERED_WAKE=0
+  if [ -n "$WAKE_BACKEND" ]; then
     case "$st" in
       idle|done|blocked)
-        codex queue --thread "$CODEX_THREAD_ID" --message "Rozoro watch edge: reconcile crew status." \
-          || rzr_die "could not queue wake nudge to Codex thread '$CODEX_THREAD_ID'"
-        QUEUED_WAKE=1
+        case "$WAKE_BACKEND" in
+          codex)
+            codex queue --thread "$CODEX_THREAD_ID" --message "Rozoro watch edge: reconcile crew status." \
+              || rzr_die "could not queue wake nudge to Codex thread '$CODEX_THREAD_ID'" ;;
+          herdr)
+            rzr_herdr agent prompt "$HERDR_PANE_ID" "Rozoro watch edge: reconcile crew status." >/dev/null \
+              || rzr_die "could not wake resident Herdr pane '$HERDR_PANE_ID'" ;;
+        esac
+        DELIVERED_WAKE=1
         ;;
     esac
   fi
-  if [ "$ONCE" -eq 1 ] && { [ "$WAKE_CODEX" -eq 0 ] || [ "$QUEUED_WAKE" -eq 1 ]; }; then
+  if [ "$ONCE" -eq 1 ] && { [ -z "$WAKE_BACKEND" ] || [ "$DELIVERED_WAKE" -eq 1 ]; }; then
     break
   fi
 done
