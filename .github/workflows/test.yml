@@ -1,0 +1,25 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+env:
+  BATS_VERSION: 1.14.0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bats-core
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "v${BATS_VERSION}" https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
+          echo "$RUNNER_TEMP/bats-core/bin" >> "$GITHUB_PATH"
+      - name: Run tests
+        run: ./tests/run.sh

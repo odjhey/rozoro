@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${FAKE_HERDR_ROOT:?}"
+mkdir -p "$FAKE_HERDR_ROOT"
+{
+  printf 'CALL'
+  for arg in "$@"; do printf '\t%s' "$arg"; done
+  printf '\n'
+} >> "${FAKE_HERDR_LOG:-$FAKE_HERDR_ROOT/argv.log}"
+
+if [ -n "${FAKE_HERDR_FAIL_MATCH:-}" ]; then
+  case " $* " in *"$FAKE_HERDR_FAIL_MATCH"*) printf '%s\n' "${FAKE_HERDR_FAIL_TEXT:-forced failure}"; exit "${FAKE_HERDR_FAIL_RC:-1}" ;; esac
+fi
+if [ -n "${FAKE_HERDR_BUSY_ONCE_MATCH:-}" ]; then
+  case " $* " in
+    *"$FAKE_HERDR_BUSY_ONCE_MATCH"*)
+      busy="$FAKE_HERDR_ROOT/busy-once"
+      if [ ! -e "$busy" ]; then : > "$busy"; echo agent_pane_busy; exit 1; fi
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = --session ]; then shift 2; fi
+key="${1:-}"
+[ $# -gt 0 ] && shift
+for arg in "$@"; do key="$key.$arg"; done
+key="$(printf '%s' "$key" | tr '/ ' '__')"
+
+count_file="$FAKE_HERDR_ROOT/count.$key"
+count=0; [ -f "$count_file" ] && count="$(cat "$count_file")"
+count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+if [ -f "$FAKE_HERDR_ROOT/$key.$count.rc" ]; then
+  [ -f "$FAKE_HERDR_ROOT/$key.$count.out" ] && cat "$FAKE_HERDR_ROOT/$key.$count.out"
+  exit "$(cat "$FAKE_HERDR_ROOT/$key.$count.rc")"
+fi
+if [ -f "$FAKE_HERDR_ROOT/$key.rc" ]; then
+  [ -f "$FAKE_HERDR_ROOT/$key.out" ] && cat "$FAKE_HERDR_ROOT/$key.out"
+  exit "$(cat "$FAKE_HERDR_ROOT/$key.rc")"
+fi
+
+case "${1:-}" in
+  list) ;;
+esac
+case "$key" in
+  session.list.--json) printf '{"sessions":[{"name":"test","socket_path":"%s"}]}\n' "$FAKE_HERDR_SOCKET" ;;
+  tab.create.*) printf '{"result":{"root_pane":{"pane_id":"p1","tab_id":"t1"},"tab_id":"t1"}}\n' ;;
+  agent.get.*)
+    pane="${key#agent.get.}"
+    if [ -f "$FAKE_HERDR_ROOT/status.$pane" ]; then printf '{"result":{"agent_status":"%s"}}\n' "$(cat "$FAKE_HERDR_ROOT/status.$pane")"
+    else exit 1; fi ;;
+  pane.get.*) exit 1 ;;
+  *) printf '{"result":{}}\n' ;;
+esac

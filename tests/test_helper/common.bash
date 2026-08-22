@@ -1,0 +1,78 @@
+REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+
+setup() {
+  export TEST_ROOT="$BATS_TEST_TMPDIR/fixture"
+  export HOME="$TEST_ROOT/home"
+  export ROZORO_HOME="$TEST_ROOT/rozoro"
+  export RZR_HOME="$ROZORO_HOME"
+  export FAKE_HERDR_ROOT="$TEST_ROOT/herdr"
+  export FAKE_HERDR_LOG="$FAKE_HERDR_ROOT/argv.log"
+  export FAKE_HERDR_SOCKET="$TEST_ROOT/herdr.sock"
+  export PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache"
+  export PATH="$REPO_ROOT/tests/fakes:$REPO_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  mkdir -p "$HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks" "$FAKE_HERDR_ROOT" "$PYTHONPYCACHEPREFIX"
+  SENTINEL="$BATS_TEST_TMPDIR/outside-sentinel"
+  printf 'untouched\n' > "$SENTINEL"
+  export SENTINEL
+  TEST_PIDS=""
+}
+
+teardown() {
+  for pid in $TEST_PIDS; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  [ "$(cat "$SENTINEL")" = untouched ]
+  case "$TEST_ROOT" in "$BATS_TEST_TMPDIR"/*) rm -rf "$TEST_ROOT" ;; *) return 1 ;; esac
+}
+
+register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
+
+assert_success() {
+  [ "$status" -eq 0 ] || { printf 'expected success, got %s:\n%s\n' "$status" "$output" >&2; return 1; }
+}
+
+assert_failure() {
+  [ "$status" -ne 0 ] || { printf 'expected failure:\n%s\n' "$output" >&2; return 1; }
+}
+
+assert_output_contains() {
+  case "$output" in *"$1"*) ;; *) printf 'output did not contain <%s>:\n%s\n' "$1" "$output" >&2; return 1 ;; esac
+}
+
+assert_file_contains() {
+  grep -F "$2" "$1" >/dev/null || { printf '%s did not contain <%s>\n' "$1" "$2" >&2; return 1; }
+}
+
+write_meta() {
+  id="$1"; shift
+  mkdir -p "$ROZORO_HOME/state"
+  printf '%s\n' "$@" > "$ROZORO_HOME/state/$id.meta"
+}
+
+write_handoff() {
+  id="$1"; shift
+  mkdir -p "$ROZORO_HOME/tasks/$id"
+  printf '%s\n' "$@" > "$ROZORO_HOME/tasks/$id/handoff.md"
+}
+
+fake_response() {
+  key="$1"; shift
+  printf '%s\n' "$@" > "$FAKE_HERDR_ROOT/$key.out"
+}
+
+fake_status() {
+  pane="$1" status_value="$2"
+  printf '%s\n' "$status_value" > "$FAKE_HERDR_ROOT/status.$pane"
+}
+
+start_event_server() {
+  mode="$1"; shift
+  python3 "$REPO_ROOT/tests/test_helper/event_server.py" "$FAKE_HERDR_SOCKET" "$FAKE_HERDR_ROOT/request.json" "$mode" "$@" 3>&- &
+  register_pid "$!"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -S "$FAKE_HERDR_SOCKET" ] && return 0
+    sleep 0.05
+  done
+  return 1
+}

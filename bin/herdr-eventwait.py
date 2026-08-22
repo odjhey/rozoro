@@ -34,6 +34,7 @@ Exit status:
 A non-zero exit tells rzr-watch the push path is unavailable this run.
 """
 import json
+import os
 import socket
 import sys
 import time
@@ -154,6 +155,10 @@ if __name__ == "__main__":
         sys.exit(main(sys.argv))
     except BrokenPipeError:
         # rzr-watch stopped reading (e.g. --once found its edge and killed us).
+        # Replace stdout before interpreter shutdown so its implicit final flush
+        # cannot turn the handled pipe close into exit status 120.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
         sys.exit(0)
     except KeyboardInterrupt:
         sys.exit(0)
