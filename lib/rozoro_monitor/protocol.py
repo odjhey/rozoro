@@ -100,6 +100,11 @@ _PRIORITY = _enum("normal", "urgent")
 _RESULT = _enum("success", "failed", "cancelled", "unknown")
 _AVAILABILITY = _enum("busy", "waiting-background", "quiescent", "blocked", "gone", "unknown")
 _VERDICT = _enum("done", "waiting", "needs-action", "failed", "blocked")
+_REPORT_STATE = _enum("missing", "malformed", "valid")
+_ACTIONABLE_REASON = _enum(
+    "none", "quiescent", "missing-report", "malformed-report", "waiting-background",
+    "blocked", "failed", "needs-action", "gone", "unknown",
+)
 
 # type -> (required fields, optional fields). Unknown fields are rejected so a
 # misspelling cannot silently weaken lifecycle or generation semantics.
@@ -119,7 +124,9 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "ack-generation": ({"request_id": _ID, "driver_id": _ID, "through": _POSITIVE}, {}),
     "ok": ({"request_id": _ID}, {}),
     "ack": ({"event_id": _ID, "durable_seq": _POSITIVE}, {}),
-    "error": ({"code": _enum("invalid-json", "invalid-message", "invalid-version", "invalid-event", "invalid-field", "unsupported-type")}, {"event_id": _ID, "request_id": _ID}),
+    "frame.error": ({"code": _enum("invalid-json", "invalid-message", "invalid-version")}, {}),
+    "event.error": ({"event_id": _ID, "code": _enum("invalid-event", "invalid-field", "unsupported-type")}, {}),
+    "request.error": ({"request_id": _ID, "code": _enum("invalid-message", "invalid-field", "unsupported-type")}, {}),
 }
 
 
@@ -127,8 +134,10 @@ _REPORT_SCHEMA: dict[str, Callable[[Any, str], None]] = {
     "task_id": _ID,
     "generation": _POSITIVE,
     "availability": _AVAILABILITY,
+    "report_state": _REPORT_STATE,
     "verdict": _nullable(_VERDICT),
     "action_required": _BOOL,
+    "actionable_reason": _ACTIONABLE_REASON,
 }
 
 
@@ -147,6 +156,12 @@ def _reports(value: Any, field: str) -> None:
             _fail("invalid-field", f"{item_field} has unknown field(s): {', '.join(unknown)}", item_field)
         for name, check in _REPORT_SCHEMA.items():
             check(report[name], f"{item_field}.{name}")
+        if (report["report_state"] == "valid") != (report["verdict"] is not None):
+            _fail(
+                "invalid-field",
+                f"{item_field}.verdict must be present only when report_state is valid",
+                f"{item_field}.verdict",
+            )
 
 
 def validate(message: Any) -> dict[str, Any]:
@@ -180,9 +195,32 @@ def validate(message: Any) -> dict[str, Any]:
         other = "driver_id" if identity == "task_id" else "task_id"
         if identity not in message or other in message:
             _fail("invalid-event", f"role {message['role']!r} requires {identity} and forbids {other}", identity)
-    if message_type == "error" and "event_id" in message and "request_id" in message:
-        _fail("invalid-message", "error may correlate at most one event_id or request_id")
+    if message_type == "reconcile.result":
+        seen_tasks: set[str] = set()
+        for index, report in enumerate(message["reports"]):
+            if report["generation"] > message["through"]:
+                _fail(
+                    "invalid-field",
+                    f"reports[{index}].generation exceeds reconcile through cursor",
+                    f"reports[{index}].generation",
+                )
+            if report["task_id"] in seen_tasks:
+                _fail(
+                    "invalid-field",
+                    f"duplicate task_id {report['task_id']!r} in reconcile snapshot",
+                    f"reports[{index}].task_id",
+                )
+            seen_tasks.add(report["task_id"])
     return message
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate object member {key!r}")
+        result[key] = value
+    return result
 
 
 def decode(line: str | bytes) -> dict[str, Any]:
@@ -191,6 +229,7 @@ def decode(line: str | bytes) -> dict[str, Any]:
         message = json.loads(
             line,
             parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+            object_pairs_hook=_unique_object,
         )
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         raise ProtocolError("invalid-json", "frame is not valid finite JSON") from exc

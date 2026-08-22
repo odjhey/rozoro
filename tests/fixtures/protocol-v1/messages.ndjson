@@ -9,8 +9,10 @@
 {"v":1,"type":"notification","generation":54,"priority":"normal","task_count":4}
 {"v":1,"type":"notification.delivered","request_id":"req-002","driver_id":"driver-1","generation":54}
 {"v":1,"type":"reconcile","request_id":"req-003","driver_id":"driver-1","through":54}
-{"v":1,"type":"reconcile.result","request_id":"req-003","through":54,"reports":[{"task_id":"task-1","generation":54,"availability":"quiescent","verdict":"done","action_required":true}]}
+{"v":1,"type":"reconcile.result","request_id":"req-003","through":54,"reports":[{"task_id":"task-1","generation":54,"availability":"quiescent","report_state":"valid","verdict":"done","action_required":true,"actionable_reason":"quiescent"}]}
 {"v":1,"type":"ack-generation","request_id":"req-004","driver_id":"driver-1","through":54}
 {"v":1,"type":"ok","request_id":"req-004"}
 {"v":1,"type":"ack","event_id":"evt-007","durable_seq":193}
-{"v":1,"type":"error","event_id":"evt-bad","code":"invalid-event"}
+{"v":1,"type":"frame.error","code":"invalid-json"}
+{"v":1,"type":"event.error","event_id":"evt-bad","code":"invalid-event"}
+{"v":1,"type":"request.error","request_id":"req-bad","code":"invalid-message"}

@@ -20,7 +20,7 @@ class ProtocolFixturesTest(unittest.TestCase):
             {"session.register", "turn.start", "background.start", "background.stop",
              "background.snapshot", "turn.stop", "session.end", "watchtower.register",
              "notification", "notification.delivered", "reconcile", "reconcile.result",
-             "ack-generation", "ok", "ack", "error"},
+             "ack-generation", "ok", "ack", "frame.error", "event.error", "request.error"},
         )
         for message in messages:
             with self.subTest(type=message["type"]):
@@ -118,17 +118,22 @@ class StrictValidationTest(unittest.TestCase):
         for prose_field in ("message", "summary", "prompt", "reports", "task_ids"):
             self.assert_code("invalid-field", {**notification, prose_field: "crew prose"})
 
-    def test_errors_allow_no_correlation_when_input_has_no_valid_id(self) -> None:
-        base = {"v": 1, "type": "error", "code": "invalid-event"}
-        self.assertIs(validate(base), base)
-        self.assert_code("invalid-message", {**base, "event_id": "evt-1", "request_id": "req-1"})
-        self.assertEqual(validate({**base, "request_id": "req-1"})["request_id"], "req-1")
-        self.assertEqual(decode(encode({"v": 1, "type": "error", "code": "invalid-json"})),
-                         {"v": 1, "type": "error", "code": "invalid-json"})
+    def test_error_kinds_have_strict_correlation(self) -> None:
+        frame_error = {"v": 1, "type": "frame.error", "code": "invalid-json"}
+        self.assertEqual(decode(encode(frame_error)), frame_error)
+        self.assert_code("invalid-field", {**frame_error, "request_id": "req-1"})
+        self.assert_code("invalid-message", {"v": 1, "type": "request.error",
+                                             "code": "invalid-message"})
+        self.assert_code("invalid-field", {"v": 1, "type": "event.error",
+                                           "event_id": "evt-1", "code": "invalid-json"})
+        request_error = {"v": 1, "type": "request.error", "request_id": "req-1",
+                         "code": "invalid-field"}
+        self.assertEqual(validate(request_error)["request_id"], "req-1")
 
     def test_reconcile_reports_are_exact_structured_snapshots(self) -> None:
         report = {"task_id": "task-1", "generation": 4, "availability": "unknown",
-                  "verdict": None, "action_required": False}
+                  "report_state": "missing", "verdict": None, "action_required": False,
+                  "actionable_reason": "missing-report"}
         result = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
                   "through": 4, "reports": [report]}
         self.assertIs(validate(result), result)
@@ -139,6 +144,36 @@ class StrictValidationTest(unittest.TestCase):
         self.assert_code("invalid-field", {**result, "reports": [{**report, "summary": "prose"}]})
         self.assert_code("invalid-field", {**result, "reports": [{**report, "generation": float("inf")}]})
         self.assert_code("invalid-field", {**result, "reports": [{**report, "availability": []}]})
+        self.assert_code("invalid-field", {**result, "reports": [{**report, "report_state": "valid"}]})
+        valid = {**report, "report_state": "valid", "verdict": "done",
+                 "actionable_reason": "quiescent"}
+        valid_result = {**result, "reports": [valid]}
+        self.assertIs(validate(valid_result), valid_result)
+        malformed_with_verdict = {**report, "report_state": "malformed", "verdict": "failed"}
+        self.assert_code("invalid-field", {**result, "reports": [malformed_with_verdict]})
+
+    def test_reconcile_snapshot_enforces_cursor_and_unique_tasks(self) -> None:
+        report = {"task_id": "task-1", "generation": 4, "availability": "unknown",
+                  "report_state": "missing", "verdict": None, "action_required": True,
+                  "actionable_reason": "missing-report"}
+        result = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
+                  "through": 4, "reports": [report]}
+        self.assertIs(validate(result), result)
+        self.assert_code("invalid-field", {**result, "through": 3})
+        self.assert_code("invalid-field", {**result, "reports": [report, report]})
+        conflicting = {**report, "availability": "blocked", "actionable_reason": "blocked"}
+        self.assert_code("invalid-field", {**result, "reports": [report, conflicting]})
+
+    def test_decode_rejects_duplicate_object_members_at_any_depth(self) -> None:
+        frames = (
+            '{"v":1,"v":1,"type":"frame.error","code":"invalid-json"}',
+            '{"v":1,"type":"reconcile.result","request_id":"req-1","through":1,'
+            '"reports":[{"task_id":"task-1","task_id":"task-2"}]}',
+        )
+        for frame in frames:
+            with self.assertRaises(ProtocolError) as caught:
+                decode(frame)
+            self.assertEqual(caught.exception.code, "invalid-json")
 
     def test_decode_rejects_non_finite_json_constants(self) -> None:
         for constant in ("NaN", "Infinity", "-Infinity"):
