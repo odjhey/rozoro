@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const ACTIONABLE = new Set(["idle", "done", "blocked", "gone"]);
 const WATCHTOWER_MARKER = "rozoro **watchtower**";
 const STATUS_KEY = "rozoro-monitor";
 
@@ -68,7 +67,13 @@ export default function (pi: ExtensionAPI) {
 			`Crew ${id}: ${previous ?? "new"} → ${status}`,
 			status === "unknown" || status === "gone" ? "warning" : "info",
 		);
-		if (!ACTIONABLE.has(status)) return;
+		// A wake means the crew FINISHED a turn, so idle/done only counts when it
+		// follows `working`. A freshly-spawned crew boots through idle before it ever
+		// starts (shell → unknown → idle → working → done); treating that first idle
+		// as a completed turn made the driver nudge a crew that had not begun.
+		// `blocked`/`gone` always surface — a stuck or vanished crew needs attention.
+		const settledFromWork = (status === "idle" || status === "done") && previous === "working";
+		if (!(settledFromWork || status === "blocked" || status === "gone")) return;
 
 		pi.sendMessage(
 			{

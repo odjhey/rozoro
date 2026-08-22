@@ -209,27 +209,35 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
     fi
   fi
   i=$(idx_for_pane "$pane") || continue
-  [ "$st" = "${SEEN[$i]}" ] && continue
+  prev="${SEEN[$i]}"
+  [ "$st" = "$prev" ] && continue
   id="${IDS[$i]}"
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
   SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
   DELIVERED_WAKE=0
-  if [ -n "$WAKE_BACKEND" ]; then
-    case "$st" in
-      idle|done|blocked)
-        # Persist the generation BEFORE any delivery attempt, then let the ledger
-        # coalesce a burst to one outstanding nudge and defer while the driver is
-        # busy. A retained edge stays pending and retries on the next edge.
-        rzr_ledger_bump "$DRIVER_DIR" "$id" "$st"
-        if rzr_ledger_should_deliver "$DRIVER_DIR"; then
-          deliver_wake && rc=0 || rc=$?
-          if [ "$rc" -eq 0 ]; then DELIVERED_WAKE=1
-          elif [ "$rc" -eq 2 ]; then rzr_die "wake delivery failed for driver $(basename "$DRIVER_DIR") (edge retained pending)"
-          fi
-        fi
-        ;;
-    esac
+  # A wake means "the crew FINISHED a turn", so only a settle that FOLLOWS
+  # `working` is actionable. A just-spawned crew boots through `unknown`/`idle`
+  # before it ever starts (observed: shell -> unknown -> idle -> working -> done),
+  # and treating that first `idle` as a completed turn is what made the driver
+  # nudge a crew that had not started. `blocked` still wakes regardless of the
+  # prior state: a stuck crew always needs attention.
+  wake_this=0
+  case "$st" in
+    idle|done) [ "$prev" = working ] && wake_this=1 ;;
+    blocked)   wake_this=1 ;;
+  esac
+  if [ -n "$WAKE_BACKEND" ] && [ "$wake_this" -eq 1 ]; then
+    # Persist the generation BEFORE any delivery attempt, then let the ledger
+    # coalesce a burst to one outstanding nudge and defer while the driver is
+    # busy. A retained edge stays pending and retries on the next edge.
+    rzr_ledger_bump "$DRIVER_DIR" "$id" "$st"
+    if rzr_ledger_should_deliver "$DRIVER_DIR"; then
+      deliver_wake && rc=0 || rc=$?
+      if [ "$rc" -eq 0 ]; then DELIVERED_WAKE=1
+      elif [ "$rc" -eq 2 ]; then rzr_die "wake delivery failed for driver $(basename "$DRIVER_DIR") (edge retained pending)"
+      fi
+    fi
   fi
   if [ "$ONCE" -eq 1 ] && { [ -z "$WAKE_BACKEND" ] || [ "$DELIVERED_WAKE" -eq 1 ]; }; then
     break

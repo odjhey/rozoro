@@ -35,10 +35,24 @@ register_claude_driver() {
   [ "$(jq -r '.delivery_state' "$ledger")" = delivered ]
 }
 
+@test "a settle that did not follow working never wakes the driver" {
+  # A freshly-spawned crew boots shell -> unknown -> idle before it starts; that
+  # first idle is not a finished turn and must not nudge the driver.
+  register_claude_driver idle
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 unknown
+  start_event_server events 'p1,w1,idle,claude'
+  run rzr-watch.sh --once --wake task
+  assert_success
+  assert_output_contains $'task\tidle'
+  ! grep -F $'agent\tprompt\tdriver-pane' "$FAKE_HERDR_LOG"
+  [ ! -f "$ROZORO_HOME/watchtowers/$driver/pending.json" ]
+}
+
 @test "Herdr wake defers while the driver is working and never prompts into its turn" {
   register_claude_driver working
   write_meta task 'pane=p1' 'tab=t1'
-  fake_status p1 idle
+  fake_status p1 working
   start_event_server events 'p1,w1,done,claude'
   run rzr-watch.sh --once --wake task
   assert_success
@@ -123,8 +137,8 @@ register_claude_driver() {
   [ "$(cat "$ROZORO_HOME/watchtowers/$driver/ack")" -eq 1 ]
 
   # A fresh settled edge (generation 2 > ack 1, delivered 1 <= ack 1) delivers again.
+  fake_status p1 working
   start_event_server events 'p1,w1,idle,claude'
-  fake_status p1 done
   run rzr-watch.sh --once --wake task
   assert_success
   [ "$(jq -r '.generation' "$ROZORO_HOME/watchtowers/$driver/pending.json")" -eq 2 ]
