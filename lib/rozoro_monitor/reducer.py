@@ -46,6 +46,8 @@ class LifecycleState:
     active_jobs: frozenset[str] = frozenset()
     # Active jobs certified by a count-only snapshot cannot be named.
     anonymous_active: int = 0
+    # Positive presence without an authoritative identity/count baseline.
+    active_presence_only: bool = False
     producer_seq: int = 0
     pending_events: tuple[PendingEvent, ...] = ()
     sequence_gap: bool = False
@@ -61,7 +63,7 @@ class LifecycleState:
 
     @property
     def active_count(self) -> int | None:
-        if self.background == "unknown":
+        if self.background == "unknown" or not self.background_certified:
             return None
         return len(self.active_jobs) + self.anonymous_active
 
@@ -146,6 +148,7 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
 
     jobs = set(state.active_jobs)
     anonymous = state.anonymous_active
+    presence_only = state.active_presence_only
     background = state.background
     certified_baseline = state.background_certified
 
@@ -159,13 +162,14 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
         if certified is False:
             jobs.clear()
             anonymous = 0
+            presence_only = False
             background = "clear"
             certified_baseline = True
             changes["background_fresh"] = True
         elif certified is True:
             # A boolean certifies activity but not an identity or exact count.
             if not jobs and anonymous == 0:
-                anonymous = 1
+                presence_only = True
             background = "active"
             changes["background_fresh"] = True
             # Presence is certified, but true supplies neither an exact count
@@ -174,11 +178,11 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
         else:
             # Unknown does not negate positive facts already observed. It only
             # leaves an empty background axis uncertified.
-            if jobs or anonymous:
+            certified_baseline = False
+            if jobs or anonymous or presence_only:
                 background = "active"
             else:
                 background = "unknown"
-                certified_baseline = False
     elif kind == "background.start":
         changes["background_fresh"] = True
         job_id = event["job_id"]
@@ -191,15 +195,20 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
             jobs.remove(job_id)
         elif anonymous:
             anonymous -= 1
+        elif presence_only:
+            # A stop may correspond to the presence-only fact, but cannot prove
+            # that no other unobserved job remains.
+            presence_only = False
         # Only a certified baseline/count can prove that no unobserved job
         # remains. Merely observing start then stop from unknown stays unknown.
-        background = "clear" if not jobs and not anonymous and certified_baseline else (
-            "active" if jobs or anonymous else "unknown"
+        background = "clear" if not jobs and not anonymous and not presence_only and certified_baseline else (
+            "active" if jobs or anonymous or presence_only else "unknown"
         )
     elif kind == "background.snapshot":
         changes["background_fresh"] = True
         jobs.clear()
         anonymous = event["active_count"]
+        presence_only = False
         background = "active" if anonymous else "clear"
         certified_baseline = True
     elif kind == "session.end":
@@ -212,6 +221,7 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
         )
         jobs.clear()
         anonymous = 0
+        presence_only = False
         background = "clear"
         certified_baseline = True
     else:
@@ -220,6 +230,7 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
     changes.update(
         active_jobs=frozenset(jobs),
         anonymous_active=anonymous,
+        active_presence_only=presence_only,
         background=background,
         background_certified=certified_baseline,
     )
@@ -238,6 +249,7 @@ def set_adapter_connected(state: LifecycleState, connected: bool) -> LifecycleSt
         adapter_connected=connected,
         foreground_fresh=False,
         background_fresh=False,
+        background_certified=False,
     )
 
 
@@ -288,8 +300,8 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
     ) if background == "active" else frozenset()
     count = bg_obj.get("active_count")
     anonymous = max(0, count - len(jobs)) if background == "active" and isinstance(count, int) else 0
-    if background == "active" and not jobs and anonymous == 0:
-        anonymous = 1
+    has_authoritative_active_set = isinstance(count, int) or bool(jobs)
+    presence_only = background == "active" and not has_authoritative_active_set
 
     verdict = status.get("handoff_verdict")
     if isinstance(verdict, str):
@@ -298,9 +310,12 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
     state = LifecycleState(
         foreground=foreground,
         background=background,
-        background_certified=background != "unknown",
+        background_certified=(
+            background == "clear" or (background == "active" and has_authoritative_active_set)
+        ),
         active_jobs=jobs,
         anonymous_active=anonymous,
+        active_presence_only=presence_only,
         # Herdr v2 event_seq is a different ordering domain from native
         # producer_seq and must never seed protocol replay state.
         producer_seq=0,

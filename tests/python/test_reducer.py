@@ -130,6 +130,30 @@ class ReducerTests(unittest.TestCase):
         state = reduce_event(state, event("turn.stop", 3, background_active=None)).state
         self.assertEqual(state.availability, "waiting-background")
 
+    def test_disconnect_drops_exact_baseline_until_authoritative_repair(self):
+        state = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=False)).state
+        state = set_adapter_connected(set_adapter_connected(state, False), True)
+        state = reduce_event(state, event("background.start", 2, job_id="job")).state
+        state = reduce_event(state, event("turn.stop", 3, background_active=None)).state
+        state = reduce_event(state, event("background.stop", 4, job_id="job")).state
+        self.assertEqual((state.background, state.availability, state.active_count),
+                         ("unknown", "unknown", None))
+        state = reduce_event(state, event("background.snapshot", 5, active_count=0)).state
+        self.assertEqual((state.background, state.availability, state.active_count),
+                         ("clear", "quiescent", 0))
+
+    def test_null_aggregate_invalidates_snapshot_exactness_until_repair(self):
+        state = reduce_event(LifecycleState(), event("background.snapshot", 1, active_count=2)).state
+        state = reduce_event(state, event("turn.stop", 2, background_active=None)).state
+        self.assertEqual((state.background, state.anonymous_active, state.active_count),
+                         ("active", 2, None))
+        state = reduce_event(state, event("background.stop", 3, job_id="one")).state
+        state = reduce_event(state, event("background.stop", 4, job_id="two")).state
+        self.assertEqual((state.background, state.availability, state.active_count),
+                         ("unknown", "unknown", None))
+        state = reduce_event(state, event("turn.stop", 5, background_active=False)).state
+        self.assertEqual((state.background, state.availability), ("clear", "quiescent"))
+
     def test_session_end_and_host_gone(self):
         state = reduce_event(LifecycleState(), event("background.start", 1, job_id="a")).state
         state = reduce_event(state, event("session.end", 2)).state
@@ -235,6 +259,14 @@ class V2CompatibilityTests(unittest.TestCase):
         native = reduce_event(state, event("turn.start", 1))
         self.assertTrue(native.applied)
         self.assertEqual(native.state.producer_seq, 1)
+
+    def test_v2_presence_only_active_does_not_invent_exact_count(self):
+        state = map_v2_projection(self.runtime("idle", True, "active"))
+        self.assertEqual((state.background, state.availability, state.active_count),
+                         ("active", "waiting-background", None))
+        self.assertTrue(state.active_presence_only)
+        stopped = reduce_event(state, event("background.stop", 1, job_id="unknown-job")).state
+        self.assertEqual((stopped.background, stopped.availability), ("unknown", "unknown"))
 
 
 if __name__ == "__main__":
