@@ -31,8 +31,11 @@ teardown() {
 
 register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
 
-# Octal permission bits of a file, portable across macOS (stat -f) and GNU (stat -c).
-file_perm() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# Octal permission bits of a file, portable across GNU and macOS. Try GNU
+# `stat -c` first: on BSD/macOS `-c` is rejected (clean non-zero) so we fall back
+# to `stat -f`. The reverse order is unsafe — GNU treats `-f` as --file-system and
+# would print filesystem info with a zero exit, masking the real permission bits.
+file_perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 assert_success() {
   [ "$status" -eq 0 ] || { printf 'expected success, got %s:\n%s\n' "$status" "$output" >&2; return 1; }
