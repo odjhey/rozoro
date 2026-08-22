@@ -10,6 +10,11 @@ load test_helper/common
   done
 }
 
+@test "Pi watchtower event observation is covered by Node tests" {
+  run node --experimental-strip-types --test "$REPO_ROOT/tests/pi-watchtower.test.ts"
+  assert_success
+}
+
 @test "Python helpers compile into the isolated bytecode root" {
   run python3 -m py_compile "$REPO_ROOT/bin/herdr-eventwait.py" "$REPO_ROOT/tests/test_helper/event_server.py"
   assert_success

@@ -53,11 +53,14 @@ are passed to the crew verbatim.
    message on actionable edges. **Never run `./bin/rozoro watch` in a foreground bash
    tool call**: that occupies your turn and queues operator messages. The
    extension starts automatically for this watchtower prompt; `/rozoro-monitor
-   status` reports it and `/rozoro-monitor on` repairs it. Outside Pi (Codex or
-   Claude), register your validated wake target once with `./bin/rozoro register
-   --harness <h>`, then run `./bin/rozoro watch --once --wake <id>` only through a
-   genuinely external background waiter — the nudge is durable (at-least-once).
-   When it arrives, run `./bin/rozoro reconcile` to read verdicts and ack it.
+   status` reports it and `/rozoro-monitor on` repairs it. Its direct event names
+   the validated task key; run the instructed `./bin/rozoro status <id>`. This Pi
+   path needs no registration and has no wake ledger to reconcile. Outside Pi
+   (Codex or Claude), register your validated wake target once with
+   `./bin/rozoro register --harness <h>`, then run `./bin/rozoro watch --once
+   --wake <id>` only through a genuinely external background waiter — that nudge
+   is durable (at-least-once). When it arrives, run `./bin/rozoro reconcile` to
+   read verdicts and ack it.
    `state/<id>.status` remains the non-blocking current-state snapshot.
 
    **Claude registration.** `./bin/rozoro register --harness claude` requires the

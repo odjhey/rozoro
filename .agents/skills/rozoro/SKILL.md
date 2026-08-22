@@ -187,8 +187,10 @@ answer itself, but whether the answer already exists.
    A foreground `./bin/rozoro watch` blocks the watchtower's model turn, so operator
    messages queue behind it. In Pi, the project-local `rozoro-watchtower`
    extension owns a long-lived Herdr push subscriber and injects
-   `[rozoro event]` messages on actionable edges; `/rozoro-monitor status`
-   reports it and `/rozoro-monitor on` repairs it. In a resident Codex or Claude
+   `[rozoro event]` messages on actionable edges; each names the validated task
+   for `./bin/rozoro status <id>`. This direct Pi path needs neither registration
+   nor `reconcile`; `/rozoro-monitor status` reports it and `/rozoro-monitor on`
+   repairs it. In a resident Codex or Claude
    watchtower, register the validated target once (`./bin/rozoro register --harness
    <h>`), then run `./bin/rozoro watch --once --wake <ids>` from a genuinely external
    background task: it delivers a fixed, content-free nudge on settled `idle`,
