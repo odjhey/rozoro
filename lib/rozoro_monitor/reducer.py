@@ -52,8 +52,10 @@ class LifecycleState:
     session_ended: bool = False
     session_gone: bool = False
     adapter_connected: bool = True
-    # Reconnection alone cannot certify facts observed before a disconnect.
-    adapter_certified: bool = True
+    # Disconnect invalidates each semantic axis independently. Identity-only
+    # traffic and facts for the other axis cannot recertify it.
+    foreground_fresh: bool = True
+    background_fresh: bool = True
     blocked: bool = False
     report: ReportState = ReportState()
 
@@ -100,15 +102,11 @@ def _finish(state: LifecycleState, **changes: Any) -> LifecycleState:
     return replace(
         candidate,
         availability=derive_availability(
-            candidate.foreground,
-            candidate.background,
-            blocked=candidate.blocked,
-            gone=candidate.session_gone,
-            adapter_connected=(
-                candidate.adapter_connected
-                and candidate.adapter_certified
-                and not candidate.sequence_gap
-            ),
+            candidate.foreground if candidate.foreground_fresh else "unknown",
+            candidate.background if candidate.background_fresh else "unknown",
+            blocked=candidate.blocked and candidate.foreground_fresh,
+            gone=candidate.session_ended or candidate.session_gone,
+            adapter_connected=candidate.adapter_connected and not candidate.sequence_gap,
         ),
     )
 
@@ -140,11 +138,7 @@ def reduce_event(state: LifecycleState, event: Mapping[str, Any]) -> Reduction:
 def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> LifecycleState:
     seq = event["producer_seq"]
     kind = event.get("type")
-    changes: dict[str, Any] = {
-        "producer_seq": seq,
-        "adapter_connected": True,
-        "adapter_certified": True,
-    }
+    changes: dict[str, Any] = {"producer_seq": seq, "adapter_connected": True}
     # A session ID denotes one session. Once ended, later events cannot revive
     # it; a caller must create a new state for a genuinely new session.
     if state.session_ended:
@@ -158,33 +152,40 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
     if kind == "session.register":
         pass
     elif kind == "turn.start":
-        changes.update(foreground="running", blocked=False)
+        changes.update(foreground="running", foreground_fresh=True, blocked=False)
     elif kind == "turn.stop":
-        changes.update(foreground="stopped", blocked=False)
+        changes.update(foreground="stopped", foreground_fresh=True, blocked=False)
         certified = event.get("background_active")
         if certified is False:
             jobs.clear()
             anonymous = 0
             background = "clear"
             certified_baseline = True
+            changes["background_fresh"] = True
         elif certified is True:
             # A boolean certifies activity but not an identity or exact count.
             if not jobs and anonymous == 0:
                 anonymous = 1
             background = "active"
+            changes["background_fresh"] = True
             # Presence is certified, but true supplies neither an exact count
             # nor a zero baseline from which later stops can prove clear.
             certified_baseline = False
         else:
-            jobs.clear()
-            anonymous = 0
-            background = "unknown"
-            certified_baseline = False
+            # Unknown does not negate positive facts already observed. It only
+            # leaves an empty background axis uncertified.
+            if jobs or anonymous:
+                background = "active"
+            else:
+                background = "unknown"
+                certified_baseline = False
     elif kind == "background.start":
+        changes["background_fresh"] = True
         job_id = event["job_id"]
         jobs.add(job_id)
         background = "active"
     elif kind == "background.stop":
+        changes["background_fresh"] = True
         job_id = event["job_id"]
         if job_id in jobs:
             jobs.remove(job_id)
@@ -196,12 +197,19 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
             "active" if jobs or anonymous else "unknown"
         )
     elif kind == "background.snapshot":
+        changes["background_fresh"] = True
         jobs.clear()
         anonymous = event["active_count"]
         background = "active" if anonymous else "clear"
         certified_baseline = True
     elif kind == "session.end":
-        changes.update(foreground="stopped", session_ended=True, session_gone=True)
+        changes.update(
+            foreground="stopped",
+            foreground_fresh=True,
+            background_fresh=True,
+            session_ended=True,
+            session_gone=True,
+        )
         jobs.clear()
         anonymous = 0
         background = "clear"
@@ -219,8 +227,8 @@ def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> Lifecy
 
 
 def observe_gone(state: LifecycleState, gone: bool = True) -> LifecycleState:
-    """Apply host liveness without pretending it is a producer event."""
-    return _finish(state, session_gone=gone)
+    """Apply host liveness; explicit session end is terminal for this state."""
+    return _finish(state, session_gone=state.session_ended or gone)
 
 
 def set_adapter_connected(state: LifecycleState, connected: bool) -> LifecycleState:
@@ -228,7 +236,8 @@ def set_adapter_connected(state: LifecycleState, connected: bool) -> LifecycleSt
     return _finish(
         state,
         adapter_connected=connected,
-        adapter_certified=state.adapter_certified if not connected else False,
+        foreground_fresh=False,
+        background_fresh=False,
     )
 
 

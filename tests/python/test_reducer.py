@@ -106,17 +106,37 @@ class ReducerTests(unittest.TestCase):
         state = reduce_event(state, event("background.stop", 2, job_id="possibly-known")).state
         self.assertEqual((state.background, state.availability), ("unknown", "unknown"))
 
-    def test_turn_stop_unknown_fails_closed(self):
+    def test_turn_stop_unknown_fails_closed_only_without_positive_facts(self):
         state = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=None)).state
         self.assertEqual((state.foreground, state.background, state.availability),
                          ("stopped", "unknown", "unknown"))
+
+    def test_turn_stop_unknown_preserves_named_and_anonymous_active_facts(self):
+        named = reduce_event(LifecycleState(), event("background.start", 1, job_id="named")).state
+        named = reduce_event(named, event("turn.stop", 2, background_active=None)).state
+        self.assertEqual(named.active_jobs, frozenset({"named"}))
+        self.assertEqual((named.background, named.availability), ("active", "waiting-background"))
+
+        anonymous = reduce_event(LifecycleState(), event("background.snapshot", 1, active_count=2)).state
+        anonymous = reduce_event(anonymous, event("turn.stop", 2, background_active=None)).state
+        self.assertEqual(anonymous.anonymous_active, 2)
+        self.assertEqual((anonymous.background, anonymous.availability), ("active", "waiting-background"))
+
+    def test_reconnect_requires_both_axes_before_waiting_background(self):
+        base = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=False)).state
+        state = set_adapter_connected(set_adapter_connected(base, False), True)
+        state = reduce_event(state, event("background.start", 2, job_id="fresh-job")).state
+        self.assertEqual(state.availability, "unknown")  # foreground remains stale
+        state = reduce_event(state, event("turn.stop", 3, background_active=None)).state
+        self.assertEqual(state.availability, "waiting-background")
 
     def test_session_end_and_host_gone(self):
         state = reduce_event(LifecycleState(), event("background.start", 1, job_id="a")).state
         state = reduce_event(state, event("session.end", 2)).state
         self.assertTrue(state.session_ended)
         self.assertEqual((state.background, state.availability), ("clear", "gone"))
-        state = observe_gone(state)
+        state = observe_gone(state, False)
+        self.assertTrue(state.session_gone)
         self.assertEqual(state.availability, "gone")
         registered = reduce_event(state, event("session.register", 3)).state
         started = reduce_event(registered, event("turn.start", 4)).state
@@ -130,7 +150,11 @@ class ReducerTests(unittest.TestCase):
         self.assertEqual((disconnected.foreground, disconnected.background), ("stopped", "clear"))
         reconnected = set_adapter_connected(disconnected, True)
         self.assertEqual(reconnected.availability, "unknown")
-        recertified = reduce_event(reconnected, event("background.snapshot", 2, active_count=0)).state
+        identity_only = reduce_event(reconnected, event("session.register", 2)).state
+        self.assertEqual(identity_only.availability, "unknown")
+        background_only = reduce_event(identity_only, event("background.snapshot", 3, active_count=0)).state
+        self.assertEqual(background_only.availability, "unknown")
+        recertified = reduce_event(background_only, event("turn.stop", 4, background_active=False)).state
         self.assertEqual(recertified.availability, "quiescent")
 
     def test_report_done_never_changes_runtime_or_implies_acceptance(self):
