@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Herdr's name grammar is ASCII. Keep shell range matching deterministic on
+# macOS, whose default locale may collate uppercase letters inside [a-z].
+export LC_ALL=C
 : "${FAKE_HERDR_ROOT:?}"
 mkdir -p "$FAKE_HERDR_ROOT"
 {
