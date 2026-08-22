@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isTaskKey, observeProjection, type WatchProjection } from "./rozoro-watchtower-observer.ts";
 
 const WATCHTOWER_MARKER = "rozoro **watchtower**";
 const STATUS_KEY = "rozoro-monitor";
@@ -25,8 +26,9 @@ export default function (pi: ExtensionAPI) {
 	let enabled = false;
 	let shuttingDown = false;
 	let knownTasks = new Set<string>();
+	const freshTasks = new Set<string>();
 	const retiredChildren = new WeakSet<ChildProcess>();
-	const seen = new Map<string, string>();
+	const seenEdges = new Map<string, Set<string>>();
 
 	const setStatus = (text?: string) => currentCtx?.ui.setStatus(STATUS_KEY, text);
 
@@ -53,16 +55,15 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function consumeLine(line: string): void {
-		let projection: any;
+		let projection: WatchProjection;
 		try { projection = JSON.parse(line); } catch { return; }
-		const id = projection.id;
-		const status = projection.runtime_status;
-		if (!id || !status) return;
-		seen.set(id, status);
-		setStatus(`crew ${id}: ${status} / ${projection.turn?.report_status ?? "unknown"}`);
-		if (!projection.action?.required) return;
-		currentCtx?.ui.notify(`Crew ${id}: ${projection.action.reason}`, "info");
-		pi.sendMessage({ customType: "rozoro-event", content: "[rozoro event] Run the fixed Rozoro reconciliation command now and continue the watchtower loop.", display: true, details: projection }, { triggerTurn: true, deliverAs: "followUp" });
+		if (!isTaskKey(projection.id) || typeof projection.runtime_status !== "string" || !projection.runtime_status) return;
+		const isFresh = freshTasks.delete(projection.id);
+		const event = observeProjection(seenEdges, projection, !isFresh);
+		setStatus(`crew ${projection.id}: ${projection.runtime_status} / ${projection.turn?.report_status ?? "unknown"}`);
+		if (!event) return;
+		currentCtx?.ui.notify(`Crew ${event.id}: ${event.reason}`, "info");
+		pi.sendMessage({ customType: "rozoro-event", content: event.content, display: true, details: projection }, { triggerTurn: true, deliverAs: "followUp" });
 	}
 
 	async function startChild(): Promise<void> {
@@ -116,7 +117,13 @@ export default function (pi: ExtensionAPI) {
 	async function reconcileTasks(): Promise<void> {
 		const next = await taskIds();
 		for (const id of knownTasks) {
-			if (!next.has(id)) seen.delete(id);
+			if (!next.has(id)) {
+				seenEdges.delete(id);
+				freshTasks.delete(id);
+			}
+		}
+		for (const id of next) {
+			if (!knownTasks.has(id)) freshTasks.add(id);
 		}
 		knownTasks = next;
 		scheduleRestart();

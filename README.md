@@ -319,10 +319,15 @@ extension for this run; the driver calls the dispatcher from the checkout.
 The Pi launch also loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
 When it detects the watchtower system prompt, the extension starts the repo-local watcher
 as an owned asynchronous child, keeps the editor responsive, and injects a
-`[rozoro event]` message on actionable crew edges. This is deliberately different
-from calling `./bin/rozoro watch` through Pi's foreground bash tool, which would occupy the
-agent turn and queue operator messages. Use `/rozoro-monitor status|on|off` to
-inspect or control the monitor.
+`[rozoro event]` message on actionable crew edges. The direct message names the
+validated task key and instructs Pi to run `./bin/rozoro status <id>`; this path
+requires no watchtower registration and creates no durable wake ledger, so it
+must not call `reconcile`. Stable action edge IDs are deduplicated across child
+restarts while a newly tracked task can still surface its first actionable
+snapshot. This is deliberately different from calling `./bin/rozoro watch`
+through Pi's foreground bash tool, which would occupy the agent turn and queue
+operator messages. Use `/rozoro-monitor status|on|off` to inspect or control the
+monitor.
 
 Editing `templates/watchtower.md` and committing it is how you evolve the driver's
 standing behavior; every watchtower booted from the file inherits the change. Keep
@@ -419,7 +424,10 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   so naming every crew after the harness would cap the fleet at one. `tab create`
   can return before the pane's shell is ready, so `agent start` is retried on the
   transient `agent_pane_busy`.
-- **event-driven** — `rzr-watch.sh` subscribes to herdr's native
+- **event-driven** — Pi's project extension consumes the JSON stream directly,
+  deduplicates stable actionable edge IDs, and injects task-specific
+  `./bin/rozoro status <id>` guidance without registration or a wake ledger.
+  Separately, `rzr-watch.sh` subscribes to herdr's native
   `pane.agent_status_changed` push stream over the control socket (via
   `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
   nothing to spin. Each edge is deduped against this watch process's last-seen
@@ -483,10 +491,15 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 #    06:01:03  t1  working
 #    06:01:07  t1  done
 
-# From a resident watchtower, register the validated wake target once, then wake:
-./bin/rozoro register --harness pi        # validates this pane/thread, pins target.json
-./bin/rozoro watch --once --wake t1 t2 &  # durable ledger; backend from the registration
-# On the nudge, the driver reconciles and acks the generation it processed:
+# Pi's bundled watchtower extension needs no registration: its direct event
+# instructs the driver to inspect the validated task key.
+./bin/rozoro status t1
+
+# External wake mode (for example, a resident Codex/Claude watchtower) registers
+# once and uses the durable ledger:
+./bin/rozoro register --harness codex
+./bin/rozoro watch --once --wake t1 t2 &
+# On that external nudge, reconcile and ack the generation it processed:
 ./bin/rozoro reconcile
 
 # 3. send a follow-up (DATA); --wait blocks until it settles:
