@@ -40,7 +40,8 @@ are passed to the crew verbatim.
 
 ## The loop
 
-1. `rozoro start <id> --body <file> --cwd <repo>` — renders a durable brief (with
+1. `rozoro start <display-name> --body <file> --cwd <repo>` — reserves and prints
+   an immutable task key, then renders a durable brief (with
    the handoff protocol), spawns the crew, links its session. Prefer this over raw
    `rozoro spawn`.
 2. Sense without blocking: run `rozoro watch --once <id>` as a background waiter

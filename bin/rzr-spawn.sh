@@ -7,13 +7,13 @@
 #               [--permission-mode <mode>] [--prompt <text> | --brief <file>]
 #               [--no-agent]
 #
-#   <id>        short task slug; names state/<id>.meta and the tab label
+#   <id>        exact task key; names state/<id>.meta (legacy unsuffixed ids work)
 #   --crew      crewmember preset to boot from (default: "default" reads
 #               $ROZORO_HOME/crew/default.json when present; otherwise Claude
 #               Sonnet, or gpt-5.6-sol/low with --harness codex). See rzr-crew.sh.
 #   --cwd       working directory for the tab (default: current dir). The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
-#   --label     tab label shown in herdr (default: the id)
+#   --label     concise tab label (default: the exact task key)
 #   --harness   agent kind (overrides preset). Claude and Codex are wired for
 #               model/effort; other kinds have more limited mappings.
 #   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
@@ -58,6 +58,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"
+rzr_validate_task_component "$ID"
 [ -n "$LABEL" ] || LABEL="$ID"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad --cwd"
 if [ -n "$BRIEF" ]; then
@@ -136,6 +137,7 @@ do_spawn() {
   [ -n "$pane" ] || rzr_die "could not parse pane id from tab create output: $out"
 
   rzr_meta_set "$ID" id "$ID"
+  rzr_meta_set "$ID" display_name "$LABEL"
   rzr_meta_set "$ID" pane "$pane"
   rzr_meta_set "$ID" tab "${tab:-}"
   rzr_meta_set "$ID" workspace "${ws:-}"

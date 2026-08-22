@@ -7,7 +7,8 @@
 # directly.
 #
 # Concepts:
-#   task id   - caller-chosen short slug (e.g. "t1", "fixlogin"); names state/<id>.meta
+#   task key  - immutable globally unique key; names state/<key>.meta and tasks/<key>/
+#   display   - caller-chosen concise label (e.g. "fixlogin")
 #   pane      - herdr pane id "wX:pN"; the terminal the agent runs in (authority)
 #   tab       - herdr tab id "wX:tN"; the clickable container for the pane
 #
@@ -32,8 +33,56 @@ RZR_REPO="$(cd "$RZR_BIN/.." && pwd)"
 RZR_TEMPLATES="${RZR_TEMPLATES:-$RZR_REPO/templates}"
 mkdir -p "$RZR_STATE"
 
+# Task keys and legacy ids are deliberately conservative filesystem components.
+# Existing unsuffixed folders remain valid; unsafe historical names must be
+# addressed by moving them to a safe component first.
+rzr_validate_task_component() {  # <value> [description]
+  local value="$1" what="${2:-task key}"
+  case "$value" in
+    ''|.|..|*[!A-Za-z0-9._-]*) rzr_die "$what '$value' is unsafe; use letters, digits, '.', '_' or '-'" ;;
+  esac
+  [ "${#value}" -le 120 ] || rzr_die "$what is too long (maximum 120 characters)"
+}
+
 # Path to a task's durable folder (does not create it).
-rzr_task_dir() { printf '%s/%s' "$RZR_TASKS" "$1"; }
+rzr_task_dir() { rzr_validate_task_component "$1"; printf '%s/%s' "$RZR_TASKS" "$1"; }
+
+# Reserve a fresh durable identity with an atomic mkdir. The time-sortable ULID
+# suffix supplies 80 bits of randomness; mkdir remains the collision arbiter.
+rzr_task_reserve() {  # <display-name> <cwd> -> task key
+  local display="$1" cwd="$2" suffix key folder attempt=0 tmp
+  rzr_validate_task_component "$display" "display name"
+  [ "${#display}" -le 80 ] || rzr_die "display name is too long (maximum 80 characters)"
+  mkdir -p "$RZR_TASKS"
+  while [ "$attempt" -lt 20 ]; do
+    suffix=$(python3 - <<'PY'
+import os, time
+alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+value = (int(time.time() * 1000) << 80) | int.from_bytes(os.urandom(10), "big")
+out = []
+for _ in range(26):
+    out.append(alphabet[value & 31]); value >>= 5
+print("".join(reversed(out)))
+PY
+)
+    key="$display--$suffix"
+    folder="$RZR_TASKS/$key"
+    if mkdir "$folder" 2>/dev/null; then
+      tmp="$folder/identity.json.tmp.$$"
+      RZR_IDENTITY_OUT="$tmp" RZR_TASK_KEY="$key" RZR_DISPLAY_NAME="$display" RZR_CWD="$cwd" python3 - <<'PY'
+import json, os
+json.dump({"schema": 1, "task_key": os.environ["RZR_TASK_KEY"],
+           "display_name": os.environ["RZR_DISPLAY_NAME"], "cwd": os.environ["RZR_CWD"]},
+          open(os.environ["RZR_IDENTITY_OUT"], "w"), indent=2)
+PY
+      mv "$tmp" "$folder/identity.json"
+      printf '%s' "$key"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  rzr_die "could not reserve a unique task key for '$display'"
+}
 
 # The rendered handoff protocol for a task (rzr-render writes it). Delivered to
 # fresh claude crews as a system prompt and re-injected into resume prompts; it
@@ -203,7 +252,7 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
 }
 
 # --- task metadata (KEY=VALUE, one per line) -------------------------------
-rzr_meta_path() { printf '%s/%s.meta' "$RZR_STATE" "$1"; }
+rzr_meta_path() { rzr_validate_task_component "$1"; printf '%s/%s.meta' "$RZR_STATE" "$1"; }
 
 rzr_meta_set() {  # <id> <key> <value>
   local f; f=$(rzr_meta_path "$1")
