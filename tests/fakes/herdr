@@ -25,6 +25,12 @@ key="${1:-}"
 [ $# -gt 0 ] && shift
 for arg in "$@"; do key="$key.$arg"; done
 key="$(printf '%s' "$key" | tr '/ ' '__')"
+# macOS limits a single filename component to 255 bytes. Agent start arguments
+# can include long temporary paths, so keep fixture keys portable while retaining
+# enough readable prefix to diagnose failures.
+if [ "${#key}" -gt 120 ]; then
+  key="$(printf '%.80s' "$key").$(printf '%s' "$key" | cksum | awk '{print $1}')"
+fi
 
 count_file="$FAKE_HERDR_ROOT/count.$key"
 count=0; [ -f "$count_file" ] && count="$(cat "$count_file")"

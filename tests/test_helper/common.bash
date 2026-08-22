@@ -61,6 +61,9 @@ write_handoff() {
 
 fake_response() {
   key="$1"; shift
+  if [ "${#key}" -gt 120 ]; then
+    key="$(printf '%.80s' "$key").$(printf '%s' "$key" | cksum | awk '{print $1}')"
+  fi
   printf '%s\n' "$@" > "$FAKE_HERDR_ROOT/$key.out"
 }
 
