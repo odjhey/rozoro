@@ -344,19 +344,24 @@ after commit succeeds.
 
 A harness event must not vanish solely because `rozorod` is restarting.
 
-Adapter send algorithm:
+Adapter send algorithm (implemented in `lib/rozoro_monitor/client.py`):
 
 ```text
-connect monitor.sock
+reserve+publish event to $ROZORO_HOME/spool/<event-id>.json
+  (allocates producer_seq durably, before send, so a crash cannot
+  leave an unrecoverable reducer gap)
   ↓
-send normalized event
+connect monitor.sock, send normalized event
   ↓
 wait for durable ACK
 
-success -> done
-failure before ACK -> atomically write
-                      $ROZORO_HOME/spool/<event-id>.json
+success -> remove spool entry
+failure before ACK -> spool entry retained for retry/recovery
 ```
+
+A retry of the same `event_id` reuses the original spooled envelope and
+`producer_seq`; concurrent differing payloads for the same `event_id` are
+rejected rather than overwriting the reservation.
 
 On daemon startup and periodically thereafter:
 
