@@ -22,6 +22,9 @@ def main():
     if st=="working": turn.update({"turn_key":f"{a.id}:{seq}","blocks_before":parsed["blocks"],"report_status":"in-progress","observed_at":ts})
    elif st=="working" and old!="working":
     turn.update({"turn_key":f"{a.id}:{seq}","transition":f"{old or 'unknown'}->working","blocks_before":parsed["blocks"],"blocks_after":None,"report_indices":[],"report_status":"in-progress","observed_at":ts}); d["action"]={"required":False,"reason":None,"edge_id":None}
+   elif st=="gone" and old not in (None,"gone","shell"):
+    turn.update({"transition":f"{old}->gone","observed_at":ts})
+    d["action"]={"required":True,"reason":"pane-gone","edge_id":f"{a.id}:{seq}:pane-gone"}
    elif (old=="working" and st in ("idle","done","blocked")) or st=="blocked":
     before=turn.get("blocks_before"); after=parsed["blocks"]
     # Exactly one bounded retry closes the foreground-event/handoff-append race.

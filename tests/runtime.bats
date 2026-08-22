@@ -53,3 +53,13 @@ reduce() { python3 "$REPO_ROOT/bin/rzr-runtime.py" "$1" --id task --path "$ROZOR
   assert_success; wait; TEST_PIDS=""
   [ "$(printf '%s' "$output" | jq -r .turn.report_status)" = reported ]
 }
+
+@test "pane gone is actionable only after a live observation" {
+  write_handoff task ""
+  python3 "$REPO_ROOT/bin/rzr-runtime.py" reconcile --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground idle --seq 1 >/dev/null
+  run python3 "$REPO_ROOT/bin/rzr-runtime.py" event --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground gone --seq 2
+  assert_success; [ "$(printf '%s' "$output" | jq -r .action.reason)" = pane-gone ]
+  rm -f "$ROZORO_HOME/state/task.runtime.json"
+  run python3 "$REPO_ROOT/bin/rzr-runtime.py" reconcile --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground gone --seq 1
+  assert_success; [ "$(printf '%s' "$output" | jq -r .action.required)" = false ]
+}
