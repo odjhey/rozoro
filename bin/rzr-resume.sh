@@ -46,6 +46,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-resume.sh <id> ...)"
 rzr_validate_task_component "$ID"
+AGENT_NAME="$(rzr_task_agent_name "$ID")"
 if [ -z "$LABEL" ]; then
   IDENTITY="$(rzr_task_dir "$ID")/identity.json"
   [ -s "$IDENTITY" ] && LABEL="$(jq -r '.display_name // empty' "$IDENTITY" 2>/dev/null || true)"
@@ -109,6 +110,7 @@ do_resume() {
 
   rzr_meta_set "$ID" id "$ID"
   rzr_meta_set "$ID" display_name "$LABEL"
+  rzr_meta_set "$ID" herdr_agent_name "$AGENT_NAME"
   rzr_meta_set "$ID" pane "$pane"
   rzr_meta_set "$ID" tab "${tab:-}"
   rzr_meta_set "$ID" workspace "${ws:-}"
@@ -137,7 +139,7 @@ do_resume() {
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       ;;
   esac
-  start=(agent start "$ID" --kind "$HARNESS" --pane "$pane" -- "${pass[@]}")
+  start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane" -- "${pass[@]}")
 
   # Same transient-busy retry as spawn: `tab create` can return before the shell
   # is ready.

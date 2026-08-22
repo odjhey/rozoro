@@ -21,6 +21,17 @@ if [ -n "${FAKE_HERDR_BUSY_ONCE_MATCH:-}" ]; then
 fi
 
 if [ "${1:-}" = --session ]; then shift 2; fi
+
+# Match Herdr's real agent-name contract so tests cannot accept identities that
+# production rejects: 1-32 lowercase letters, digits, dashes, or underscores.
+if [ "${1:-}" = agent ] && [ "${2:-}" = start ]; then
+  agent_name="${3:-}"
+  case "$agent_name" in
+    ''|*[!a-z0-9_-]*) echo invalid_agent_name; exit 1 ;;
+  esac
+  [ "${#agent_name}" -le 32 ] || { echo invalid_agent_name; exit 1; }
+fi
+
 key="${1:-}"
 [ $# -gt 0 ] && shift
 for arg in "$@"; do key="$key.$arg"; done
