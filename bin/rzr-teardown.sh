@@ -43,5 +43,6 @@ if [ "$KEEP" -eq 0 ] && [ -n "$TAB" ]; then
     && echo "rzr: closed tab $TAB" \
     || echo "rzr: warning: could not close tab $TAB (already gone?)" >&2
 fi
-rm -f "$(rzr_meta_path "$ID")" "$(rzr_status_path "$ID")"
+rm -f "$(rzr_meta_path "$ID")" "$(rzr_status_path "$ID")" \
+  "$RZR_STATE/$ID.runtime.json" "$RZR_STATE/$ID.runtime.json.lock" "$RZR_STATE/$ID.runtime.json".*
 echo "rzr: removed task '$ID'"

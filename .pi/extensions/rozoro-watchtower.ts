@@ -91,10 +91,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function consumeLine(line: string): void {
-		const [time, id, status, marker] = line.split("\t");
-		if (!time || !id || !status) return;
-		if (!["idle", "working", "done", "blocked", "unknown", "gone", "shell"].includes(status)) return;
-		notify(id, status, seen.get(id), marker === "(initial)");
+		let projection: any;
+		try { projection = JSON.parse(line); } catch { return; }
+		const id = projection.id;
+		const status = projection.runtime_status;
+		if (!id || !status) return;
+		seen.set(id, status);
+		setStatus(`crew ${id}: ${status} / ${projection.task_status ?? "unknown"}`);
+		if (!projection.action?.required) return;
+		currentCtx?.ui.notify(`Crew ${id}: ${projection.action.reason}`, "info");
+		pi.sendMessage({ customType: "rozoro-event", content: "[rozoro event] Run the fixed Rozoro reconciliation command now and continue the watchtower loop.", display: true, details: projection }, { triggerTurn: true, deliverAs: "followUp" });
 	}
 
 	async function startChild(): Promise<void> {
@@ -107,7 +113,7 @@ export default function (pi: ExtensionAPI) {
 
 		stopChild();
 		let stderr = "";
-		const next = spawn(watchCommand, [], {
+		const next = spawn(watchCommand, ["--json"], {
 			cwd: repoRoot,
 			env: process.env,
 			stdio: ["ignore", "pipe", "pipe"],

@@ -144,11 +144,11 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro spawn <id> --cwd <repo> [opts]` | low-level `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `./bin/rozoro render <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
 | `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent unless `--refresh` deliberately replaces the link after a fresh restart |
-| `./bin/rozoro status <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
+| `./bin/rozoro status <id>` | pure schema-v2 projection separating persisted runtime, foreground, background, task, turn-report, and action state; unresolved items remain until explicitly acked |
 | `./bin/rozoro ack <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `./bin/rozoro register --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!./bin/rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the one documented registration path, not a fallback. `ROZORO_ROLE=watchtower` marks session identity independently of registration |
 | `./bin/rozoro watch [--once] [--wake\|--wake-codex\|--wake-herdr] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; `--wake` delivers a fixed nudge through the REGISTERED backend via a durable at-least-once ledger (bursts coalesce; the Herdr backend defers while the driver is working/blocked). `--wake-codex`/`--wake-herdr` force an explicit backend |
-| `./bin/rozoro reconcile [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' verdicts (`./bin/rozoro status --json`), flag vanished tasks, and ack exactly the snapshotted generation (never resolves a crew's OPEN items) |
+| `./bin/rozoro reconcile [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' v2 projections, flag vanished tasks, and ack exactly the snapshotted generation (never resolves OPEN items) |
 | `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `./bin/rozoro control <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
@@ -516,3 +516,22 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
 Not verified here: `copilot` harness launches.
+
+### Status v2 and background-work boundary
+
+`rozoro status` is read-only: it never contacts Herdr and never advances
+`.seen-blocks`. The watcher owns `state/<id>.runtime.json`, while the append-only
+handoff and `.acked-blocks-v2` own task reporting and FIFO acknowledgement.
+`runtime_status`, `foreground_status`, `background_activity`, `task_status`, and
+`turn_report_status` are independent axes; `done` is a runtime/crew assertion,
+not user acceptance.
+
+A crew may report `verdict: waiting` only with useful reason/pending text and no
+requested input. **Herdr 0.8.2 does not expose normalized background jobs**, so
+this Stage 1 release reports background support/count as unknown and treats every
+waiting report as `inconsistent-wait` (actionable). It does not inspect terminal
+text or Claude footers. Certified wait suppression and final-job wake are Stage
+2, gated on a Herdr release providing harness-neutral capability discovery,
+synchronized active counts/opaque job IDs, ordered revisions and final-zero
+success/failure/cancellation events. Acceptance and timeouts remain driver/user
+policy.

@@ -75,7 +75,7 @@ default harness. It does not create or rewrite the optional
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
-| **Read verdict** | `./bin/rozoro status <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
+| **Read state** | `./bin/rozoro status <id>` — pure v2 runtime/background/task/turn/action projection plus unresolved OPEN items; status reads never advance observation state |
 | **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
 | **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`./bin/rozoro register --harness <h>`) then run `./bin/rozoro watch --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver runs `./bin/rozoro reconcile` on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
 
@@ -256,7 +256,7 @@ record that makes teardown non-lossy:
   rounds so context is never lost. Because it is append-only, reading only the last
   block would let a later `done` bury an earlier open question — so `./bin/rozoro status`
   scans *all* blocks and keeps surfacing any OPEN item until you `./bin/rozoro ack` it (the
-  ack cursor `.acked-blocks` is separate from the miss-detector's `.seen-blocks` and
+  canonical ack cursor `.acked-blocks-v2` is separate from watcher-owned turn state and
   advances only on an explicit ack).
 - `session.json` — the Claude/Codex/Pi resume link. Pi uses its preallocated
   native session UUID; Claude and Codex use marker discovery.

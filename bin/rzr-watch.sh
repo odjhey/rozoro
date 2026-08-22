@@ -35,10 +35,11 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-ONCE=0 WAKE_REQUEST="" DRIVER="" ; declare -a WANT=()
+ONCE=0 JSON=0 WAKE_REQUEST="" DRIVER="" ; declare -a WANT=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) ONCE=1; shift ;;
+    --json) JSON=1; shift ;;
     --wake) WAKE_REQUEST=registered; shift ;;
     --wake-codex) WAKE_REQUEST=codex; shift ;;
     --wake-herdr) WAKE_REQUEST=herdr; shift ;;
@@ -138,7 +139,8 @@ for id in "${WANT[@]}"; do
   rzr_task_exists "$id" || { echo "rzr: skip unknown task '$id'" >&2; continue; }
   p=$(rzr_pane_of "$id"); s=$(rzr_agent_status "$p")
   rzr_status_set "$id" "$s"
-  printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"
+  projection=$(python3 "$RZR_BIN/rzr-runtime.py" reconcile --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$s")
+  if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"; fi
   case "$s" in
     gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2; continue ;;
   esac
@@ -212,9 +214,10 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
   prev="${SEEN[$i]}"
   [ "$st" = "$prev" ] && continue
   id="${IDS[$i]}"
-  printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
   SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
+  projection=$(python3 "$RZR_BIN/rzr-runtime.py" event --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$st")
+  if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"; fi
   DELIVERED_WAKE=0
   # A wake means "the crew FINISHED a turn", so only a settle that FOLLOWS
   # `working` is actionable. A just-spawned crew boots through `unknown`/`idle`
@@ -222,11 +225,7 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
   # and treating that first `idle` as a completed turn is what made the driver
   # nudge a crew that had not started. `blocked` still wakes regardless of the
   # prior state: a stuck crew always needs attention.
-  wake_this=0
-  case "$st" in
-    idle|done) [ "$prev" = working ] && wake_this=1 ;;
-    blocked)   wake_this=1 ;;
-  esac
+  wake_this=$(printf '%s' "$projection" | jq -r 'if .action.required then 1 else 0 end')
   if [ -n "$WAKE_BACKEND" ] && [ "$wake_this" -eq 1 ]; then
     # Persist the generation BEFORE any delivery attempt, then let the ledger
     # coalesce a burst to one outstanding nudge and defer while the driver is
@@ -243,4 +242,7 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
     break
   fi
 done
+if [ "$ONCE" -eq 0 ]; then
+  for id in "${IDS[@]}"; do python3 "$RZR_BIN/rzr-runtime.py" mark-stale --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" >/dev/null; done
+fi
 exit 0
