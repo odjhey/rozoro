@@ -1,161 +1,311 @@
-"""Synchronous protocol-v1 producer client with durable atomic spool fallback."""
+"""Synchronous protocol-v1 producer client with a durable outbox spool."""
 
 from __future__ import annotations
 
 import fcntl
-import json
 import os
 import socket
 import stat
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
 from . import protocol
 
 DEFAULT_TIMEOUT = 2.0
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+_FILE_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class ClientError(RuntimeError):
-    """The event was not proven durably accepted (and was spooled)."""
+    """The event was not proven durably accepted."""
 
 
 class UnsafePathError(ClientError):
     """A client state path failed ownership, type, or permission checks."""
 
 
-def _directory(path: Path, *, create: bool = True) -> Path:
+def _check_private(info: os.stat_result, label: str, *, directory: bool) -> None:
+    wanted = stat.S_ISDIR if directory else stat.S_ISREG
+    if not wanted(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise UnsafePathError(f"refusing unsafe {'directory' if directory else 'file'}: {label}")
+
+
+def _open_home(home: str | os.PathLike[str] | None, *, create: bool = True) -> tuple[Path, int]:
+    path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
     if create:
         try:
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError as exc:
             raise UnsafePathError(f"cannot create private directory {path}: {exc}") from exc
     try:
-        info = path.lstat()
-    except OSError as exc:
-        raise UnsafePathError(f"cannot inspect directory {path}: {exc}") from exc
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise UnsafePathError(f"refusing non-directory or symlink path: {path}")
-    if info.st_uid != os.geteuid():
-        raise UnsafePathError(f"refusing directory not owned by current user: {path}")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise UnsafePathError(f"refusing group/world-accessible directory: {path}")
-    return path
-
-
-def resolve_home(home: str | os.PathLike[str] | None = None) -> Path:
-    raw = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    return _directory(raw)
-
-
-def _open_private_regular(path: Path, flags: int, mode: int = 0o600) -> int:
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags, mode)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
-            raise UnsafePathError(f"refusing unsafe state file: {path}")
-        return fd
+        fd = os.open(path, _DIR_FLAGS)
+        _check_private(os.fstat(fd), str(path), directory=True)
+        return path, fd
     except Exception:
         if "fd" in locals():
             os.close(fd)
         raise
 
 
-def allocate_producer_seq(session_id: str, home: str | os.PathLike[str] | None = None) -> int:
-    """Atomically allocate the next positive sequence for one validated session ID."""
-    # Reuse protocol's identifier rules without making filesystem assumptions.
-    probe = {"v": 1, "type": "session.end", "event_id": "probe", "producer_seq": 1,
-             "session_id": session_id, "harness": "pi", "role": "crew", "task_id": "probe"}
-    protocol.validate(probe)
-    state = _directory(resolve_home(home) / "producer-seq")
-    path = state / f"{session_id}.seq"
-    fd = _open_private_regular(path, os.O_RDWR | os.O_CREAT)
+def resolve_home(home: str | os.PathLike[str] | None = None) -> Path:
+    path, fd = _open_home(home)
+    os.close(fd)
+    return path
+
+
+def _open_subdir(parent_fd: int, name: str) -> int:
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        raw = os.read(fd, 64)
-        if raw:
-            try:
-                previous = int(raw.decode("ascii"))
-            except (UnicodeDecodeError, ValueError) as exc:
-                raise UnsafePathError(f"invalid producer sequence state: {path}") from exc
-        else:
-            previous = 0
-        value = previous + 1
-        if value > protocol.MAX_INTEGER:
-            raise ClientError(f"producer sequence exhausted for {session_id}")
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, str(value).encode("ascii"))
-        os.ftruncate(fd, len(str(value)))
-        os.fsync(fd)
-        return value
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    else:
+        # Durably record first creation before storing state below it.
+        os.fsync(parent_fd)
+    fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+    try:
+        _check_private(os.fstat(fd), name, directory=True)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _open_file(directory_fd: int, name: str, flags: int, mode: int = 0o600) -> int:
+    fd = os.open(name, flags | _FILE_NOFOLLOW, mode, dir_fd=directory_fd)
+    try:
+        _check_private(os.fstat(fd), name, directory=False)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _read_file(directory_fd: int, name: str) -> bytes | None:
+    try:
+        fd = _open_file(directory_fd, name, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    try:
+        chunks = bytearray()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return bytes(chunks)
+            chunks.extend(chunk)
+            if len(chunks) > protocol.MAX_FRAME_BYTES:
+                raise ClientError(f"state file is oversized: {name}")
     finally:
         os.close(fd)
 
 
-def prepare_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None = None) -> dict[str, Any]:
-    """Copy and validate an event, allocating producer_seq only when the schema requires it and it's absent."""
+def _producer_event(event: Mapping[str, Any], *, allow_missing_seq: bool) -> dict[str, Any]:
     prepared = dict(event)
     message_type = prepared.get("type")
-    if isinstance(message_type, str) and protocol.requires_producer_seq(message_type) and "producer_seq" not in prepared:
-        session_id = prepared.get("session_id")
-        if not isinstance(session_id, str):
-            protocol.validate(prepared)  # raises the contract's deterministic error
-        prepared["producer_seq"] = allocate_producer_seq(session_id, home)
-    protocol.validate(prepared)
-    if "event_id" not in prepared:
-        raise protocol.ProtocolError("invalid-event", "producer events require event_id", "event_id")
+    if not isinstance(message_type, str) or not protocol.requires_producer_seq(message_type):
+        raise protocol.ProtocolError("invalid-event", "client accepts producer lifecycle events only", "type")
+    if allow_missing_seq and "producer_seq" not in prepared:
+        probe = dict(prepared, producer_seq=1)
+        protocol.validate(probe)
+    else:
+        protocol.validate(prepared)
     return prepared
 
 
-def _event_bytes(event: Mapping[str, Any]) -> bytes:
-    return protocol.encode(dict(event)).encode("utf-8")
+def _same_logical_event(candidate: Mapping[str, Any], reserved: Mapping[str, Any]) -> bool:
+    candidate_without_seq = {key: value for key, value in candidate.items() if key != "producer_seq"}
+    reserved_without_seq = {key: value for key, value in reserved.items() if key != "producer_seq"}
+    if candidate_without_seq != reserved_without_seq:
+        return False
+    return "producer_seq" not in candidate or candidate["producer_seq"] == reserved["producer_seq"]
+
+
+def _write_temp(directory_fd: int, data: bytes) -> str:
+    # tempfile has no dirfd API. Create unpredictable names relative to the held
+    # directory descriptor, never by resolving the directory pathname again.
+    for _ in range(100):
+        name = f".event-{os.getpid()}-{os.urandom(12).hex()}.tmp"
+        try:
+            fd = _open_file(directory_fd, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise ClientError("could not allocate spool temporary")
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return name
+
+
+def _publish_locked(spool_fd: int, event: Mapping[str, Any]) -> None:
+    """Publish under the spool lock; differing content can never be replaced."""
+    name = f"{event['event_id']}.json"
+    data = protocol.encode(dict(event)).encode("utf-8")
+    existing = _read_file(spool_fd, name)
+    if existing is not None:
+        if existing != data:
+            raise ClientError(f"spool collision for event_id {event['event_id']}")
+        return
+    temporary = _write_temp(spool_fd, data)
+    try:
+        # All publishers hold .lock, making check+atomic rename no-clobber.
+        os.rename(temporary, name, src_dir_fd=spool_fd, dst_dir_fd=spool_fd)
+        os.fsync(spool_fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=spool_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _locked_fd(directory_fd: int, name: str) -> int:
+    fd = _open_file(directory_fd, name, os.O_RDWR | os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _read_counter(fd: int, label: str) -> int:
+    os.lseek(fd, 0, os.SEEK_SET)
+    raw = os.read(fd, 64)
+    if not raw:
+        return 0
+    try:
+        value = int(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise UnsafePathError(f"invalid producer sequence state: {label}") from exc
+    if not 0 <= value <= protocol.MAX_INTEGER:
+        raise UnsafePathError(f"invalid producer sequence state: {label}")
+    return value
+
+
+def _save_counter(fd: int, value: int) -> None:
+    data = str(value).encode("ascii")
+    os.lseek(fd, 0, os.SEEK_SET)
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+    os.ftruncate(fd, len(data))
+    os.fsync(fd)
+
+
+def _max_spooled_seq(spool_fd: int, session_id: str) -> int:
+    """Recover reservations published before a crashed counter update."""
+    maximum = 0
+    for name in os.listdir(spool_fd):
+        if not name.endswith(".json"):
+            continue
+        data = _read_file(spool_fd, name)
+        if data is None:
+            continue
+        try:
+            reserved = protocol.decode(data)
+            _producer_event(reserved, allow_missing_seq=False)
+        except (protocol.ProtocolError, UnicodeError) as exc:
+            raise ClientError(f"malformed spool evidence must be repaired: {name}") from exc
+        if reserved["session_id"] == session_id:
+            maximum = max(maximum, reserved["producer_seq"])
+    return maximum
+
+
+def prepare_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """Durably reserve an envelope before it can be sent.
+
+    Repeating an event_id returns its original envelope and producer_seq. The
+    spool publication precedes advancement of the sequence cursor, so a crash
+    cannot leave an unpublished permanent reducer gap.
+    """
+    candidate = _producer_event(event, allow_missing_seq=True)
+    root, home_fd = _open_home(home)
+    del root
+    try:
+        spool_fd = _open_subdir(home_fd, "spool")
+        sequence_fd = _open_subdir(home_fd, "producer-seq")
+        try:
+            spool_lock = _locked_fd(spool_fd, ".lock")
+            try:
+                existing_data = _read_file(spool_fd, f"{candidate['event_id']}.json")
+                if existing_data is not None:
+                    existing = protocol.decode(existing_data)
+                    _producer_event(existing, allow_missing_seq=False)
+                    if not _same_logical_event(candidate, existing):
+                        raise ClientError(f"spool collision for event_id {candidate['event_id']}")
+                    return existing
+
+                session_id = candidate["session_id"]
+                counter_fd = _locked_fd(sequence_fd, f"{session_id}.seq")
+                try:
+                    previous = max(
+                        _read_counter(counter_fd, session_id),
+                        _max_spooled_seq(spool_fd, session_id),
+                    )
+                    supplied = candidate.get("producer_seq")
+                    if supplied is None:
+                        value = previous + 1
+                    else:
+                        value = supplied
+                        if value <= previous:
+                            raise ClientError("supplied producer_seq is not a new reservation")
+                    if value > protocol.MAX_INTEGER:
+                        raise ClientError(f"producer sequence exhausted for {session_id}")
+                    prepared = dict(candidate, producer_seq=value)
+                    _producer_event(prepared, allow_missing_seq=False)
+                    _publish_locked(spool_fd, prepared)
+                    _save_counter(counter_fd, value)
+                    return prepared
+                finally:
+                    os.close(counter_fd)
+            finally:
+                os.close(spool_lock)
+        finally:
+            os.close(sequence_fd)
+            os.close(spool_fd)
+    finally:
+        os.close(home_fd)
 
 
 def spool_event(event: Mapping[str, Any], home: str | os.PathLike[str] | None = None) -> Path:
-    """Durably preserve exactly one canonical copy, without replacing evidence."""
-    validated = dict(event)
-    protocol.validate(validated)
-    data = _event_bytes(validated)
-    root = resolve_home(home)
-    spool = _directory(root / "spool")
-    destination = spool / f"{validated['event_id']}.json"
-
-    # A prior uncertain attempt is success only when it preserves identical bytes.
+    """Idempotently verify/publish a fully allocated producer envelope."""
+    validated = _producer_event(event, allow_missing_seq=False)
+    root, home_fd = _open_home(home)
     try:
-        fd = _open_private_regular(destination, os.O_RDONLY)
-    except FileNotFoundError:
-        fd = -1
-    if fd >= 0:
+        spool_fd = _open_subdir(home_fd, "spool")
         try:
-            existing = os.read(fd, protocol.MAX_FRAME_BYTES + 1)
+            lock_fd = _locked_fd(spool_fd, ".lock")
+            try:
+                _publish_locked(spool_fd, validated)
+            finally:
+                os.close(lock_fd)
         finally:
-            os.close(fd)
-        if existing != data:
-            raise ClientError(f"spool collision for event_id {validated['event_id']}")
-        return destination
-
-    fd, temporary = tempfile.mkstemp(prefix=".event-", suffix=".tmp", dir=spool)
-    temp_path = Path(temporary)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb", closefd=True) as output:
-            output.write(data)
-            output.flush()
-            os.fsync(output.fileno())
-        # The fully fsynced temporary becomes visible in one atomic rename.
-        os.replace(temp_path, destination)
-        directory_fd = os.open(spool, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-        return destination
+            os.close(spool_fd)
     finally:
+        os.close(home_fd)
+    return root / "spool" / f"{validated['event_id']}.json"
+
+
+def _remove_reserved(event: Mapping[str, Any], home: str | os.PathLike[str]) -> None:
+    _, home_fd = _open_home(home, create=False)
+    try:
+        spool_fd = _open_subdir(home_fd, "spool")
         try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
+            lock_fd = _locked_fd(spool_fd, ".lock")
+            try:
+                name = f"{event['event_id']}.json"
+                data = _read_file(spool_fd, name)
+                expected = protocol.encode(dict(event)).encode("utf-8")
+                if data != expected:
+                    raise ClientError(f"spool identity changed before ACK cleanup: {event['event_id']}")
+                os.unlink(name, dir_fd=spool_fd)
+                os.fsync(spool_fd)
+            finally:
+                os.close(lock_fd)
+        finally:
+            os.close(spool_fd)
+    finally:
+        os.close(home_fd)
 
 
 class ProducerClient:
@@ -165,20 +315,20 @@ class ProducerClient:
         self.timeout = timeout
 
     def send(self, event: Mapping[str, Any]) -> dict[str, Any]:
-        """Send once; return ACK, or spool the same event and raise ClientError."""
+        """Reserve before send; retain reservation unless a matching ACK arrives."""
         prepared = prepare_event(event, self.home)
         try:
             ack = self._exchange(prepared)
         except Exception as exc:
-            path = spool_event(prepared, self.home)
-            raise ClientError(f"durable ACK uncertain; event retained at {path}: {exc}") from exc
+            raise ClientError(f"durable ACK uncertain; event retained in spool: {exc}") from exc
+        _remove_reserved(prepared, self.home)
         return ack
 
     def _exchange(self, event: Mapping[str, Any]) -> dict[str, Any]:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(self.timeout)
             connection.connect(str(self.socket_path))
-            connection.sendall(_event_bytes(event))
+            connection.sendall(protocol.encode(dict(event)).encode("utf-8"))
             chunks = bytearray()
             while True:
                 chunk = connection.recv(4096)
