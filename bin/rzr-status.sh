@@ -1,92 +1,45 @@
 #!/usr/bin/env bash
-# rzr-status.sh - read a task's latest handoff verdict + any unresolved open items.
-#
-# Usage:
-#   rzr-status.sh <id>                 human line: latest verdict + new-block flag
-#                                      + a leak-proof OPEN list (see below)
-#   rzr-status.sh <id> --json          machine-readable line for the watch loop
-#   rzr-status.sh <id> --peek          do not advance the seen-marker
-#
-# Parses tasks/<id>/handoff.md and reports two things:
-#   1. The LAST turn's verdict + whether a NEW block appeared since the previous
-#      call — the miss-detector: at an idle edge, new_block=false means the crew
-#      ended a turn without reporting, so nudge it (rzr-send) rather than trust
-#      herdr's ambiguous `done`.
-#   2. Leak-proof OPEN items: EVERY block is an open item if its verdict is
-#      needs-action|blocked|failed OR its inputs-needed is set — and it stays open
-#      until you explicitly `rzr-ack.sh <id>`. Reading only the last block would
-#      let a later `done` bury an earlier unanswered needs-action/question; this
-#      scan (modeled on firstmate's status drain) makes that impossible. The ack
-#      cursor (.acked-blocks) is advanced ONLY by rzr-ack — never by a status read
-#      — so the surfacing survives any number of status calls until you resolve it.
+# Pure composition of durable handoff and watcher-owned runtime projection.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
-
 [ $# -ge 1 ] || rzr_die "usage: rzr-status.sh <id> [--json] [--peek]"
-ID="$1"; shift
-JSON=0; PEEK=0
-for a in "$@"; do case "$a" in --json) JSON=1 ;; --peek) PEEK=1 ;; *) rzr_die "unknown flag $a" ;; esac; done
-
-FOLDER="$(rzr_task_dir "$ID")"
-HF="$FOLDER/handoff.md"
+ID="$1"; shift; JSON=0
+for a in "$@"; do case "$a" in --json) JSON=1 ;; --peek) : ;; *) rzr_die "unknown flag $a" ;; esac; done
+FOLDER="$(rzr_task_dir "$ID")"; HF="$FOLDER/handoff.md"
 [ -f "$HF" ] || rzr_die "no task folder for '$ID' ($HF missing)"
-
-RZR_HF="$HF" RZR_SEEN="$FOLDER/.seen-blocks" RZR_ACKED="$FOLDER/.acked-blocks" \
-RZR_ID="$ID" RZR_JSON="$JSON" RZR_PEEK="$PEEK" python3 - <<'PY'
-import os, re, json
-hf = open(os.environ["RZR_HF"]).read()
-starts = [m.start() for m in re.finditer(r'(?m)^##\s', hf)]
-count = len(starts)
-blocks = [hf[starts[i]:(starts[i+1] if i+1 < count else len(hf))] for i in range(count)]
-
-def field(block, name):
-    m = re.search(r'(?mi)^' + re.escape(name) + r':\s*(.*)$', block)
-    return m.group(1).strip() if m else ""
-def heading(block):
-    return block.splitlines()[0].lstrip('# ').strip() if block else ""
-
-OPEN_VERDICTS = {"needs-action", "blocked", "failed"}
-NONE_VALUES = {"", "none", "n/a", "na", "-"}
-def is_open(block):
-    if field(block, "verdict").lower() in OPEN_VERDICTS:
-        return True
-    return field(block, "inputs-needed").lower() not in NONE_VALUES
-
-last = blocks[-1] if blocks else ""
-verdict = field(last, "verdict") or ("(none)" if count else "(no-handoff-yet)")
-
-# seen cursor: auto-advanced every non-peek call -> drives the new-block flag.
-try:    seen = int(open(os.environ["RZR_SEEN"]).read().strip())
-except Exception: seen = 0
-new = count > seen
-if os.environ["RZR_PEEK"] != "1":
-    open(os.environ["RZR_SEEN"], "w").write(str(count))
-
-# ack cursor: advanced ONLY by rzr-ack. An open block at 1-based index > acked is
-# unresolved and keeps surfacing here regardless of later blocks or status reads.
-try:    acked = int(open(os.environ["RZR_ACKED"]).read().strip())
-except Exception: acked = 0
-open_items = [{"turn": i + 1, "heading": heading(b), "verdict": field(b, "verdict"),
-               "inputs_needed": field(b, "inputs-needed")}
-              for i, b in enumerate(blocks) if i + 1 > acked and is_open(b)]
-
-out = {"id": os.environ["RZR_ID"], "verdict": verdict, "blocks": count,
-       "new_block": new, "heading": heading(last), "reason": field(last, "reason"),
-       "pending": field(last, "pending"), "inputs_needed": field(last, "inputs-needed"),
-       "artifacts": field(last, "artifacts"),
-       "acked_through": acked, "open_items": open_items, "unresolved": len(open_items)}
-if os.environ["RZR_JSON"] == "1":
-    print(json.dumps(out)); raise SystemExit
-
-flag = "NEW" if new else "same"
-print(f'{out["id"]:<16} verdict={out["verdict"]:<13} blocks={count} [{flag}]  {out["heading"]}')
-if open_items:
-    print(f'  ⚠ {len(open_items)} unresolved open item(s) — resolve with: rozoro ack {out["id"]}')
-    for it in open_items:
-        line = f'      turn {it["turn"]} [{it["verdict"] or "?"}] {it["heading"]}'
-        if it["inputs_needed"].lower() not in NONE_VALUES:
-            line += f'  — needs: {it["inputs_needed"]}'
-        print(line)
-if verdict.startswith("(no-handoff") or (not new and not verdict.startswith("(")):
-    print("  ^ ended a turn with no fresh handoff block — nudge the crew to report")
+RZR_ID="$ID" RZR_HF="$HF" RZR_ACK2="$FOLDER/.acked-blocks-v2" RZR_ACK="$FOLDER/.acked-blocks" \
+RZR_RUNTIME="$RZR_STATE/$ID.runtime.json" RZR_LEGACY="$RZR_STATE/$ID.status" RZR_JSON="$JSON" \
+RZR_PARSER="$RZR_BIN/rzr-handoff.py" python3 - <<'PY'
+import importlib.util,json,os
+spec=importlib.util.spec_from_file_location("handoff",os.environ["RZR_PARSER"]); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+p=m.parse(os.environ["RZR_HF"],os.environ["RZR_ACK2"],os.environ["RZR_ACK"])
+bg={"supported":None,"state":"unknown","active_count":None}
+runtime="unknown"; fg=None; freshness="absent"; turn="unobserved"; action={"required":False,"reason":None}
+try:
+ r=json.load(open(os.environ["RZR_RUNTIME"])); runtime=r.get("runtime_status","unknown"); fg=r.get("foreground_status"); freshness=(r.get("source") or {}).get("freshness","current"); bg.update(r.get("background_activity") or {}); turn=(r.get("turn") or {}).get("report_status","unobserved"); action.update(r.get("action") or {})
+except Exception:
+ try: fg=open(os.environ["RZR_LEGACY"]).read().strip(); runtime=fg or "unknown"; freshness="legacy"
+ except Exception: pass
+latest=p["latest"]; f=(latest or {}).get("fields",{}); verdict=f.get("verdict") or None
+verdict_norm=(verdict or "").lower()
+inconsist=[]
+waiting_ok=(verdict_norm=="waiting" and not p["unresolved"] and latest and latest["valid"] and freshness=="current" and bg.get("supported") is True and bg.get("state")=="active" and (bg.get("active_count") or 0)>0)
+if p["protocol_errors"]: task="protocol-error"
+elif not latest: task="no-handoff"
+elif p["unresolved"]: task="open-items"
+elif verdict_norm=="waiting":
+ task="waiting" if waiting_ok else "reported-incomplete"
+ if not waiting_ok: inconsist.append("waiting handoff is not certified by current supported background activity")
+elif verdict_norm=="done": task="reported-done"
+elif verdict_norm=="failed": task="reported-failed"
+else: task="reported-incomplete"
+if inconsist and not action["required"]: action={"required":True,"reason":"inconsistent-wait"}
+out={"schema_version":2,"id":os.environ["RZR_ID"],"runtime_status":runtime,"foreground_status":fg,"runtime_freshness":freshness,"background_activity":bg,"task_status":task,"handoff_verdict":verdict,"verdict":verdict or "(no-handoff-yet)","turn_report_status":turn,"action_required":bool(action.get("required")),"action_reason":action.get("reason"),"blocks":p["blocks"],"acked_through":p["acked_through"],"acked_source":p["acked_source"],"unresolved":p["unresolved"],"open_items":p["open_items"],"protocol_errors":p["protocol_errors"],"inconsistencies":inconsist,"heading":(latest or {}).get("heading",""),"reason":f.get("reason",""),"pending":f.get("pending",""),"inputs_needed":f.get("inputs-needed",""),"artifacts":f.get("artifacts","")}
+if os.environ["RZR_JSON"]=="1": print(json.dumps(out,sort_keys=True,separators=(",",":")))
+else:
+ print(f'{out["id"]:<16} runtime={runtime} foreground={fg or "unknown"} background={bg["state"]} task={task} turn={turn}')
+ for e in p["protocol_errors"]: print("  ! protocol: "+e)
+ for e in inconsist: print("  ! "+e)
+ if p["open_items"]: print(f'  ⚠ {len(p["open_items"])} unresolved open item(s)')
+ for i in p["open_items"]: print(f'  OPEN turn {i["turn"]} [{i["verdict"] or "?"}] {i["heading"]}')
 PY

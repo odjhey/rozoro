@@ -44,7 +44,7 @@ if [ -n "$STATUSES" ]; then
   while IFS= read -r tid; do
     [ -n "$tid" ] || continue
     if [ -f "$(rzr_task_dir "$tid")/handoff.md" ]; then
-      line="$("$RZR_BIN/rzr-status.sh" "$tid" --json --peek 2>/dev/null || true)"
+      line="$("$RZR_BIN/rzr-status.sh" "$tid" --json 2>/dev/null || true)"
       [ -n "$line" ] && reports="$reports$line
 "
     elif rzr_task_exists "$tid"; then
@@ -71,5 +71,5 @@ if [ "$JSON" -eq 1 ]; then
 fi
 
 echo "reconciled driver $(basename "$DIR") through generation $GEN"
-printf '%s' "$REPORTS" | jq -r '.[] | "  \(.id): verdict=\(.verdict) blocks=\(.blocks) unresolved=\(.unresolved)"' 2>/dev/null || true
+printf '%s' "$REPORTS" | jq -r '.[] | "  \(.id): runtime=\(.runtime_status) task=\(.task_status) turn=\(.turn_report_status) action=\(.action_reason // "none")"' 2>/dev/null || true
 printf '%s' "$VANISHED" | jq -r '.[] | "  \(.) : vanished (no task folder)"' 2>/dev/null || true

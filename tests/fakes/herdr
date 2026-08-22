@@ -73,8 +73,9 @@ case "$key" in
     if [ -f "$FAKE_HERDR_ROOT/status.$pane" ]; then
       kind=""; [ -f "$FAKE_HERDR_ROOT/kind.$pane" ] && kind="$(cat "$FAKE_HERDR_ROOT/kind.$pane")"
       ready=false; [ -f "$FAKE_HERDR_ROOT/ready.$pane" ] && ready="$(cat "$FAKE_HERDR_ROOT/ready.$pane")"
-      printf '{"result":{"type":"agent_info","agent":{"agent":"%s","agent_status":"%s","interactive_ready":%s,"pane_id":"%s"}}}\n' \
-        "$kind" "$(cat "$FAKE_HERDR_ROOT/status.$pane")" "$ready" "$pane"
+      seq=""; [ -f "$FAKE_HERDR_ROOT/seq.$pane" ] && seq="$(cat "$FAKE_HERDR_ROOT/seq.$pane")"
+      printf '{"result":{"type":"agent_info","agent":{"agent":"%s","agent_status":"%s","interactive_ready":%s,"pane_id":"%s","state_change_seq":%s}}}\n' \
+        "$kind" "$(cat "$FAKE_HERDR_ROOT/status.$pane")" "$ready" "$pane" "${seq:-null}"
     else exit 1; fi ;;
   pane.get.*) exit 1 ;;
   *) printf '{"result":{}}\n' ;;

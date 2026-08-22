@@ -26,7 +26,6 @@ export default function (pi: ExtensionAPI) {
 	let shuttingDown = false;
 	let knownTasks = new Set<string>();
 	const retiredChildren = new WeakSet<ChildProcess>();
-	const freshTasks = new Set<string>();
 	const seen = new Map<string, string>();
 
 	const setStatus = (text?: string) => currentCtx?.ui.setStatus(STATUS_KEY, text);
@@ -53,48 +52,17 @@ export default function (pi: ExtensionAPI) {
 		child = undefined;
 	}
 
-	function notify(id: string, status: string, previous: string | undefined, initial: boolean): void {
-		const newlyTracked = freshTasks.delete(id);
-		seen.set(id, status);
-		setStatus(`crew ${id}: ${status}`);
-
-		// Startup reconciliation establishes a baseline without waking the model for
-		// every task left over from an earlier watchtower session.
-		if (previous === undefined && !newlyTracked) return;
-		if (previous === status) return;
-
-		currentCtx?.ui.notify(
-			`Crew ${id}: ${previous ?? "new"} → ${status}`,
-			status === "unknown" || status === "gone" ? "warning" : "info",
-		);
-		// A wake means the crew FINISHED a turn, so idle/done only counts when it
-		// follows `working`. A freshly-spawned crew boots through idle before it ever
-		// starts (shell → unknown → idle → working → done); treating that first idle
-		// as a completed turn made the driver nudge a crew that had not begun.
-		// `blocked`/`gone` always surface — a stuck or vanished crew needs attention.
-		const settledFromWork = (status === "idle" || status === "done") && previous === "working";
-		if (!(settledFromWork || status === "blocked" || status === "gone")) return;
-
-		pi.sendMessage(
-			{
-				customType: "rozoro-event",
-				content:
-					`[rozoro event] Crew '${id}' changed from ${previous ?? (initial ? "new" : "unknown")} to ${status}. ` +
-					`Run './bin/rozoro status ${id}' now, inspect the handoff verdict, and continue the watchtower loop.`,
-				display: true,
-				details: { id, status, previous, initial },
-			},
-			// The monitor itself never occupies a tool call. If the watchtower is busy
-			// for another reason, serialize this real edge after that turn instead.
-			{ triggerTurn: true, deliverAs: "followUp" },
-		);
-	}
-
 	function consumeLine(line: string): void {
-		const [time, id, status, marker] = line.split("\t");
-		if (!time || !id || !status) return;
-		if (!["idle", "working", "done", "blocked", "unknown", "gone", "shell"].includes(status)) return;
-		notify(id, status, seen.get(id), marker === "(initial)");
+		let projection: any;
+		try { projection = JSON.parse(line); } catch { return; }
+		const id = projection.id;
+		const status = projection.runtime_status;
+		if (!id || !status) return;
+		seen.set(id, status);
+		setStatus(`crew ${id}: ${status} / ${projection.turn?.report_status ?? "unknown"}`);
+		if (!projection.action?.required) return;
+		currentCtx?.ui.notify(`Crew ${id}: ${projection.action.reason}`, "info");
+		pi.sendMessage({ customType: "rozoro-event", content: "[rozoro event] Run the fixed Rozoro reconciliation command now and continue the watchtower loop.", display: true, details: projection }, { triggerTurn: true, deliverAs: "followUp" });
 	}
 
 	async function startChild(): Promise<void> {
@@ -107,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 
 		stopChild();
 		let stderr = "";
-		const next = spawn(watchCommand, [], {
+		const next = spawn(watchCommand, ["--json"], {
 			cwd: repoRoot,
 			env: process.env,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -147,14 +115,8 @@ export default function (pi: ExtensionAPI) {
 
 	async function reconcileTasks(): Promise<void> {
 		const next = await taskIds();
-		for (const id of next) {
-			if (!knownTasks.has(id)) freshTasks.add(id);
-		}
 		for (const id of knownTasks) {
-			if (!next.has(id)) {
-				seen.delete(id);
-				freshTasks.delete(id);
-			}
+			if (!next.has(id)) seen.delete(id);
 		}
 		knownTasks = next;
 		scheduleRestart();

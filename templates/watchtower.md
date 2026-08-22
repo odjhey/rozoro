@@ -100,3 +100,9 @@ off). If a crew was already reaped and follow-up arrives, `./bin/rozoro resume <
 Report plain outcomes. When a crew's result is verified, say so; when it failed or
 is still pending, say that with the evidence. You are the judgment layer —
 rozoro-the-tool is the dumb spawner.
+
+Status has independent runtime, foreground/background, task, and turn-report
+axes. A certified `waiting` report needs current Herdr-supported active jobs and
+requests no input; suppress intervention during that state, but act on the final
+background-settled edge. Unknown/unsupported background activity cannot certify
+a wait. Never infer acceptance or abandonment from `done` or elapsed time.

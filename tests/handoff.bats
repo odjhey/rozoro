@@ -1,77 +1,67 @@
 #!/usr/bin/env bats
 load test_helper/common
 
-@test "status reports no handoff" {
+block() { printf '%s\n' "## turn $1 — report" "verdict: $2" "reason: ${3:-}" "did: work" "pending: none" "inputs-needed: none" "artifacts: none"; }
+
+@test "status v2 is pure and stable with no handoff" {
   write_handoff task ""
-  run rzr-status.sh task --json
-  assert_success
-  assert_output_contains '"verdict": "(no-handoff-yet)"'
+  before=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort)
+  run rzr-status.sh task --json; assert_success; first="$output"
+  run rzr-status.sh task --json; assert_success; [ "$output" = "$first" ]
+  after=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort); [ "$before" = "$after" ]
+  assert_output_contains '"task_status":"no-handoff"'; [ ! -e "$ROZORO_HOME/tasks/task/.seen-blocks" ]
 }
 
-@test "one done block is projected" {
-  write_handoff task '## turn 1 — complete' 'verdict: done' 'reason:' 'pending: none' 'inputs-needed: none' 'artifacts: abc123'
-  run rzr-status.sh task --json
-  assert_success
-  assert_output_contains '"verdict": "done"'
-  assert_output_contains '"blocks": 1'
-  assert_output_contains '"artifacts": "abc123"'
+@test "canonical parser ignores content H2 and reports protocol errors" {
+  write_handoff task "$(block 1 done)" '## embedded heading' 'prose'
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"blocks":1'; assert_output_contains 'noncanonical H2'
 }
 
-@test "open input remains surfaced after later done" {
-  write_handoff task '## turn 1 — question' 'verdict: needs-action' 'inputs-needed: choose A or B' '## turn 2 — waiting' 'verdict: done' 'inputs-needed: none'
-  run rzr-status.sh task --json
-  assert_success
-  assert_output_contains '"verdict": "done"'
-  assert_output_contains '"unresolved": 1'
-  assert_output_contains 'choose A or B'
+@test "open input survives later done until FIFO acknowledgement" {
+  write_handoff task '## turn 1 — question' 'verdict: needs-action' 'reason: choose' 'did: asked' 'pending: choice' 'inputs-needed: choose A or B' 'artifacts: none' "$(block 2 done)"
+  run rzr-status.sh task --json; assert_success; assert_output_contains '"unresolved":1'; assert_output_contains 'choose A or B'
+  run rzr-ack.sh task --through 1; assert_success
+  [ "$(cat "$ROZORO_HOME/tasks/task/.acked-blocks-v2")" = 1 ]
+  run rzr-status.sh task --json; assert_success; assert_output_contains '"unresolved":0'
 }
 
-@test "acknowledgement cursor resolves FIFO blocks through boundary" {
-  write_handoff task '## turn 1' 'verdict: failed' 'inputs-needed: none' '## turn 2' 'verdict: blocked' 'inputs-needed: help' '## turn 3' 'verdict: needs-action' 'inputs-needed: answer'
-  run rzr-ack.sh task --through 2
-  assert_success
-  [ "$(cat "$ROZORO_HOME/tasks/task/.acked-blocks")" = 2 ]
-  run rzr-status.sh task --json --peek
-  assert_output_contains '"unresolved": 1'
-  assert_output_contains '"turn": 3'
+@test "legacy H2 acknowledgement maps to canonical boundary" {
+  write_handoff task "$(block 1 done)" '## notes' 'x' '## turn 2 — blocked' 'verdict: blocked' 'reason: help' 'did: work' 'pending: help' 'inputs-needed: help' 'artifacts: none'
+  printf '2\n' > "$ROZORO_HOME/tasks/task/.acked-blocks"
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"acked_source":"legacy-mapped"'; assert_output_contains '"acked_through":1'; assert_output_contains '"unresolved":1'
 }
 
-@test "malformed and missing fields use explicit fallbacks" {
-  write_handoff task '## turn 1' 'this is not a field' '## turn 2' 'reason: incomplete'
-  run rzr-status.sh task --json
-  assert_success
-  assert_output_contains '"verdict": "(none)"'
-  assert_output_contains '"reason": "incomplete"'
+@test "invalid waiting is protocol error and old Herdr cannot certify waiting" {
+  write_handoff task '## turn 1 — waiting' 'verdict: waiting' 'reason:' 'did: launched' 'pending: none' 'inputs-needed: question' 'artifacts: none'
+  run rzr-status.sh task --json; assert_success; assert_output_contains '"task_status":"protocol-error"'; assert_output_contains 'waiting requires'
+  write_handoff task '## turn 1 — waiting' 'verdict: waiting' 'reason: job runs' 'did: launched' 'pending: consume job result' 'inputs-needed: none' 'artifacts: none'
+  run rzr-status.sh task --json; assert_success; assert_output_contains '"action_reason":"inconsistent-wait"'; assert_output_contains '"supported":null'
 }
 
-@test "Markdown headings inside content currently count as handoff blocks" {
-  write_handoff task '## turn 1' 'verdict: done' 'did: notes follow' '## embedded heading' 'not-a-field'
-  run rzr-status.sh task --json
-  assert_success
-  assert_output_contains '"blocks": 2'
-  assert_output_contains '"heading": "embedded heading"'
+@test "status task_status is case-insensitive on the verdict field" {
+  write_handoff task "$(block 1 Done)"
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"task_status":"reported-done"'; assert_output_contains '"handoff_verdict":"Done"'
+
+  write_handoff task '## turn 1 — report' 'verdict: FAILED' 'reason: broke' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: none'
+  run rzr-ack.sh task --through 1; assert_success
+  run rzr-status.sh task --json; assert_success
+  assert_output_contains '"task_status":"reported-failed"'
 }
 
-@test "characterization: status read mutates reader-relative seen cursor" {
-  write_handoff task '## turn 1' 'verdict: done' 'inputs-needed: none'
-  run rzr-status.sh task --json
-  assert_output_contains '"new_block": true'
-  run rzr-status.sh task --json
-  assert_output_contains '"new_block": false'
-  [ "$(cat "$ROZORO_HOME/tasks/task/.seen-blocks")" = 1 ]
+@test "duplicate and skipped turns are deterministic protocol errors" {
+  write_handoff task "$(block 1 done)" "$(block 3 done)"
+  run rzr-status.sh task --json; assert_success; assert_output_contains 'turn sequence expected 2, got 3'
 }
 
-@test "peek is pure with respect to the seen cursor" {
-  write_handoff task '## turn 1' 'verdict: done'
-  run rzr-status.sh task --json --peek
-  assert_success
+@test "parallel independent readers are equivalent and filesystem-pure" {
+  write_handoff task '## turn 1 — done' 'verdict: done' 'reason:' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: none'
+  before=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort)
+  for n in 1 2 3 4 5 6 7 8; do rzr-status.sh task --json > "$BATS_TEST_TMPDIR/status.$n" & register_pid "$!"; done
+  wait; TEST_PIDS=""; first=$(cat "$BATS_TEST_TMPDIR/status.1")
+  for n in 2 3 4 5 6 7 8; do [ "$(cat "$BATS_TEST_TMPDIR/status.$n")" = "$first" ]; done
+  after=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort); [ "$before" = "$after" ]
   [ ! -e "$ROZORO_HOME/tasks/task/.seen-blocks" ]
-}
-
-@test "concurrent readers leave a complete numeric cursor" {
-  write_handoff task '## turn 1' 'verdict: done' '## turn 2' 'verdict: done'
-  for _ in 1 2 3 4 5 6 7 8; do rzr-status.sh task --json >/dev/null & register_pid "$!"; done
-  wait
-  TEST_PIDS=""
-  [ "$(cat "$ROZORO_HOME/tasks/task/.seen-blocks")" = 2 ]
 }

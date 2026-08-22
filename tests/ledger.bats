@@ -68,3 +68,11 @@ drive() { run bash -c ". \"$REPO_ROOT/bin/rzr-lib.sh\"; dir=\"$ROZORO_HOME/watch
   assert_success
   assert_output_contains 'gen=24 tasks=24'
 }
+
+@test "action edge ID is idempotent across concurrent watchers" {
+  dir="$ROZORO_HOME/watchtowers/d"; mkdir -p "$dir"
+  for _ in 1 2 3 4 5 6 7 8; do bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$dir' task done 'task:42:turn-settled'" & register_pid "$!"; done
+  wait; TEST_PIDS=""
+  [ "$(jq -r .generation "$dir/pending.json")" = 1 ]
+  [ "$(jq -r .tasks.task.edge_id "$dir/pending.json")" = task:42:turn-settled ]
+}

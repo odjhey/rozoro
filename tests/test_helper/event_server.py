@@ -27,8 +27,11 @@ def serve(conn):
             pass
         return
     for item in events:
-        pane, workspace, status, agent = item.split(",", 3)
+        fields = item.split(",")
+        pane, workspace, status, agent = fields[:4]
+        seq = int(fields[4]) if len(fields) > 4 and fields[4] else None
         msg = {"event":"pane.agent_status_changed","data":{"pane_id":pane,"workspace_id":workspace,"agent_status":status,"agent":agent}}
+        if seq is not None: msg["data"]["state_change_seq"] = seq
         conn.sendall((json.dumps(msg) + "\n").encode())
     if mode == "hold": time.sleep(5)
 

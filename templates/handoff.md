@@ -7,7 +7,7 @@ input — APPEND (never overwrite, never edit an earlier block) one block to
 {{FOLDER}}/handoff.md:
 
   ## turn <n> — <short what-happened>
-  verdict:       done | needs-action | failed | blocked
+  verdict:       done | waiting | needs-action | failed | blocked
   reason:        <one line; required unless verdict is done>
   did:           <what you changed / verified this turn>
   pending:       <what is left, or "none">
@@ -17,9 +17,10 @@ input — APPEND (never overwrite, never edit an earlier block) one block to
 Rules:
 - Append-only. Each turn adds a new block; the file is the full history of this
   task, so a future session (or I) can resume from it alone.
-- `verdict` is how I tell "done" from "needs-action" — set it honestly every turn.
-- If you background a long command and your turn ends before it finishes, do NOT
-  write verdict: done — use needs-action (or keep working) so I know to wait.
+- `verdict` is how I tell completion, waiting, and action requests apart.
+- Use `waiting` only while harness-owned background work is active, with useful
+  reason/pending text and `inputs-needed: none`; report again after consuming it.
+- If background capability is unavailable, `waiting` is unverified and actionable.
 - Never delete or rewrite the handoff. It is the durable record of this task.
 - This applies to resumed turns too: after answering a follow-up, still append a
   fresh block before you stop.
