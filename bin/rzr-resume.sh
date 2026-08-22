@@ -191,6 +191,7 @@ do_resume() {
     if sout=$(rzr_herdr "${start[@]}" 2>&1); then rc=0; break; fi
     case "$sout" in
       *agent_pane_busy*|*"not an available shell"*) sleep 0.5; attempt=$((attempt + 1)) ;;
+      *agent_not_ready*) rzr_wait_agent_ready "$pane" 20 && rc=0; break ;;
       *) break ;;
     esac
   done
