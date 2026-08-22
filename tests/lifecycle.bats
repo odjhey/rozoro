@@ -6,8 +6,10 @@ load test_helper/common
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'pane=p1'
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'harness=claude'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tcreate'
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tclaude\t--pane\tp1'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
@@ -26,6 +28,16 @@ load test_helper/common
   assert_failure
   assert_output_contains 'terminal start error'
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'agent_start=failed'
+}
+
+@test "fake Herdr counter tolerates long agent-start argv while validating the name" {
+  long_arg="$(printf '%0300d' 0)"
+  run herdr agent start valid-agent --kind claude --pane p1 -- "$long_arg"
+  assert_success
+
+  run herdr agent start 'INVALID-AGENT' --kind claude --pane p1
+  assert_failure
+  assert_output_contains 'invalid_agent_name'
 }
 
 @test "send fails closed for unknown and dead targets" {
@@ -74,7 +86,27 @@ load test_helper/common
   run rzr-resume.sh task --prompt 'continue'
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-1'
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\ttask\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+}
+
+@test "ULID durable task key launches and resumes with one Herdr-safe identity" {
+  id='fix-syntax-isolation--01M0KK771Z1PV4428XKJ3MJPC7'
+  mkdir -p "$ROZORO_HOME/tasks/$id"
+  printf '{"session_id":"uuid-2","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/$id/session.json"
+
+  run rzr-spawn.sh "$id" --cwd "$TEST_ROOT"
+  assert_success
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$id.meta")"
+  [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
+  [ "$agent_name" != "$id" ]
+
+  run rzr-teardown.sh "$id" --force
+  assert_success
+  run rzr-resume.sh "$id"
+  assert_success
+  [ "$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$id.meta")" = "$agent_name" ]
+  [ "$(grep -F $'CALL\tagent\tstart\t'"$agent_name" "$FAKE_HERDR_LOG" | wc -l)" -eq 2 ]
 }
 
 @test "resume refuses a currently tracked task" {
@@ -96,6 +128,11 @@ load test_helper/common
   [ -f "$ROZORO_HOME/tasks/$key1/brief.md" ]
   [ -f "$ROZORO_HOME/tasks/$key2/brief.md" ]
   assert_file_contains "$ROZORO_HOME/state/$key1.meta" 'display_name=same-name'
+  agent_name1="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$key1.meta")"
+  agent_name2="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/$key2.meta")"
+  [[ "$agent_name1" =~ ^[a-z0-9_-]{1,32}$ ]]
+  [ "$agent_name1" != "$agent_name2" ]
+  assert_file_contains "$ROZORO_HOME/tasks/$key1/identity.json" '"herdr_agent_name"'
 }
 
 @test "reuse after teardown preserves the old durable record" {
