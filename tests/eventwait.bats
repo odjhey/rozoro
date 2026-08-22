@@ -43,7 +43,7 @@ load test_helper/common
 }
 
 @test "closed stdout is handled as success" {
-  start_event_server events 'p1,w1,working,agent'
+  start_event_server flood
   run bash -c 'set -o pipefail; python3 "$1" "$2" 1 p1 | head -n 1' _ "$REPO_ROOT/bin/herdr-eventwait.py" "$FAKE_HERDR_SOCKET"
   assert_success
   [ "$output" = '@subscribed' ]
