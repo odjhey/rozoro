@@ -74,14 +74,37 @@ class ReducerTests(unittest.TestCase):
         state = reduce_event(state, event("background.snapshot", 4, active_count=0)).state
         self.assertEqual((state.background, state.active_count), ("clear", 0))
 
-    def test_stale_sequence_and_stop_before_start_replay(self):
-        stopped = reduce_event(LifecycleState(), event("background.stop", 9, job_id="job")).state
-        replay = reduce_event(stopped, event("background.start", 8, job_id="job"))
-        self.assertFalse(replay.applied)
-        self.assertEqual(replay.reason, "stale-producer-seq")
-        self.assertEqual(replay.state.active_jobs, frozenset())
-        duplicate = reduce_event(stopped, event("background.stop", 9, job_id="job"))
+    def test_all_sequence_arrival_permutations_replay_without_false_quiescence(self):
+        ordered = (
+            event("turn.stop", 1, background_active=False),
+            event("background.start", 2, job_id="job"),
+            event("background.stop", 3, job_id="job"),
+        )
+        expected = None
+        for arrival in itertools.permutations(ordered):
+            state = LifecycleState()
+            for item in arrival:
+                result = reduce_event(state, item)
+                state = result.state
+                if result.reason == "producer-seq-gap":
+                    self.assertNotEqual(state.availability, "quiescent")
+            projection = (state.foreground, state.background, state.availability,
+                          state.producer_seq, state.active_jobs, state.pending_events)
+            expected = projection if expected is None else expected
+            self.assertEqual(projection, expected)
+        self.assertEqual(expected[:4], ("stopped", "clear", "quiescent", 3))
+
+    def test_duplicate_or_applied_lower_sequence_is_stale(self):
+        state = reduce_event(LifecycleState(), event("turn.start", 1)).state
+        duplicate = reduce_event(state, event("turn.start", 1))
         self.assertFalse(duplicate.applied)
+        self.assertEqual(duplicate.reason, "stale-producer-seq")
+
+    def test_active_boolean_is_not_an_exact_count_baseline(self):
+        state = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=True)).state
+        self.assertEqual(state.availability, "waiting-background")
+        state = reduce_event(state, event("background.stop", 2, job_id="possibly-known")).state
+        self.assertEqual((state.background, state.availability), ("unknown", "unknown"))
 
     def test_turn_stop_unknown_fails_closed(self):
         state = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=None)).state
@@ -95,13 +118,20 @@ class ReducerTests(unittest.TestCase):
         self.assertEqual((state.background, state.availability), ("clear", "gone"))
         state = observe_gone(state)
         self.assertEqual(state.availability, "gone")
+        registered = reduce_event(state, event("session.register", 3)).state
+        started = reduce_event(registered, event("turn.start", 4)).state
+        self.assertTrue(started.session_ended)
+        self.assertEqual(started.availability, "gone")
 
     def test_disconnected_adapter_is_unknown_without_erasing_facts(self):
         state = reduce_event(LifecycleState(), event("turn.stop", 1, background_active=False)).state
         disconnected = set_adapter_connected(state, False)
         self.assertEqual(disconnected.availability, "unknown")
         self.assertEqual((disconnected.foreground, disconnected.background), ("stopped", "clear"))
-        self.assertEqual(set_adapter_connected(disconnected, True).availability, "quiescent")
+        reconnected = set_adapter_connected(disconnected, True)
+        self.assertEqual(reconnected.availability, "unknown")
+        recertified = reduce_event(reconnected, event("background.snapshot", 2, active_count=0)).state
+        self.assertEqual(recertified.availability, "quiescent")
 
     def test_report_done_never_changes_runtime_or_implies_acceptance(self):
         state = with_report(LifecycleState(), verdict="done", status="reported")
@@ -159,7 +189,7 @@ class V2CompatibilityTests(unittest.TestCase):
             "foreground_status": "idle",
             "runtime_freshness": "current",
             "background_activity": {"supported": None, "state": "unknown", "jobs": []},
-            "handoff_verdict": "done",
+            "handoff_verdict": "Done",
             "turn_report_status": "reported",
         }
         state = map_v2_projection({}, status)
@@ -170,6 +200,17 @@ class V2CompatibilityTests(unittest.TestCase):
     def test_blocked_and_gone_map_without_report_coupling(self):
         self.assertEqual(map_v2_projection(self.runtime("blocked")).availability, "blocked")
         self.assertEqual(map_v2_projection(self.runtime("gone")).availability, "gone")
+
+    def test_shell_cannot_be_quiescent_even_with_legacy_clear(self):
+        state = map_v2_projection(self.runtime("shell", True, "clear"))
+        self.assertEqual((state.foreground, state.availability), ("unknown", "unknown"))
+
+    def test_v2_event_sequence_does_not_seed_native_producer_order(self):
+        state = map_v2_projection(self.runtime("working"))
+        self.assertEqual(state.producer_seq, 0)
+        native = reduce_event(state, event("turn.start", 1))
+        self.assertTrue(native.applied)
+        self.assertEqual(native.state.producer_seq, 1)
 
 
 if __name__ == "__main__":

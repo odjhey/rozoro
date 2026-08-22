@@ -28,6 +28,15 @@ class ReportState:
 
 
 @dataclass(frozen=True)
+class PendingEvent:
+    producer_seq: int
+    fields: tuple[tuple[str, Any], ...]
+
+    def thaw(self) -> dict[str, Any]:
+        return dict(self.fields)
+
+
+@dataclass(frozen=True)
 class LifecycleState:
     foreground: str = "unknown"
     background: str = "unknown"
@@ -38,9 +47,13 @@ class LifecycleState:
     # Active jobs certified by a count-only snapshot cannot be named.
     anonymous_active: int = 0
     producer_seq: int = 0
+    pending_events: tuple[PendingEvent, ...] = ()
+    sequence_gap: bool = False
     session_ended: bool = False
     session_gone: bool = False
     adapter_connected: bool = True
+    # Reconnection alone cannot certify facts observed before a disconnect.
+    adapter_certified: bool = True
     blocked: bool = False
     report: ReportState = ReportState()
 
@@ -91,34 +104,61 @@ def _finish(state: LifecycleState, **changes: Any) -> LifecycleState:
             candidate.background,
             blocked=candidate.blocked,
             gone=candidate.session_gone,
-            adapter_connected=candidate.adapter_connected,
+            adapter_connected=(
+                candidate.adapter_connected
+                and candidate.adapter_certified
+                and not candidate.sequence_gap
+            ),
         ),
     )
 
 
 def reduce_event(state: LifecycleState, event: Mapping[str, Any]) -> Reduction:
-    """Apply one validated protocol producer event.
-
-    Sequence ordering is session-global.  An old replay is a no-op, which makes
-    a stop received before its older start safe and deterministic.
-    """
+    """Buffer gaps and apply producer events strictly in contiguous order."""
     seq = event.get("producer_seq")
     if not isinstance(seq, int) or isinstance(seq, bool) or seq <= 0:
         raise ValueError("producer_seq must be a positive integer")
-    if seq <= state.producer_seq:
+    if seq <= state.producer_seq or any(item.producer_seq == seq for item in state.pending_events):
         return Reduction(state, False, "stale-producer-seq")
+    if seq > state.producer_seq + 1:
+        pending = PendingEvent(seq, tuple(sorted(event.items())))
+        queued = tuple(sorted((*state.pending_events, pending), key=lambda item: item.producer_seq))
+        # A gap invalidates the projected certification immediately while
+        # retaining the pre-gap facts needed for deterministic ordered replay.
+        buffered = _finish(state, pending_events=queued, sequence_gap=True)
+        return Reduction(buffered, False, "producer-seq-gap")
 
+    current = _apply_contiguous(state, event)
+    while current.pending_events and current.pending_events[0].producer_seq == current.producer_seq + 1:
+        item = current.pending_events[0]
+        current = replace(current, pending_events=current.pending_events[1:])
+        current = _apply_contiguous(current, item.thaw())
+    current = _finish(current, sequence_gap=bool(current.pending_events))
+    return Reduction(current, True)
+
+
+def _apply_contiguous(state: LifecycleState, event: Mapping[str, Any]) -> LifecycleState:
+    seq = event["producer_seq"]
     kind = event.get("type")
-    changes: dict[str, Any] = {"producer_seq": seq, "adapter_connected": True}
+    changes: dict[str, Any] = {
+        "producer_seq": seq,
+        "adapter_connected": True,
+        "adapter_certified": True,
+    }
+    # A session ID denotes one session. Once ended, later events cannot revive
+    # it; a caller must create a new state for a genuinely new session.
+    if state.session_ended:
+        return _finish(state, **changes)
+
     jobs = set(state.active_jobs)
     anonymous = state.anonymous_active
     background = state.background
     certified_baseline = state.background_certified
 
     if kind == "session.register":
-        changes.update(session_ended=False, session_gone=False)
+        pass
     elif kind == "turn.start":
-        changes.update(foreground="running", blocked=False, session_ended=False)
+        changes.update(foreground="running", blocked=False)
     elif kind == "turn.stop":
         changes.update(foreground="stopped", blocked=False)
         certified = event.get("background_active")
@@ -132,7 +172,9 @@ def reduce_event(state: LifecycleState, event: Mapping[str, Any]) -> Reduction:
             if not jobs and anonymous == 0:
                 anonymous = 1
             background = "active"
-            certified_baseline = True
+            # Presence is certified, but true supplies neither an exact count
+            # nor a zero baseline from which later stops can prove clear.
+            certified_baseline = False
         else:
             jobs.clear()
             anonymous = 0
@@ -173,7 +215,7 @@ def reduce_event(state: LifecycleState, event: Mapping[str, Any]) -> Reduction:
         background=background,
         background_certified=certified_baseline,
     )
-    return Reduction(_finish(state, **changes), True)
+    return _finish(state, **changes)
 
 
 def observe_gone(state: LifecycleState, gone: bool = True) -> LifecycleState:
@@ -182,8 +224,12 @@ def observe_gone(state: LifecycleState, gone: bool = True) -> LifecycleState:
 
 
 def set_adapter_connected(state: LifecycleState, connected: bool) -> LifecycleState:
-    """A live host with a disconnected semantic adapter is uncertified."""
-    return _finish(state, adapter_connected=connected)
+    """Reconnect transport without recertifying stale semantic observations."""
+    return _finish(
+        state,
+        adapter_connected=connected,
+        adapter_certified=state.adapter_certified if not connected else False,
+    )
 
 
 def with_report(
@@ -217,7 +263,7 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
         blocked = False
     else:
         foreground = "running" if raw_fg == "working" else (
-            "stopped" if raw_fg in {"idle", "done", "blocked", "shell"} else "unknown"
+            "stopped" if raw_fg in {"idle", "done", "blocked"} else "unknown"
         )
         gone = raw_fg == "gone" or raw_runtime == "gone"
         blocked = raw_fg == "blocked" or raw_runtime == "blocked"
@@ -237,6 +283,8 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
         anonymous = 1
 
     verdict = status.get("handoff_verdict")
+    if isinstance(verdict, str):
+        verdict = verdict.casefold()
     report_status = status.get("turn_report_status", (runtime.get("turn") or {}).get("report_status", "unobserved"))
     state = LifecycleState(
         foreground=foreground,
@@ -244,7 +292,9 @@ def map_v2_projection(runtime: Mapping[str, Any], status: Mapping[str, Any] | No
         background_certified=background != "unknown",
         active_jobs=jobs,
         anonymous_active=anonymous,
-        producer_seq=source.get("event_seq") if isinstance(source.get("event_seq"), int) else 0,
+        # Herdr v2 event_seq is a different ordering domain from native
+        # producer_seq and must never seed protocol replay state.
+        producer_seq=0,
         session_gone=gone,
         blocked=blocked,
         report=ReportState(verdict, report_status, False),
