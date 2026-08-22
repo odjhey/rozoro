@@ -38,7 +38,7 @@ class StoreTests(unittest.TestCase):
             )}
             self.assertTrue({"events", "sessions", "task_projections", "watchtower_deliveries",
                              "pending_generations", "pending_generation_tasks", "task_membership",
-                             "daemon_metadata"} <= names)
+                             "generation_task_snapshots", "daemon_metadata"} <= names)
 
     def test_reopen_and_upgrade_from_migration_one(self):
         self.home.mkdir(parents=True)
@@ -48,12 +48,15 @@ class StoreTests(unittest.TestCase):
         connection.commit()
         connection.close()
         with EventStore(self.db) as store:
-            self.assertEqual(store.schema_version, 2)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
             self.assertIsNotNone(store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE name='sessions'"
             ).fetchone())
+            self.assertIsNotNone(store._connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='generation_task_snapshots'"
+            ).fetchone())
         with EventStore(self.db) as reopened:
-            self.assertEqual(reopened.schema_version, 2)
+            self.assertEqual(reopened.schema_version, SCHEMA_VERSION)
 
     def test_duplicate_returns_original_sequence_without_rereduction(self):
         calls = []
@@ -108,6 +111,38 @@ class StoreTests(unittest.TestCase):
                 "SELECT value FROM daemon_metadata WHERE key='latest_generation'"
             ).fetchone()[0], "0")
 
+    def test_commit_failure_rolls_back_and_leaves_connection_reusable(self):
+        with EventStore(self.db) as store:
+            real_commit = store._commit
+            failures = 1
+            def fail_once():
+                nonlocal failures
+                if failures:
+                    failures -= 1
+                    raise sqlite3.OperationalError("injected commit failure")
+                real_commit()
+            store._commit = fail_once
+            with self.assertRaisesRegex(sqlite3.OperationalError, "injected commit failure"):
+                store.accept_event(event())
+            self.assertFalse(store._connection.in_transaction)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 0)
+            accepted = store.accept_event(event())
+            self.assertFalse(accepted.duplicate)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
+
+    def test_actionable_requires_existing_projection_and_rolls_back_membership(self):
+        def actionable(tx, item, durable_seq, reduced):
+            return ActionableChange("missing-task", "quiescent")
+        with EventStore(self.db) as store:
+            with self.assertRaisesRegex(ValueError, "has no projection"):
+                store.accept_event(event(), reducer=lambda *args: None, actionable=actionable)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 0)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM pending_generations").fetchone()[0], 0)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM pending_generation_tasks").fetchone()[0], 0)
+            self.assertEqual(store._connection.execute(
+                "SELECT value FROM daemon_metadata WHERE key='latest_generation'"
+            ).fetchone()[0], "0")
+
     def test_reducer_projection_and_actionable_generation_are_atomic(self):
         def reducer(tx, item, durable_seq):
             tx.upsert_task_projection("task-1", durable_seq, availability="quiescent")
@@ -125,6 +160,60 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(store._connection.execute(
                 "SELECT task_id FROM pending_generation_tasks WHERE generation=1"
             ).fetchone()[0], "task-1")
+            snapshot = store.projection_snapshots_through(1)[0]
+            self.assertEqual((snapshot["generation"], snapshot["availability"], snapshot["actionable_reason"]),
+                             (1, "quiescent", "quiescent"))
+
+    def test_generation_snapshots_remain_exact_after_newer_projection(self):
+        def reducer(availability):
+            def apply(tx, item, durable_seq):
+                tx.upsert_task_projection(
+                    "task-1", durable_seq, availability=availability,
+                    projection={"availability": availability, "seq": durable_seq},
+                )
+            return apply
+        def actionable(reason):
+            return lambda tx, item, durable_seq, reduced: ActionableChange("task-1", reason)
+        with EventStore(self.db) as store:
+            store.accept_event(event(), reducer=reducer("quiescent"), actionable=actionable("quiescent"))
+            store.accept_event(event("event-2", 2), reducer=reducer("blocked"), actionable=actionable("blocked"))
+            through_one = store.projection_snapshots_through(1)
+            through_two = store.projection_snapshots_through(2)
+            self.assertEqual(len(through_one), 1)
+            self.assertEqual((through_one[0]["generation"], through_one[0]["availability"],
+                              through_one[0]["projection_json"]),
+                             (1, "quiescent", '{"availability":"quiescent","seq":1}'))
+            self.assertEqual([(row["generation"], row["availability"]) for row in through_two],
+                             [(1, "quiescent"), (2, "blocked")])
+
+    def test_session_identity_is_immutable_in_application_and_database(self):
+        with EventStore(self.db) as store:
+            store.accept_event(event())
+            contradictions = (
+                event("event-harness", 2, harness="pi"),
+                event("event-role", 2, role="watchtower", task_id=None, driver_id="driver-1"),
+                event("event-owner", 2, task_id="task-2"),
+            )
+            for contradictory in contradictions:
+                with self.subTest(contradictory=contradictory):
+                    with self.assertRaisesRegex(ValueError, "identity is immutable"):
+                        store.accept_event(contradictory)
+                    self.assertFalse(store._connection.in_transaction)
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "session identity is immutable"):
+                store._connection.execute(
+                    "UPDATE sessions SET harness='pi' WHERE session_id='session-1'"
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "session role identity is invalid"):
+                store._connection.execute(
+                    """INSERT INTO sessions(
+                           session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
+                       VALUES('invalid','task-1','driver-1','claude','crew','{}',1)"""
+                )
+            identity = store._connection.execute(
+                "SELECT harness,role,task_id,driver_id FROM sessions WHERE session_id='session-1'"
+            ).fetchone()
+            self.assertEqual(tuple(identity), ("claude", "crew", "task-1", None))
 
     def test_default_frozen_reducer_persists_and_recovers_after_restart(self):
         with EventStore(self.db) as store:

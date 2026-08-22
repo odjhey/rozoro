@@ -19,7 +19,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,36 @@ _MIGRATIONS = {
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
     """,
+    3: """
+        CREATE TABLE generation_task_snapshots (
+            generation INTEGER NOT NULL REFERENCES pending_generations(generation) ON DELETE CASCADE,
+            task_id TEXT NOT NULL REFERENCES task_projections(task_id),
+            availability TEXT NOT NULL,
+            report_state TEXT NOT NULL,
+            verdict TEXT,
+            actionable_reason TEXT NOT NULL,
+            projection_generation INTEGER NOT NULL,
+            last_event_seq INTEGER NOT NULL,
+            projection_json TEXT NOT NULL,
+            PRIMARY KEY(generation, task_id)
+        );
+        CREATE TRIGGER sessions_identity_immutable
+        BEFORE UPDATE OF harness, role, task_id, driver_id ON sessions
+        WHEN OLD.harness IS NOT NEW.harness
+          OR OLD.role IS NOT NEW.role
+          OR OLD.task_id IS NOT NEW.task_id
+          OR OLD.driver_id IS NOT NEW.driver_id
+        BEGIN
+            SELECT RAISE(ABORT, 'session identity is immutable');
+        END;
+        CREATE TRIGGER sessions_identity_valid_insert
+        BEFORE INSERT ON sessions
+        WHEN (NEW.role = 'crew' AND (NEW.task_id IS NULL OR NEW.driver_id IS NOT NULL))
+          OR (NEW.role = 'watchtower' AND (NEW.driver_id IS NULL OR NEW.task_id IS NOT NULL))
+        BEGIN
+            SELECT RAISE(ABORT, 'session role identity is invalid');
+        END;
+    """,
 }
 
 
@@ -155,13 +185,19 @@ class StoreTransaction:
         return None if row is None else _state_from_json(row[0])
 
     def persist_session(self, event: Mapping[str, Any], durable_seq: int, state: LifecycleState) -> None:
+        identity = self._connection.execute(
+            "SELECT harness,role,task_id,driver_id FROM sessions WHERE session_id=?",
+            (event["session_id"],),
+        ).fetchone()
+        incoming = (event["harness"], event["role"], event.get("task_id"), event.get("driver_id"))
+        if identity is not None and tuple(identity) != incoming:
+            raise ValueError(f"session {event['session_id']!r} identity is immutable")
         self._connection.execute(
             """INSERT INTO sessions(
                    session_id,task_id,driver_id,harness,role,foreground,background,
                    background_count,availability,producer_seq,reducer_state_json,latest_durable_seq
                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(session_id) DO UPDATE SET
-                   task_id=excluded.task_id, driver_id=excluded.driver_id,
                    foreground=excluded.foreground, background=excluded.background,
                    background_count=excluded.background_count,
                    availability=excluded.availability, producer_seq=excluded.producer_seq,
@@ -202,14 +238,27 @@ class StoreTransaction:
             "INSERT INTO pending_generations(generation,priority) VALUES(?,?)",
             (generation, change.priority),
         )
+        updated = self._connection.execute(
+            """UPDATE task_projections SET projection_generation=?, actionable_reason=?
+               WHERE task_id=?""",
+            (generation, change.reason, change.task_id),
+        )
+        if updated.rowcount != 1:
+            raise ValueError(f"actionable task {change.task_id!r} has no projection")
         self._connection.execute(
             "INSERT INTO pending_generation_tasks(generation,task_id,actionable_reason) VALUES(?,?,?)",
             (generation, change.task_id, change.reason),
         )
+        # Capture the authoritative projection after assigning this generation.
+        # Later task updates cannot change what reconciliation through N sees.
         self._connection.execute(
-            """UPDATE task_projections SET projection_generation=?, actionable_reason=?
-               WHERE task_id=?""",
-            (generation, change.reason, change.task_id),
+            """INSERT INTO generation_task_snapshots(
+                   generation,task_id,availability,report_state,verdict,actionable_reason,
+                   projection_generation,last_event_seq,projection_json)
+               SELECT ?,task_id,availability,report_state,verdict,actionable_reason,
+                      projection_generation,last_event_seq,projection_json
+               FROM task_projections WHERE task_id=?""",
+            (generation, change.task_id),
         )
         self._connection.execute(
             "UPDATE watchtower_deliveries SET latest_generation=?", (generation,)
@@ -248,16 +297,23 @@ class EventStore:
             if sidecar.exists():
                 os.chmod(sidecar, 0o600)
 
+    def _commit(self) -> None:
+        """Commit seam kept explicit for fault-injection durability tests."""
+        self._connection.commit()
+
     @contextmanager
     def _immediate(self) -> Iterator[sqlite3.Connection]:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             yield self._connection
+            self._commit()
         except BaseException:
-            self._connection.rollback()
+            # A failed COMMIT can leave SQLite's transaction active. Always
+            # roll it back before exposing the exception so this sole daemon
+            # connection remains reusable and no uncommitted row is visible.
+            if self._connection.in_transaction:
+                self._connection.rollback()
             raise
-        else:
-            self._connection.commit()
 
     def _migrate(self) -> None:
         with self._lock, self._immediate() as connection:
@@ -307,6 +363,15 @@ class EventStore:
             change = actionable(tx, event, durable_seq, reduced) if actionable is not None else None
             generation = tx.bump_actionable(change) if change is not None else None
             return AcceptedEvent(durable_seq, False, generation)
+
+    def projection_snapshots_through(self, through: int) -> list[sqlite3.Row]:
+        """Return immutable actionable projection history through a generation."""
+        with self._lock:
+            return list(self._connection.execute(
+                """SELECT * FROM generation_task_snapshots
+                   WHERE generation<=? ORDER BY generation,task_id""",
+                (through,),
+            ))
 
     def close(self) -> None:
         with self._lock:
