@@ -2,7 +2,7 @@
 # rzr-register.sh - register this watchtower's validated wake-delivery target.
 #
 # Usage:
-#   rzr-register.sh --harness <claude|codex|pi> [--backend auto|codex|herdr]
+#   rzr-register.sh --harness <claude|codex|copilot|pi> [--backend auto|codex|herdr]
 #                   [--driver-id <id>] [--quiet]
 #
 # Writes watchtowers/<driver-id>/target.json pinning ONE immutable delivery
@@ -34,9 +34,9 @@ while [ $# -gt 0 ]; do
 done
 
 case "$HARNESS" in
-  claude|codex|pi) ;;
-  "") rzr_die "--harness is required (claude|codex|pi)" ;;
-  *)  rzr_die "unsupported --harness '$HARNESS' (claude|codex|pi)" ;;
+  claude|codex|copilot|pi) ;;
+  "") rzr_die "--harness is required (claude|codex|copilot|pi)" ;;
+  *)  rzr_die "unsupported --harness '$HARNESS' (claude|codex|copilot|pi)" ;;
 esac
 case "$BACKEND" in auto|codex|herdr) ;; *) rzr_die "unsupported --backend '$BACKEND'" ;; esac
 

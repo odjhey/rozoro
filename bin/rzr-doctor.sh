@@ -45,6 +45,11 @@ if command -v jq >/dev/null 2>&1 && command -v herdr >/dev/null 2>&1; then
   default_harness="$(rzr_crew_field default harness)"
   if [ -n "$default_harness" ] && command -v "$default_harness" >/dev/null 2>&1; then
     pass "default harness $default_harness ($(command -v "$default_harness"))"
+    if [ "$default_harness" = copilot ]; then
+      capability_error="$(rzr_copilot_capabilities 2>&1)"
+      if [ $? -eq 0 ]; then pass "Copilot CLI has required managed-crew capabilities"
+      else fail "$capability_error"; fi
+    fi
   else
     fail "default harness '${default_harness:-unknown}' not found on PATH"
   fi

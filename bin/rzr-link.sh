@@ -7,7 +7,7 @@
 # Finds the crew's transcript by searching the harness session store for the
 # unique `rozoro-task: <id>` marker rzr-render put in the brief (concurrency-safe:
 # no reliance on "newest file", which breaks when crews share a cwd). Supports
-# Claude, Codex, and Pi. Idempotent by default — a no-op once a valid link exists
+# Claude, Codex, Copilot, and Pi. Idempotent by default — a no-op once a valid link exists
 # — so the watch step can call it freely. `--refresh` deliberately discovers the
 # current conversation again after restart. Run a few seconds after rzr-spawn (the crew must have
 # received the brief). Pi uses its native preallocated session UUID, with marker
@@ -120,6 +120,14 @@ PY
     [ "$uuid" != "$found" ] || uuid=""
     resume="codex resume $uuid"
     ;;
+  copilot)
+    # Copilot receives a caller-preallocated UUID. It is authoritative even
+    # before Herdr begins reporting agent_session; never scan COPILOT_HOME.
+    uuid="$(rzr_meta_get "$ID" session || true)"
+    [ -n "$uuid" ] || rzr_die "Copilot task '$ID' has no preallocated session id"
+    match="preallocated"
+    resume="copilot --resume=$uuid"
+    ;;
   pi)
     # Pi accepts a caller-selected UUID at launch, so normally we only need to
     # locate the file whose header confirms that UUID and cwd. For Pi tasks
@@ -178,13 +186,14 @@ esac
 }
 
 RZR_OUT="$OUT" RZR_ID="$ID" RZR_HARNESS="$HARNESS" RZR_CWD="$CWD" \
-RZR_UUID="$uuid" RZR_PATH="$match" RZR_RESUME="$resume" RZR_HAVE_PROFILE="$HAVE_PROFILE" \
+RZR_UUID="$uuid" RZR_PATH="$([ "$match" = preallocated ] && printf '' || printf '%s' "$match")" RZR_RESUME="$resume" RZR_HAVE_PROFILE="$HAVE_PROFILE" \
 RZR_PROFILE_MODEL="$PROFILE_MODEL" RZR_PROFILE_EFFORT="$PROFILE_EFFORT" \
 RZR_PROFILE_PERMMODE="$PROFILE_PERMMODE" RZR_PROFILE_FAST="$PROFILE_FAST" python3 - <<'PY'
 import json, os
 data = {"id": os.environ["RZR_ID"], "harness": os.environ["RZR_HARNESS"], "cwd": os.environ["RZR_CWD"],
-        "session_id": os.environ["RZR_UUID"], "session_path": os.environ["RZR_PATH"],
-        "resume": os.environ["RZR_RESUME"]}
+        "session_id": os.environ["RZR_UUID"], "resume": os.environ["RZR_RESUME"]}
+if os.environ["RZR_PATH"]:
+    data["session_path"] = os.environ["RZR_PATH"]
 if os.environ["RZR_HAVE_PROFILE"] == "1":
     data["profile"] = {"harness": os.environ["RZR_HARNESS"],
                        "model": os.environ["RZR_PROFILE_MODEL"],
