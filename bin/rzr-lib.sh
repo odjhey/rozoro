@@ -490,11 +490,15 @@ PY
 }
 
 # Update the watcher-owned pending.json delivery bookkeeping after a delivery
-# attempt: mark delivered=generation on success, or record a soft failure/defer
-# reason without advancing delivered (so it retries).
-rzr_ledger_record() {  # <driver-dir> <state:delivered|deferred|blocked-target|error> [error-text]
-  local dir="$1" state="$2" err="${3:-}"
+# attempt: mark the exact attempted generation delivered on success, or record a
+# soft failure/defer reason without advancing delivered (so it retries).
+rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation]
+  local dir="$1" state="$2" err="${3:-}" attempted="${4:-}"
+  if [ "$state" = delivered ]; then
+    case "$attempted" in ''|*[!0-9]*) rzr_die "delivered ledger record requires the attempted generation" ;; esac
+  fi
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_STATE="$state" RZR_LEDGER_ERR="$err" \
+  RZR_LEDGER_ATTEMPTED="$attempted" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
@@ -505,7 +509,11 @@ except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {}, "retries": 0}
 state = os.environ["RZR_LEDGER_STATE"]
 if state == "delivered":
-    d["delivered"] = int(d.get("generation", 0))
+    # Record exactly what this backend call attempted, not a newer generation
+    # that may have arrived while the call was in flight. Keep this monotonic in
+    # case overlapping calls complete out of order.
+    attempted = int(os.environ["RZR_LEDGER_ATTEMPTED"])
+    d["delivered"] = max(int(d.get("delivered", 0)), attempted)
     d["last_error"] = ""
 else:
     d["retries"] = int(d.get("retries", 0)) + 1

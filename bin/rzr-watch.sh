@@ -80,17 +80,19 @@ esac
 # (surfaced by the caller). In every non-zero case the generation is already
 # persisted, so nothing is lost and the next edge retries.
 deliver_wake() {  # [known-herdr-status]
+  local attempted_generation
+  attempted_generation=$(rzr_ledger_int "$DRIVER_DIR" generation)
   case "$WAKE_BACKEND" in
     codex)  # Codex owns serialization: queue immediately, busy or not.
       if codex queue --thread "$WAKE_IDENTITY" --message "$RZR_WAKE_MESSAGE"; then
-        rzr_ledger_record "$DRIVER_DIR" delivered; return 0
+        rzr_ledger_record "$DRIVER_DIR" delivered "" "$attempted_generation"; return 0
       else rzr_ledger_record "$DRIVER_DIR" error "codex queue failed"; return 2; fi ;;
     herdr)  # Never prompt into a working/blocked driver's turn; retain instead.
       local ds="${1:-}"; [ -n "$ds" ] || ds=$(rzr_agent_status "$WAKE_IDENTITY")
       case "$ds" in
         idle|done)
           if rzr_herdr agent prompt "$WAKE_IDENTITY" "$RZR_WAKE_MESSAGE" >/dev/null; then
-            rzr_ledger_record "$DRIVER_DIR" delivered; return 0
+            rzr_ledger_record "$DRIVER_DIR" delivered "" "$attempted_generation"; return 0
           else rzr_ledger_record "$DRIVER_DIR" error "herdr prompt to '$WAKE_IDENTITY' failed"; return 2; fi ;;
         working) rzr_ledger_record "$DRIVER_DIR" deferred "driver working"; return 1 ;;
         blocked) rzr_ledger_record "$DRIVER_DIR" blocked-target "driver blocked"; return 1 ;;

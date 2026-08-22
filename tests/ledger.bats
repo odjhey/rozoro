@@ -9,7 +9,7 @@ drive() { run bash -c ". \"$REPO_ROOT/bin/rzr-lib.sh\"; dir=\"$ROZORO_HOME/watch
   drive '
     rzr_ledger_bump "$dir" t1 done                                  # g=1
     rzr_ledger_should_deliver "$dir" && echo D1 || echo N1          # yes: 1>0 && 0<=0
-    rzr_ledger_record "$dir" delivered                              # d=1
+    rzr_ledger_record "$dir" delivered "" 1                         # d=1
     rzr_ledger_bump "$dir" t2 idle                                  # g=2 (burst)
     rzr_ledger_bump "$dir" t3 blocked                               # g=3 (burst)
     rzr_ledger_should_deliver "$dir" && echo D2 || echo N2          # no: outstanding nudge (d=1>a=0)
@@ -23,6 +23,21 @@ drive() { run bash -c ". \"$REPO_ROOT/bin/rzr-lib.sh\"; dir=\"$ROZORO_HOME/watch
   assert_output_contains N2
   assert_output_contains N3
   assert_output_contains D4
+}
+
+@test "older in-flight success cannot mark a newer generation delivered" {
+  drive '
+    rzr_ledger_bump "$dir" task-old done                           # attempted g=1
+    attempted=$(rzr_ledger_int "$dir" generation)
+    rzr_ledger_ack "$dir" 1                                       # old wake reconciled
+    rzr_ledger_bump "$dir" task-new done                           # g=2 while old call is in flight
+    rzr_ledger_record "$dir" delivered "" "$attempted"             # old backend success
+    echo "gen=$(rzr_ledger_int "$dir" generation) del=$(rzr_ledger_int "$dir" delivered) ack=$(rzr_ledger_int "$dir" ack)"
+    rzr_ledger_should_deliver "$dir" && echo SHOULD || echo SUPPRESSED
+  '
+  assert_success
+  assert_output_contains 'gen=2 del=1 ack=1'
+  assert_output_contains SHOULD
 }
 
 @test "ledger persists generation before delivery and survives a re-read" {
