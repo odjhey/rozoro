@@ -13,7 +13,16 @@
 # fails a session start. If retries run out, the manual fallback documented
 # in templates/watchtower.md (`!rozoro register --harness claude` at the
 # first idle prompt) still applies.
+#
+# This hook fires for EVERY Claude session opened in this checkout -- a crew
+# spawned to work on rozoro itself, or a plain dev session, included. Only a
+# real watchtower should self-register as a wake target, so this is gated on
+# a positive opt-in: ROZORO_ROLE=watchtower, set by the watchtower launch
+# recipe in templates/watchtower.md. Without it, no-op immediately (no herdr
+# call, no target.json, no boot delay).
 set -u
+
+[ "${ROZORO_ROLE:-}" = watchtower ] || exit 0
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ROZORO="$ROOT/bin/rozoro"
