@@ -79,7 +79,7 @@ the optional `$ROZORO_HOME/crew/default.json`.
 | **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Resident Codex watchtowers use `rzr-watch.sh --once --wake-codex <ids>` to queue a post-turn wake. Otherwise run `rzr-watch.sh --once <ids>` only in a genuinely external background task. Read `state/<id>.status` for the latest watcher-produced snapshot. |
+| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`rzr-register.sh --harness <h>`) then run `rzr-watch.sh --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver `rzr-reconcile.sh`s on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
@@ -184,11 +184,14 @@ answer itself, but whether the answer already exists.
    messages queue behind it. In Pi, the project-local `rozoro-watchtower`
    extension owns a long-lived Herdr push subscriber and injects
    `[rozoro event]` messages on actionable edges; `/rozoro-monitor status`
-   reports it and `/rozoro-monitor on` repairs it. In a resident Codex watchtower,
-   use `--wake-codex` from a background task: it queues a fixed, content-free
-   nudge through `codex queue` on settled `idle`, `done`, or `blocked` edges and
-   ignores initial/working edges. Other harnesses need a genuinely external
-   background facility for `rzr-watch.sh --once <ids>`. `rzr-list.sh` polling is
+   reports it and `/rozoro-monitor on` repairs it. In a resident Codex or Claude
+   watchtower, register the validated target once (`rzr-register.sh --harness
+   <h>`), then run `rzr-watch.sh --once --wake <ids>` from a genuinely external
+   background task: it delivers a fixed, content-free nudge on settled `idle`,
+   `done`, or `blocked` edges through the registered backend (Codex queue, or the
+   Herdr pane for Claude — deferred while the driver is working/blocked), backed by
+   a durable at-least-once ledger. On the nudge run `rzr-reconcile.sh` to read
+   verdicts and ack the generation. `rzr-list.sh` polling is
    only a fallback. `state/<id>.status` is produced by the active watcher. Either
    way, `done`/`idle` means the agent ended a turn — not that the task is correct
    or landed.

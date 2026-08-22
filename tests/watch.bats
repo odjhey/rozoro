@@ -56,7 +56,7 @@ load test_helper/common
   assert_output_contains $'task\tblocked'
   [ "$(wc -l < "$FAKE_CODEX_LOG")" -eq 2 ]
   [ "$(sed -n '1p' "$FAKE_CODEX_LOG")" = 'queue --help' ]
-  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro watch edge: reconcile crew status.' ]
+  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro notification pending; run rozoro reconcile.' ]
 }
 
 @test "Codex wake requires a resident thread and queue capability" {
@@ -79,12 +79,20 @@ load test_helper/common
   assert_output_contains "does not provide the queue capability"
 }
 
-@test "Codex wake reports queue delivery failure" {
+@test "Codex wake surfaces a hard delivery failure but retains the edge as pending" {
   write_meta task 'pane=p1' 'tab=t1'
   fake_status p1 working
   export CODEX_THREAD_ID=thread-123 FAKE_CODEX_QUEUE_FAIL=1
   start_event_server events 'p1,w1,done,codex'
   run rzr-watch.sh --once --wake-codex task
   assert_failure
-  assert_output_contains "could not queue wake nudge to Codex thread 'thread-123'"
+  assert_output_contains 'wake delivery failed'
+  # The generation is persisted before the backend call, so a failed delivery is
+  # retained (generation advanced, delivered still 0) — nothing is lost.
+  driver="codex-thread-123"
+  ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
+  [ -f "$ledger" ]
+  [ "$(jq -r '.generation' "$ledger")" -eq 1 ]
+  [ "$(jq -r '.delivered' "$ledger")" -eq 0 ]
+  [ "$(jq -r '.delivery_state' "$ledger")" = error ]
 }

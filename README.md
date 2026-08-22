@@ -139,7 +139,9 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `rzr-watch.sh [--once] [--wake-codex] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; optionally queues a safe wake nudge to the resident Codex thread |
+| `rzr-register.sh --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session |
+| `rzr-watch.sh [--once] [--wake\|--wake-codex\|--wake-herdr] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; `--wake` delivers a fixed nudge through the REGISTERED backend via a durable at-least-once ledger (bursts coalesce; the Herdr backend defers while the driver is working/blocked). `--wake-codex`/`--wake-herdr` force an explicit backend |
+| `rzr-reconcile.sh [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' verdicts (`rzr-status --json`), flag vanished tasks, and ack exactly the snapshotted generation (never resolves a crew's OPEN items) |
 | `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `rzr-control.sh <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped Claude, Codex, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
@@ -398,15 +400,22 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
   nothing to spin. Each edge is deduped against this watch process's last-seen
   state; only real changes are printed and persisted. Buffered stdout from a
-  background watcher cannot wake a Codex thread after its turn has completed.
-  Opt in with `--wake-codex`: the watcher uses the host's `CODEX_THREAD_ID` and
-  `codex queue` to send a fixed reconciliation nudge on `idle`, `done`, or
-  `blocked` edges. Initial reconciliation and `working` edges never wake Codex,
-  and no handoff or event contents are queued. The option fails up front if the
-  thread id or queue capability is unavailable. In combined `--once
-  --wake-codex` mode, the watcher continues past non-settled edges and exits only
-  after a settled-edge nudge is queued successfully; plain `--once` retains its
-  first-real-edge behavior.
+  background watcher cannot wake a driver after its turn has completed, so a wake
+  option adds a fixed, content-free reconciliation nudge on settled (`idle`,
+  `done`, `blocked`) edges. `--wake` delivers through the watchtower's REGISTERED
+  target (see `rzr-register`): the backend is chosen by the validated
+  registration, never by env-var priority, so a Claude/Pi process that inherited a
+  stale `CODEX_THREAD_ID` can't wake the wrong conversation. Codex uses its native
+  `codex queue`; Claude and Pi are prompted through the resident Herdr pane, and
+  that path DEFERS while the driver is `working` and retains while `blocked` rather
+  than injecting into its turn. `--wake-codex`/`--wake-herdr` force one backend.
+  Every wake routes through a durable per-driver ledger: the actionable generation
+  is persisted BEFORE the backend call, a burst of edges coalesces to one
+  outstanding nudge (deliver iff `generation > ack` and `delivered <= ack`), and
+  `rozoro reconcile` acks exactly the generation it processed — so delivery is
+  at-least-once and a crash never loses an actionable edge. Initial reconciliation
+  and `working` edges never wake the driver, and no handoff or event contents are
+  ever queued.
 - **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
   atomically, and is rejected up front if the agent is blocked.
 - **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
@@ -447,9 +456,11 @@ bin/rzr-watch.sh t1 t2
 #    06:01:03  t1  working
 #    06:01:07  t1  done
 
-# From a resident Codex watchtower, opt in to an actual post-turn wake:
-bin/rzr-watch.sh --once --wake-codex t1 t2 &
-# Requires CODEX_THREAD_ID in the environment and a Codex CLI with `queue`.
+# From a resident watchtower, register the validated wake target once, then wake:
+bin/rzr-register.sh --harness pi        # validates this pane/thread, pins target.json
+bin/rzr-watch.sh --once --wake t1 t2 &  # durable ledger; backend from the registration
+# On the nudge, the driver reconciles and acks the generation it processed:
+bin/rzr-reconcile.sh
 
 # 3. send a follow-up (DATA); --wait blocks until it settles:
 bin/rzr-send.sh t1 'Now count the lines in README.' --wait
