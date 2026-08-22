@@ -1,0 +1,1 @@
+"""Rozoro resident-monitor components."""
