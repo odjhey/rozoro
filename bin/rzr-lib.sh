@@ -170,7 +170,8 @@ rzr_socket_path() {
 rzr_eventwait_py() { printf '%s/herdr-eventwait.py' "$RZR_BIN"; }
 
 # --- crewmember presets (spawn profiles) -----------------------------------
-# A preset bundles HOW a crew agent is booted - harness, model, effort, and any
+# A preset bundles HOW a crew agent is booted - harness, model, effort, fast
+# service tier, and any
 # standing crew RULES - never WHAT its task is (the task prompt is always passed
 # verbatim). Presets are one JSON file per name under $RZR_HOME/crew/<name>.json.
 # `rules` are crew-behavioral (e.g. "open a draft PR, never push"), deliberately
@@ -192,6 +193,7 @@ rzr_crew_builtin_default() {
   "model": "sonnet",
   "permission_mode": "auto",
   "effort": "",
+  "fast": false,
   "rules": []
 }
 JSON
@@ -202,11 +204,12 @@ JSON
   "model": "gpt-5.6-sol",
   "permission_mode": "yolo",
   "effort": "low",
+  "fast": false,
   "rules": []
 }
 JSON
       ;;
-    *) jq -n --arg harness "$1" '{harness: $harness, model: "", permission_mode: "auto", effort: "", rules: []}' ;;
+    *) jq -n --arg harness "$1" '{harness: $harness, model: "", permission_mode: "auto", effort: "", fast: false, rules: []}' ;;
   esac
 }
 
@@ -224,12 +227,47 @@ rzr_crew_json() {  # <preset> -> configured JSON or built-in default JSON
   fi
 }
 
+# Validate known preset fields without rejecting unknown keys. Unknown keys may
+# belong to a newer rozoro and ignoring them preserves forward compatibility;
+# malformed known fields must never degrade silently into empty defaults.
+rzr_crew_validate() {  # <preset>
+  local name="$1" json
+  json="$(rzr_crew_json "$name")" || return 1
+  printf '%s' "$json" | jq -e '
+    . as $p |
+    type == "object" and
+    (["harness", "model", "permission_mode", "effort"] |
+      all(. as $k | ($p | has($k) | not) or ($p[$k] | type == "string"))) and
+    (($p | has("fast") | not) or ($p.fast | type == "boolean")) and
+    (($p | has("rules") | not) or
+      (($p.rules | type == "array") and ($p.rules | all(type == "string")))) and
+    (($p.effort // "") | IN("", "low", "medium", "high", "xhigh", "max"))
+  ' >/dev/null 2>&1
+}
+
 rzr_crew_field() {  # <preset> <field> -> value, or empty
   rzr_crew_json "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null
 }
 
+rzr_crew_bool_field() {  # <preset> <field> -> true|false, or empty when absent
+  rzr_crew_json "$1" | jq -r --arg k "$2" 'if has($k) then .[$k] else empty end' 2>/dev/null
+}
+
 rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
   rzr_crew_json "$1" | jq -r '(.rules // []) | join("\n")' 2>/dev/null
+}
+
+# Validate the fully-resolved launch tuple. Fast is intentionally Codex-only in
+# stage 1 and limited to the model whose catalog advertises the priority tier.
+rzr_profile_validate() {  # <harness> <model> <effort> <fast>
+  local harness="$1" model="$2" effort="$3" fast="$4"
+  case "$harness" in claude|codex|copilot|pi) ;; *) rzr_die "harness '$harness': not wired (known: claude codex copilot pi)" ;; esac
+  case "$effort" in ''|low|medium|high|xhigh|max) ;; *) rzr_die "invalid effort '$effort' (low|medium|high|xhigh|max)" ;; esac
+  case "$fast" in true|false) ;; *) rzr_die "fast must resolve to true or false" ;; esac
+  if [ "$fast" = true ]; then
+    [ "$harness" = codex ] || rzr_die "fast mode is currently supported only for the codex harness"
+    [ "$model" = gpt-5.6-sol ] || rzr_die "fast mode is currently supported only for codex model gpt-5.6-sol"
+  fi
 }
 
 # Map a resolved profile to the launch args a harness expects AFTER the `--` in
@@ -253,8 +291,9 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 #
 # Verified on this machine: Claude, Codex, and Pi argument parsing. Wired from
 # the operator's known invocation but NOT verified here: Copilot.
-rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id]
-  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}"
+rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id] [fast]
+  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}" fast="${7:-false}"
+  rzr_profile_validate "$harness" "$model" "$effort" "$fast"
   case "$harness" in
     claude)
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
@@ -262,10 +301,11 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$permmode" ] && printf '%s\0%s\0' --permission-mode "$permmode"
       [ -n "$sysfile" ]  && printf '%s\0%s\0' --append-system-prompt-file "$sysfile"
       ;;
-    codex)  # codex --yolo --model <m> --config model_reasoning_effort=<e> "prompt"
+    codex)  # codex --yolo --model <m> --config model_reasoning_effort=<e> [priority tier]
       printf '%s\0' --yolo
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]   && printf '%s\0%s\0' --config "model_reasoning_effort=$effort"
+      [ "$fast" = true ] && printf '%s\0%s\0' --config service_tier=priority
       ;;
     copilot)  # copilot --model <m> --mode autopilot --allow-all "prompt"
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
@@ -348,6 +388,27 @@ rzr_agent_status() {  # <pane>
     return
   fi
   if rzr_herdr pane get "$1" >/dev/null 2>&1; then echo shell; else echo gone; fi
+}
+
+# `herdr agent start` can return agent_not_ready after it has successfully
+# claimed the pane and launched the harness, while the harness is still crossing
+# its startup readiness gate. In that case starting it again risks colliding with
+# the agent that already owns the pane; wait for that launch to become interactive
+# instead. Returns success only for a real, interactive agent.
+rzr_wait_agent_ready() {  # <pane> [attempts]
+  local pane="$1" attempts="${2:-20}" out ready attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if out=$(rzr_herdr agent get "$pane" 2>/dev/null); then
+      ready=$(printf '%s' "$out" | jq -r '
+        (.result.agent // .result // .) as $a |
+        if ($a.interactive_ready // false) == true then "true" else "false" end
+      ' 2>/dev/null || echo false)
+      [ "$ready" = true ] && return 0
+    fi
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 # --- unlanded-work guard (teardown safety) ---------------------------------

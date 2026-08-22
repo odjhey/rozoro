@@ -2,7 +2,7 @@
 load test_helper/common
 
 @test "all shell entry points parse" {
-  for file in "$REPO_ROOT"/bin/* "$REPO_ROOT"/tests/run.sh "$REPO_ROOT"/tests/fakes/herdr "$REPO_ROOT"/tests/test_helper/common.bash; do
+  for file in "$REPO_ROOT"/bin/* "$REPO_ROOT"/hooks/*.sh "$REPO_ROOT"/tests/run.sh "$REPO_ROOT"/tests/fakes/herdr "$REPO_ROOT"/tests/test_helper/common.bash; do
     [ -f "$file" ] || continue
     case "$file" in *.py) continue ;; esac
     run bash -n "$file"

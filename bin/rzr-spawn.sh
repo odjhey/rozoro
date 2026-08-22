@@ -3,7 +3,7 @@
 #
 # Usage:
 #   rzr-spawn.sh <id> [--crew <preset>] [--cwd <dir>] [--label <text>]
-#               [--harness <kind>] [--model <m>] [--effort <e>]
+#               [--harness <kind>] [--model <m>] [--effort <e>] [--fast|--no-fast]
 #               [--permission-mode <mode>] [--prompt <text> | --brief <file>]
 #               [--no-agent]
 #
@@ -18,13 +18,15 @@
 #               for model/effort; other kinds have more limited mappings.
 #   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
 #   --effort    reasoning effort: low|medium|high|xhigh|max (overrides preset)
+#   --fast      use Codex's priority service tier (currently gpt-5.6-sol only)
+#   --no-fast   disable a preset's fast selection
 #   --permission-mode  autonomous permission signal for non-Codex harnesses;
 #               Codex always launches with --yolo
 #   --prompt    initial task, submitted VERBATIM once the agent is ready
 #   --brief     file whose contents become the initial prompt (also verbatim)
 #   --no-agent  create the tab + pane at a bare shell only (no agent)
 #
-# Precedence for harness/model/effort/permission-mode: explicit flag > preset >
+# Precedence for harness/model/effort/fast/permission-mode: explicit flag > preset >
 # built-in harness fallback, except Codex permission mode is always yolo. The
 # Claude/Pi system prompts contain the rendered handoff protocol plus any preset
 # `rules`; the task prompt itself is passed verbatim (harnesses lacking a
@@ -38,7 +40,7 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 ID="" ; CWD="$PWD" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
-CREW="default" ; HARNESS_OV="" ; MODEL_OV="" ; EFFORT_OV="" ; PERMMODE_OV=""
+CREW="default" ; HARNESS_OV="" ; MODEL_OV="" ; EFFORT_OV="" ; PERMMODE_OV="" ; FAST_OV=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --crew)    CREW="$2"; shift 2 ;;
@@ -46,12 +48,14 @@ while [ $# -gt 0 ]; do
     --harness) HARNESS_OV="$2"; shift 2 ;;
     --model)   MODEL_OV="$2"; shift 2 ;;
     --effort)  EFFORT_OV="$2"; shift 2 ;;
+    --fast)    FAST_OV="true"; shift ;;
+    --no-fast) FAST_OV="false"; shift ;;
     --permission-mode) PERMMODE_OV="$2"; shift 2 ;;
     --label)   LABEL="$2"; shift 2 ;;
     --prompt)  PROMPT="$2"; shift 2 ;;
     --brief)   BRIEF="$2"; shift 2 ;;
     --no-agent) NO_AGENT=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
     *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
   esac
@@ -70,11 +74,13 @@ rzr_task_exists "$ID" && rzr_die "task '$ID' already exists (state/$ID.meta); pi
 
 # --- resolve the crew profile (flag > preset > built-in harness fallback) --
 rzr_crew_resolves "$CREW" || rzr_die "unknown crew preset '$CREW' (see: rzr-crew.sh list)"
+rzr_crew_validate "$CREW" || rzr_die "crew preset '$CREW' has invalid JSON or known field types"
 if rzr_crew_exists "$CREW"; then
   HARNESS="${HARNESS_OV:-$(rzr_crew_field "$CREW" harness)}" ; HARNESS="${HARNESS:-claude}"
   MODEL="${MODEL_OV:-$(rzr_crew_field "$CREW" model)}"
   EFFORT="${EFFORT_OV:-$(rzr_crew_field "$CREW" effort)}"
   PERMMODE="${PERMMODE_OV:-$(rzr_crew_field "$CREW" permission_mode)}"
+  FAST="${FAST_OV:-$(rzr_crew_bool_field "$CREW" fast)}" ; FAST="${FAST:-false}"
   RULES="$(rzr_crew_rules "$CREW")"
 else
   # Only the virtual `default` reaches here. Choose a coherent fallback profile
@@ -83,12 +89,10 @@ else
   MODEL="${MODEL_OV:-$(rzr_crew_builtin_field "$HARNESS" model)}"
   EFFORT="${EFFORT_OV:-$(rzr_crew_builtin_field "$HARNESS" effort)}"
   PERMMODE="${PERMMODE_OV:-$(rzr_crew_builtin_field "$HARNESS" permission_mode)}"
+  FAST="${FAST_OV:-$(rzr_crew_builtin_field "$HARNESS" fast)}" ; FAST="${FAST:-false}"
   RULES=""
 fi
-case "$HARNESS" in
-  claude|codex|copilot|pi) ;;
-  *) rzr_die "harness '$HARNESS': not wired (known: claude codex copilot pi); add a case to rzr_harness_args in rzr-lib.sh" ;;
-esac
+rzr_profile_validate "$HARNESS" "$MODEL" "$EFFORT" "$FAST"
 
 # Codex crews are an intentionally autonomous spawner contract. Normalize the
 # effective value after all preset/flag resolution so old personal presets with
@@ -152,6 +156,7 @@ do_spawn() {
   rzr_meta_set "$ID" harness "$HARNESS"
   rzr_meta_set "$ID" model "${MODEL:-}"
   rzr_meta_set "$ID" effort "${EFFORT:-}"
+  rzr_meta_set "$ID" fast "$FAST"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   [ -n "$SESSION_ID" ] && rzr_meta_set "$ID" session "$SESSION_ID"
   rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -168,24 +173,26 @@ do_spawn() {
   # uppercase ULIDs and may exceed Herdr's 32-character limit, so use their
   # stable transport-safe digest; everything else addresses the agent by pane.
   #
-  # The crew profile (model/effort/permission-mode/rules) is forwarded to the
+  # The crew profile (model/effort/fast/permission-mode/rules) is forwarded to the
   # underlying agent binary via herdr's `-- <arg>...` passthrough. Args arrive
   # NUL-separated (a rule value may contain newlines), read into an array here.
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
-    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID")
+    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID" "$FAST")
   local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 
   # `tab create` returns a pane id before its shell prompt is ready, so an
   # immediate `agent start` can race and get `agent_pane_busy` ("not an
-  # available shell"). Retry ONLY that transient case with a short backoff; any
-  # other error is real and surfaces immediately (with herdr's message).
+  # available shell"). Retry that pre-launch transient with a short backoff.
+  # Herdr may also report `agent_not_ready` after the harness has launched but
+  # before it is interactive; do not launch it twice, just wait for readiness.
   local out="" rc=1 attempt=0
   while [ "$attempt" -lt 20 ]; do
     if out=$(rzr_herdr "${start[@]}" 2>&1); then rc=0; break; fi
     case "$out" in
       *agent_pane_busy*|*"not an available shell"*) sleep 0.5; attempt=$((attempt + 1)) ;;
+      *agent_not_ready*) rzr_wait_agent_ready "$pane" 20 && rc=0; break ;;
       *) break ;;
     esac
   done

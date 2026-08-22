@@ -91,6 +91,7 @@ case "$VERB" in
     HARNESS="$(rzr_meta_get "$ID" harness || true)"
     MODEL="$(rzr_meta_get "$ID" model || true)"
     EFFORT="$(rzr_meta_get "$ID" effort || true)"
+    FAST="$(rzr_meta_get "$ID" fast || true)"; FAST="${FAST:-false}"
     PERMMODE="$(rzr_meta_get "$ID" permission_mode || true)"
     BRIEF="$(rzr_task_dir "$ID")/brief.md"
 
@@ -102,13 +103,32 @@ case "$VERB" in
     "$RZR_BIN/rzr-teardown.sh" "$ID" --force >/dev/null
 
     spawn_args=("$ID" --cwd "$CWD")
-    [ -n "$CREW" ]      && spawn_args+=(--crew "$CREW")
+    # `rzr-resume` records the lifecycle origin as crew=resumed, which is not a
+    # selectable preset. The resolved harness profile below is sufficient to
+    # restart that task as a fresh conversation.
+    [ -n "$CREW" ] && [ "$CREW" != resumed ] && spawn_args+=(--crew "$CREW")
     [ -n "$HARNESS" ]   && spawn_args+=(--harness "$HARNESS")
     [ -n "$MODEL" ]     && spawn_args+=(--model "$MODEL")
     [ -n "$EFFORT" ]    && spawn_args+=(--effort "$EFFORT")
+    [ "$FAST" = true ]  && spawn_args+=(--fast)
+    [ "$FAST" = false ] && spawn_args+=(--no-fast)
     [ -n "$PERMMODE" ]  && spawn_args+=(--permission-mode "$PERMMODE")
     [ -s "$BRIEF" ]     && spawn_args+=(--brief "$BRIEF")
     "$RZR_BIN/rzr-spawn.sh" "${spawn_args[@]}"
+
+    # Restart creates a new conversation. If this task already had a durable
+    # resume link, refresh it now so a later resume cannot silently reopen the
+    # pre-restart conversation. Session discovery may trail prompt delivery by
+    # a beat, just as it does in rzr-start.
+    SESS="$(rzr_task_dir "$ID")/session.json"
+    if [ -s "$SESS" ]; then
+      linked=0
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if "$RZR_BIN/rzr-link.sh" "$ID" "$CWD" --refresh >/dev/null 2>&1; then linked=1; break; fi
+        sleep 0.5
+      done
+      [ "$linked" -eq 1 ] || echo "rzr: warning: restarted '$ID' but its new session is not linked yet; run: rzr-link.sh $ID '$CWD'" >&2
+    fi
 
     NEWPANE="$(rzr_pane_of "$ID")"
     st="unknown"

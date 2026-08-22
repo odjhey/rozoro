@@ -136,7 +136,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-start.sh <display-name> --body <file> [opts]` | blessed start: atomically reserve a unique task key → `rzr-render` → `rzr-spawn` → `rzr-link`; prints the key used by every later command |
 | `rzr-spawn.sh <id> [opts]` | `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `rzr-render.sh <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
-| `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent |
+| `rzr-link.sh <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, or Pi; Pi uses a preallocated native session UUID, with marker-grep compatibility; idempotent unless `--refresh` deliberately replaces the link after a fresh restart |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
 | `rzr-register.sh --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. A Claude watchtower launched with `ROZORO_ROLE=watchtower` (see "Launching the driver" above) runs this automatically via the `SessionStart` hook in `.claude/settings.json` (`hooks/claude-register-watchtower.sh`, run `async` so it can't block Claude Code's own startup, then retries past the boot readiness gap); without that marker the hook no-ops, so a plain dev/crew Claude session in this checkout never self-registers as a watchtower. The manual `!rozoro register --harness claude` at your first idle prompt is the fallback (see `templates/watchtower.md`) |
@@ -194,7 +194,7 @@ silently (`--force` overrides).
 ## Crewmember presets
 
 A **preset** bundles *how* a crew agent is booted — harness, model, effort,
-permission mode, and standing `rules` — never *what* its task is. Presets are one
+fast service tier, permission mode, and standing `rules` — never *what* its task is. Presets are one
 JSON file per name under `$ROZORO_HOME/crew/<name>.json`. For example, the
 personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 
@@ -204,6 +204,7 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
   "model": "gpt-5.6-sol",
   "permission_mode": "yolo",
   "effort": "high",
+  "fast": true,
   "rules": []
 }
 ```
@@ -216,7 +217,7 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
   Passing `--harness codex` instead selects gpt-5.6-sol/`low` and always passes
   `--yolo`.
 - Spawn from one with `rzr-spawn.sh <id> --crew <name> …`.
-- **Precedence** for harness/model/effort/permission-mode: explicit flag > preset
+- **Precedence** for harness/model/effort/fast/permission-mode: explicit flag > preset
   file > hardcoded harness fallback. Codex permission mode is the exception: the
   spawner always uses `yolo`. `rules` come only from the preset file.
 - `rules` are **crew-behavioral** (e.g. "never push"), deliberately distinct from
@@ -228,7 +229,7 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 | harness | maps to | notes |
 |---|---|---|
 | `claude` | `--model --effort --permission-mode --append-system-prompt-file` | verified on this machine |
-| `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e>` | `--yolo` is unconditional; model and effort verified against the local CLI |
+| `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e> [--config service_tier=priority]` | `--yolo` is unconditional; `fast:true` selects the gpt-5.6-sol priority tier |
 | `copilot`| `--model <m> --mode autopilot --allow-all` | wired; not verified here |
 | `pi`     | `--model <m> --thinking <e> --approve --append-system-prompt <file> --session-id <uuid>` | project trust is approved when permission mode is non-empty; native UUID enables exact linking/resume |
 
@@ -238,16 +239,24 @@ channels, leaving the task prompt verbatim. Harnesses without one receive the
 protocol and rules in the delivered prompt. An unmapped harness fails loudly
 rather than launching with wrong flags.
 
+`fast` is separate from reasoning effort: `high` controls how much reasoning the
+model uses, while `fast:true` requests Codex's `priority` service tier (higher
+speed and increased usage). Stage 1 supports this only for Codex with
+`gpt-5.6-sol`; other harness/model combinations fail before a tab is created.
+Use `--fast` or `--no-fast` to override a preset for spawn and resume. The
+resolved profile is stored in `session.json`, so restart and exact resume reapply
+the model, effort, and service tier instead of depending on user defaults.
+
 ## Instructing rozoro (the control tower)
 
 The driver's whole vocabulary is small:
 
 | Trigger | Call |
 |---|---|
-| **Start** a task | `rzr-start.sh <display-name> --body <file> --cwd <repo> [--crew <preset>] [--model <model>]` (prints the immutable task key) |
+| **Start** a task | `rzr-start.sh <display-name> --body <file> --cwd <repo> [--crew <preset>] [--model <model>] [--fast]` (prints the immutable task key) |
 | **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
 | **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
-| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` |
+| **Resume** a reaped task | `rzr-resume.sh <id> [--effort <e>] [--fast|--no-fast] [--prompt "<follow-up>"]` |
 | **Stop** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`; refuses on unlanded work in the crew's `cwd`, `--force` to discard anyway) |
 | *(sense, not trigger)* | `rzr-status.sh <id>` (handoff verdict) · `rzr-watch.sh` · `rzr-list.sh` · `rzr_status_get` (disk `state/<id>.status`) |
 

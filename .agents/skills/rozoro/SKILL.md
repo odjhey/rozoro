@@ -101,7 +101,7 @@ model — that's an upfront investigation, and the crew is capable on the defaul
 Only override when the **user explicitly** asks for a specific crew/model (or has
 a standing preference). Inspect presets with `rzr-crew.sh list`.
 
-Crew presets bundle *how* an agent boots (harness, model, permission mode, effort,
+Crew presets bundle *how* an agent boots (harness, model, permission mode, effort, fast tier,
 standing rules) — never the task.
 
 - `$ROZORO_HOME/crew/default.json` is authoritative when present. The recommended
@@ -118,6 +118,12 @@ standing rules) — never the task.
 
 Precedence: explicit flag > preset file > hardcoded harness fallback. Codex
 permission mode is the exception: the spawner always uses `--yolo`.
+
+The optional boolean `fast` is independent of reasoning effort. In the supported
+Codex Stage 1 path, `fast:true` is valid only with `gpt-5.6-sol` and maps to the
+priority service tier; use `--fast`/`--no-fast` to override it. Pi fast mode is
+not yet supported and fails closed. Resolved model, effort, and fast values are
+persisted for restart and exact resume.
 
 ## Intake: decide policy, delegate discovery
 
