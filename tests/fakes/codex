@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${FAKE_CODEX_LOG:?}"
+if [ "${1:-}" = queue ] && [ "${2:-}" = --help ]; then
+  [ "${FAKE_CODEX_HAS_QUEUE:-1}" = 1 ] || exit 2
+  exit 0
+fi
+[ "${FAKE_CODEX_QUEUE_FAIL:-0}" = 0 ] || exit 3
