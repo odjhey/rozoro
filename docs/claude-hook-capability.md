@@ -16,6 +16,28 @@ invoke the Herdr-managed user hook or user configuration. Prompts, messages,
 paths, UUIDs, agent IDs, descriptions, and shell commands are redacted in the
 fixture.
 
+## Reproduce and inspect the evidence
+
+Run the opt-in, cost-incurring probe from the repository root:
+
+```sh
+./tests/live/claude-hook-capability-probe.sh
+```
+
+The script writes three complete temporary settings files and hook programs,
+then passes each settings path to Claude with standard setting sources disabled.
+It reproduces (1) the background snapshot sequence, (2) a 3-second hook with a
+1-second timeout, and (3) a guarded exit-2 Stop continuation. Raw hook/debug and
+stream NDJSON stays in the printed temporary directory because it contains local
+paths and model prose; inspect it there and delete it with the command printed by
+the script. Nothing is written under `~/.claude` or into project settings.
+
+The reviewed, redacted result is committed in
+`tests/fixtures/claude-hooks-2.1.240.json`. Its `outcome_evidence` object records
+the three ordered Stop snapshots, timeout `hook_response`, both continuation
+Stop responses, guard values, and final turn count. Tests bind the capability
+claims below to those records and to the reproduction script's isolation flags.
+
 ## Observed payload contract
 
 All configured command hooks receive one JSON object on stdin. Exact redacted
