@@ -24,11 +24,33 @@ if [ -z "$HARNESS" ] && [ -s "$OUT" ]; then
   HARNESS="$(jq -r '.harness // empty' "$OUT" 2>/dev/null)"
 fi
 HARNESS="${HARNESS:-claude}"
+HAVE_PROFILE=0; PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
+if rzr_task_exists "$ID"; then
+  HAVE_PROFILE=1
+  PROFILE_MODEL="$(rzr_meta_get "$ID" model || true)"
+  PROFILE_EFFORT="$(rzr_meta_get "$ID" effort || true)"
+  PROFILE_PERMMODE="$(rzr_meta_get "$ID" permission_mode || true)"
+  PROFILE_FAST="$(rzr_meta_get "$ID" fast || true)"; PROFILE_FAST="${PROFILE_FAST:-false}"
+  rzr_profile_validate "$HARNESS" "$PROFILE_MODEL" "$PROFILE_EFFORT" "$PROFILE_FAST"
+fi
 
-# idempotent: a valid link for this harness/cwd already captured -> nothing to do.
+# A matching link keeps its session identity, but its durable launch profile must
+# track the currently effective live metadata (resume flags may have changed it).
 if [ -s "$OUT" ] && RZR_EXPECT_HARNESS="$HARNESS" RZR_EXPECT_CWD="$CWD" \
   python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("session_id") and d.get("harness") == os.environ["RZR_EXPECT_HARNESS"] and d.get("cwd") == os.environ["RZR_EXPECT_CWD"] else 1)' \
   "$OUT" 2>/dev/null; then
+  if [ "$HAVE_PROFILE" -eq 1 ]; then
+    tmp="$OUT.tmp.$$"
+    if jq --arg harness "$HARNESS" --arg model "$PROFILE_MODEL" --arg effort "$PROFILE_EFFORT" \
+      --arg permission_mode "$PROFILE_PERMMODE" --argjson fast "$PROFILE_FAST" \
+      '.profile = {harness:$harness, model:$model, effort:$effort, permission_mode:$permission_mode, fast:$fast}' \
+      "$OUT" > "$tmp"; then
+      mv "$tmp" "$OUT"
+    else
+      rm -f "$tmp"
+      rzr_die "could not update durable profile in $OUT"
+    fi
+  fi
   echo "rzr-link: $ID already linked ($(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["session_id"])' "$OUT"))"
   exit 0
 fi
@@ -137,11 +159,19 @@ esac
 }
 
 RZR_OUT="$OUT" RZR_ID="$ID" RZR_HARNESS="$HARNESS" RZR_CWD="$CWD" \
-RZR_UUID="$uuid" RZR_PATH="$match" RZR_RESUME="$resume" python3 - <<'PY'
+RZR_UUID="$uuid" RZR_PATH="$match" RZR_RESUME="$resume" RZR_HAVE_PROFILE="$HAVE_PROFILE" \
+RZR_PROFILE_MODEL="$PROFILE_MODEL" RZR_PROFILE_EFFORT="$PROFILE_EFFORT" \
+RZR_PROFILE_PERMMODE="$PROFILE_PERMMODE" RZR_PROFILE_FAST="$PROFILE_FAST" python3 - <<'PY'
 import json, os
-json.dump({"id": os.environ["RZR_ID"], "harness": os.environ["RZR_HARNESS"], "cwd": os.environ["RZR_CWD"],
-           "session_id": os.environ["RZR_UUID"], "session_path": os.environ["RZR_PATH"],
-           "resume": os.environ["RZR_RESUME"]},
-          open(os.environ["RZR_OUT"], "w"), indent=2)
+data = {"id": os.environ["RZR_ID"], "harness": os.environ["RZR_HARNESS"], "cwd": os.environ["RZR_CWD"],
+        "session_id": os.environ["RZR_UUID"], "session_path": os.environ["RZR_PATH"],
+        "resume": os.environ["RZR_RESUME"]}
+if os.environ["RZR_HAVE_PROFILE"] == "1":
+    data["profile"] = {"harness": os.environ["RZR_HARNESS"],
+                       "model": os.environ["RZR_PROFILE_MODEL"],
+                       "effort": os.environ["RZR_PROFILE_EFFORT"],
+                       "permission_mode": os.environ["RZR_PROFILE_PERMMODE"],
+                       "fast": os.environ["RZR_PROFILE_FAST"] == "true"}
+json.dump(data, open(os.environ["RZR_OUT"], "w"), indent=2)
 PY
 echo "rzr-link: $ID -> $uuid  (resume: $resume)"

@@ -91,6 +91,7 @@ case "$VERB" in
     HARNESS="$(rzr_meta_get "$ID" harness || true)"
     MODEL="$(rzr_meta_get "$ID" model || true)"
     EFFORT="$(rzr_meta_get "$ID" effort || true)"
+    FAST="$(rzr_meta_get "$ID" fast || true)"; FAST="${FAST:-false}"
     PERMMODE="$(rzr_meta_get "$ID" permission_mode || true)"
     BRIEF="$(rzr_task_dir "$ID")/brief.md"
 
@@ -106,6 +107,8 @@ case "$VERB" in
     [ -n "$HARNESS" ]   && spawn_args+=(--harness "$HARNESS")
     [ -n "$MODEL" ]     && spawn_args+=(--model "$MODEL")
     [ -n "$EFFORT" ]    && spawn_args+=(--effort "$EFFORT")
+    [ "$FAST" = true ]  && spawn_args+=(--fast)
+    [ "$FAST" = false ] && spawn_args+=(--no-fast)
     [ -n "$PERMMODE" ]  && spawn_args+=(--permission-mode "$PERMMODE")
     [ -s "$BRIEF" ]     && spawn_args+=(--brief "$BRIEF")
     "$RZR_BIN/rzr-spawn.sh" "${spawn_args[@]}"
