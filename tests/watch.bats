@@ -44,3 +44,47 @@ load test_helper/common
   grep -F $'task\tdone' "$TEST_ROOT/two.out"
   [ "$(cat "$ROZORO_HOME/state/task.status")" = done ]
 }
+
+@test "once with Codex wake continues through working and exits after one settled nudge" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 idle
+  export CODEX_THREAD_ID=thread-123
+  start_event_server events 'p1,w1,working,codex' 'p1,w1,blocked,codex'
+  run rzr-watch.sh --once --wake-codex task
+  assert_success
+  assert_output_contains $'task\tworking'
+  assert_output_contains $'task\tblocked'
+  [ "$(wc -l < "$FAKE_CODEX_LOG")" -eq 2 ]
+  [ "$(sed -n '1p' "$FAKE_CODEX_LOG")" = 'queue --help' ]
+  [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro watch edge: reconcile crew status.' ]
+}
+
+@test "Codex wake requires a resident thread and queue capability" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 idle
+  run rzr-watch.sh --wake-codex task
+  assert_failure
+  assert_output_contains 'requires CODEX_THREAD_ID'
+
+  export CODEX_THREAD_ID=thread-123
+  mkdir -p "$TEST_ROOT/no-codex"
+  ln -s "$REPO_ROOT/tests/fakes/herdr" "$TEST_ROOT/no-codex/herdr"
+  run env PATH="$TEST_ROOT/no-codex:/usr/bin:/bin" "$REPO_ROOT/bin/rzr-watch.sh" --wake-codex task
+  assert_failure
+  assert_output_contains "requires 'codex' on PATH"
+
+  export FAKE_CODEX_HAS_QUEUE=0
+  run rzr-watch.sh --wake-codex task
+  assert_failure
+  assert_output_contains "does not provide the queue capability"
+}
+
+@test "Codex wake reports queue delivery failure" {
+  write_meta task 'pane=p1' 'tab=t1'
+  fake_status p1 working
+  export CODEX_THREAD_ID=thread-123 FAKE_CODEX_QUEUE_FAIL=1
+  start_event_server events 'p1,w1,done,codex'
+  run rzr-watch.sh --once --wake-codex task
+  assert_failure
+  assert_output_contains "could not queue wake nudge to Codex thread 'thread-123'"
+}
