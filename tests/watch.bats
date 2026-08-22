@@ -45,13 +45,15 @@ load test_helper/common
   [ "$(cat "$ROZORO_HOME/state/task.status")" = done ]
 }
 
-@test "Codex wake ignores reconciliation and working edges, then nudges a settled edge" {
+@test "once with Codex wake continues through working and exits after one settled nudge" {
   write_meta task 'pane=p1' 'tab=t1'
   fake_status p1 idle
   export CODEX_THREAD_ID=thread-123
   start_event_server events 'p1,w1,working,codex' 'p1,w1,blocked,codex'
-  run rzr-watch.sh --wake-codex task
+  run rzr-watch.sh --once --wake-codex task
   assert_success
+  assert_output_contains $'task\tworking'
+  assert_output_contains $'task\tblocked'
   [ "$(wc -l < "$FAKE_CODEX_LOG")" -eq 2 ]
   [ "$(sed -n '1p' "$FAKE_CODEX_LOG")" = 'queue --help' ]
   [ "$(sed -n '2p' "$FAKE_CODEX_LOG")" = 'queue --thread thread-123 --message Rozoro watch edge: reconcile crew status.' ]

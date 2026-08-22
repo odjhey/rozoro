@@ -359,7 +359,10 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   `codex queue` to send a fixed reconciliation nudge on `idle`, `done`, or
   `blocked` edges. Initial reconciliation and `working` edges never wake Codex,
   and no handoff or event contents are queued. The option fails up front if the
-  thread id or queue capability is unavailable.
+  thread id or queue capability is unavailable. In combined `--once
+  --wake-codex` mode, the watcher continues past non-settled edges and exits only
+  after a settled-edge nudge is queued successfully; plain `--once` retains its
+  first-real-edge behavior.
 - **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
   atomically, and is rejected up front if the agent is blocked.
 - **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to

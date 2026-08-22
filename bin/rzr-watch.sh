@@ -4,7 +4,8 @@
 # Usage:
 #   rzr-watch.sh [--once] [--wake-codex] [id ...]
 #     (no ids) watch every known task; otherwise just the listed ids
-#     --once   print the first event that arrives, then exit (handy for tests)
+#     --once   exit after the first real edge (or first queued settled edge when
+#              combined with --wake-codex)
 #     --wake-codex  queue a fixed reconciliation nudge to $CODEX_THREAD_ID on
 #                   settled edges (idle, done, or blocked)
 #
@@ -126,14 +127,18 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
   SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
+  QUEUED_WAKE=0
   if [ "$WAKE_CODEX" -eq 1 ]; then
     case "$st" in
       idle|done|blocked)
         codex queue --thread "$CODEX_THREAD_ID" --message "Rozoro watch edge: reconcile crew status." \
           || rzr_die "could not queue wake nudge to Codex thread '$CODEX_THREAD_ID'"
+        QUEUED_WAKE=1
         ;;
     esac
   fi
-  [ "$ONCE" -eq 1 ] && break
+  if [ "$ONCE" -eq 1 ] && { [ "$WAKE_CODEX" -eq 0 ] || [ "$QUEUED_WAKE" -eq 1 ]; }; then
+    break
+  fi
 done
 exit 0

@@ -185,8 +185,10 @@ answer itself, but whether the answer already exists.
    resident Codex watchtower, opt in with `--wake-codex`; it requires the host's
    `CODEX_THREAD_ID` and a Codex CLI with `queue`, then sends a fixed, content-free
    reconciliation nudge on settled `idle`, `done`, or `blocked` edges. It ignores
-   initial reconciliation and `working` edges. Reconcile, then re-arm another
-   `--once` if the crew is still live.
+   initial reconciliation and `working` edges; combined `--once --wake-codex`
+   continues through those non-settled edges and exits only after successfully
+   queuing a settled-edge nudge. Reconcile, then re-arm another `--once` if the
+   crew is still live.
    `rzr-list.sh` polling is the fallback when no background waiter is available.
    `state/<id>.status` is **produced by** `rzr-watch` — it is not maintained by an
    always-on daemon, and the file is absent until a watcher has run. Either way,
