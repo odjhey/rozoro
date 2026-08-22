@@ -168,7 +168,10 @@ The key is reserved with an atomic directory creation before any brief or
 handoff file is rendered. Repeated names, concurrent starts, and starts from
 different repositories therefore always receive different folders. Repository
 context is recorded in `identity.json` for discovery, but is not the uniqueness
-boundary.
+boundary. Because Herdr agent names have a stricter 32-character lowercase
+syntax, `identity.json` also records a separate collision-safe transport name.
+The durable task key remains the lifecycle address and the display name remains
+the tab label; fresh spawn and resume reuse the transport name internally.
 
 Each task has a folder under `$ROZORO_HOME/tasks/<task-key>/` so teardown is
 non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
