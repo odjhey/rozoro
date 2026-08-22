@@ -368,6 +368,211 @@ rzr_unlanded_reasons() {  # <cwd>
   return 0
 }
 
+# --- watchtower registration + durable wake ledger -------------------------
+# A watchtower (the resident driver session) registers ONE validated delivery
+# target, then a background `rzr-watch --wake` records actionable crew edges into
+# a durable per-driver ledger and delivers a fixed, content-free nudge through the
+# registered backend. State lives under watchtowers/<driver-id>/ so a crashed or
+# restarted watcher never loses a pending notification.
+#
+# Why registration (not env-var sniffing): a Claude or Pi process launched from a
+# Codex environment inherits a STALE CODEX_THREAD_ID and would otherwise wake the
+# wrong conversation. Registration pins an immutable identity whose declared
+# harness is validated against live herdr state, and auto backend selection
+# refuses to guess from raw environment variables.
+#
+# Files:
+#   target.json  - driver identity + backend (written once by rzr-register)
+#   pending.json - generation/delivered + affected tasks (locked read-modify-write;
+#                  overlapping watchers for one driver are supported)
+#   ack          - last generation the driver reconciled (written by reconcile)
+#
+# Delivery is at-least-once and coalesced. Let g=generation (bumped on every
+# actionable edge), d=delivered (last generation nudged), a=ack (last generation
+# reconciled). The watcher delivers a nudge iff  g > a  AND  d <= a : at most one
+# outstanding (delivered-but-unacked) nudge exists no matter how many edges burst,
+# and once the driver acks, any edges that arrived meanwhile deliver a fresh nudge.
+# generation is persisted BEFORE the backend call, so a crash between deliver and
+# recording success re-delivers (a duplicate fixed nudge is acceptable; a lost
+# actionable edge is not).
+RZR_WAKE_MESSAGE="Rozoro notification pending; run rozoro reconcile."
+
+rzr_watchtowers_dir() { printf '%s/watchtowers' "$RZR_HOME"; }
+rzr_driver_dir() {  # <driver-id>
+  rzr_validate_task_component "$1" "driver id"
+  printf '%s/%s' "$(rzr_watchtowers_dir)" "$1"
+}
+
+# A filesystem-safe, stable driver id derived from an immutable backend identity
+# (a herdr pane "wX:pN" or a Codex thread id). Same identity -> same ledger dir
+# across restarts, so a resumed watcher reattaches instead of orphaning pending.
+rzr_driver_id_for() {  # <backend> <identity> -> driver-id
+  RZR_DRV_BACKEND="$1" RZR_DRV_IDENTITY="$2" python3 - <<'PY'
+import os, re
+backend = os.environ["RZR_DRV_BACKEND"]
+ident = os.environ["RZR_DRV_IDENTITY"]
+safe = re.sub(r'[^A-Za-z0-9._-]', '_', ident).strip('_') or "x"
+print(f"{backend}-{safe}"[:120])
+PY
+}
+
+# Live harness + readiness of a herdr pane, so registration can prove the declared
+# driver harness actually matches the pane before pinning it as the wake target.
+# One line: "<harness> <interactive_ready:true|false>" (harness empty if unknown).
+#
+# Real herdr (0.8.x) reports the harness in a field literally named `agent` under
+# `.result.agent` (e.g. .result.agent.agent == "claude"), alongside agent_status
+# and interactive_ready. Accept a few shapes so a schema tweak degrades to "unknown
+# harness" (registration refuses) rather than a wrong match.
+rzr_pane_harness_ready() {  # <pane>
+  local out
+  out=$(rzr_herdr agent get "$1" 2>/dev/null) || { printf ' false\n'; return 0; }
+  printf '%s' "$out" | jq -r '
+    (.result.agent // .result // .) as $a |
+    (($a.agent // $a.kind // $a.harness // "") | ascii_downcase) as $h |
+    (($a.interactive_ready // false) | tostring) as $ready |
+    "\($h) \($ready)"' 2>/dev/null || printf ' false\n'
+}
+
+# Write a file atomically with user-only permissions (temp in the same dir + mv).
+rzr_write_private() {  # <path>  (content on stdin)
+  local path="$1" tmp; tmp="$path.tmp.$$"
+  ( umask 077; cat > "$tmp" ) && chmod 600 "$tmp" 2>/dev/null; mv "$tmp" "$path"
+}
+
+# Read one field from a driver's ledger integers (generation/delivered/ack).
+# ack lives in its own single-writer file; generation/delivered live in
+# pending.json. Missing/malformed -> 0, so a fresh ledger reads as all-zero.
+rzr_ledger_int() {  # <driver-dir> <generation|delivered|ack>
+  local dir="$1" field="$2"
+  if [ "$field" = ack ]; then
+    local v; v=$(cat "$dir/ack" 2>/dev/null || echo 0)
+    case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+    return 0
+  fi
+  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_FIELD="$field" python3 - <<'PY'
+import json, os
+try:
+    d = json.load(open(os.environ["RZR_LEDGER_PENDING"]))
+    print(int(d.get(os.environ["RZR_LEDGER_FIELD"], 0)))
+except Exception:
+    print(0)
+PY
+}
+
+# Record one actionable edge: bump generation and remember the task's status.
+# Idempotent per (task,status) is NOT desired here - each real edge advances the
+# generation so a burst is represented, but coalescing (below) still collapses
+# delivery to one outstanding nudge.
+rzr_ledger_bump() {  # <driver-dir> <task-id> <status>
+  local dir="$1"
+  mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
+  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" \
+  RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
+import fcntl, json, os
+p = os.environ["RZR_LEDGER_PENDING"]
+lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
+try:    d = json.load(open(p))
+except Exception:
+    d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {},
+         "delivery_state": "idle", "retries": 0, "last_error": "", "updated": ""}
+d["generation"] = int(d.get("generation", 0)) + 1
+d.setdefault("tasks", {})[os.environ["RZR_LEDGER_ID"]] = {
+    "status": os.environ["RZR_LEDGER_STATUS"], "updated": os.environ["RZR_LEDGER_TS"]}
+d["updated"] = os.environ["RZR_LEDGER_TS"]
+tmp = p + ".tmp.%d" % os.getpid()
+os.umask(0o077)
+json.dump(d, open(tmp, "w"), indent=2)
+os.replace(tmp, p)
+os.close(lock_fd)
+PY
+}
+
+# Update the watcher-owned pending.json delivery bookkeeping after a delivery
+# attempt: mark the exact attempted generation delivered on success, or record a
+# soft failure/defer reason without advancing delivered (so it retries).
+rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation]
+  local dir="$1" state="$2" err="${3:-}" attempted="${4:-}"
+  if [ "$state" = delivered ]; then
+    case "$attempted" in ''|*[!0-9]*) rzr_die "delivered ledger record requires the attempted generation" ;; esac
+  fi
+  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_STATE="$state" RZR_LEDGER_ERR="$err" \
+  RZR_LEDGER_ATTEMPTED="$attempted" \
+  RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
+import fcntl, json, os
+p = os.environ["RZR_LEDGER_PENDING"]
+lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
+try:    d = json.load(open(p))
+except Exception:
+    d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {}, "retries": 0}
+state = os.environ["RZR_LEDGER_STATE"]
+if state == "delivered":
+    # Record exactly what this backend call attempted, not a newer generation
+    # that may have arrived while the call was in flight. Keep this monotonic in
+    # case overlapping calls complete out of order.
+    attempted = int(os.environ["RZR_LEDGER_ATTEMPTED"])
+    d["delivered"] = max(int(d.get("delivered", 0)), attempted)
+    d["last_error"] = ""
+else:
+    d["retries"] = int(d.get("retries", 0)) + 1
+    d["last_error"] = os.environ["RZR_LEDGER_ERR"]
+d["delivery_state"] = state
+d["updated"] = os.environ["RZR_LEDGER_TS"]
+tmp = p + ".tmp.%d" % os.getpid()
+os.umask(0o077)
+json.dump(d, open(tmp, "w"), indent=2)
+os.replace(tmp, p)
+os.close(lock_fd)
+PY
+}
+
+# Coalescing gate: deliver iff generation > ack AND delivered <= ack.
+rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
+  local dir="$1" g a d
+  g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
+  [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
+}
+
+# Advance the driver's ack to the given generation (single-writer file, atomic).
+rzr_ledger_ack() {  # <driver-dir> <generation>
+  local dir="$1"; mkdir -p "$dir"
+  printf '%s\n' "$2" | rzr_write_private "$dir/ack"
+}
+
+rzr_target_field() {  # <driver-dir> <field>
+  jq -r --arg k "$2" '.[$k] // empty' "$1/target.json" 2>/dev/null
+}
+
+# Resolve the registered wake target for `--wake`. With an explicit id, require it
+# is registered. Otherwise derive candidate driver ids from the CURRENT
+# environment's immutable identities and accept the single registered match. Never
+# guess a backend from a bare environment variable: an unregistered or ambiguous
+# environment is a hard error (register first).
+rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
+  local explicit="${1:-}" dir cand matches=""
+  if [ -n "$explicit" ]; then
+    dir="$(rzr_driver_dir "$explicit")"
+    [ -s "$dir/target.json" ] || rzr_die "driver '$explicit' is not registered (run: rozoro register --harness <h>)"
+    printf '%s' "$dir"; return 0
+  fi
+  if [ -n "${CODEX_THREAD_ID:-}" ]; then
+    cand="$(rzr_driver_dir "$(rzr_driver_id_for codex "$CODEX_THREAD_ID")")"
+    [ -s "$cand/target.json" ] && matches="$matches $cand"
+  fi
+  if [ -n "${HERDR_PANE_ID:-}" ]; then
+    cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")")"
+    [ -s "$cand/target.json" ] && matches="$matches $cand"
+  fi
+  set -- $matches
+  case $# in
+    0) rzr_die "--wake found no registered watchtower for this environment (run: rozoro register --harness <h>)" ;;
+    1) printf '%s' "$1" ;;
+    *) rzr_die "--wake is ambiguous: multiple registered targets match this environment; pass --driver <id>" ;;
+  esac
+}
+
 # --- home lock (atomic mkdir, stale-pid reclaim) ---------------------------
 # Serializes mutating operations (spawn) so two orchestrators never race on the
 # same home. Read-only tools (list, watch) do not take it.

@@ -1,7 +1,7 @@
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
 setup() {
-  unset CODEX_THREAD_ID FAKE_CODEX_HAS_QUEUE FAKE_CODEX_QUEUE_FAIL
+  unset CODEX_THREAD_ID HERDR_PANE_ID FAKE_CODEX_HAS_QUEUE FAKE_CODEX_QUEUE_FAIL FAKE_HERDR_FAIL_MATCH
   export TEST_ROOT="$BATS_TEST_TMPDIR/fixture"
   export HOME="$TEST_ROOT/home"
   export ROZORO_HOME="$TEST_ROOT/rozoro"
@@ -30,6 +30,12 @@ teardown() {
 }
 
 register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
+
+# Octal permission bits of a file, portable across GNU and macOS. Try GNU
+# `stat -c` first: on BSD/macOS `-c` is rejected (clean non-zero) so we fall back
+# to `stat -f`. The reverse order is unsafe — GNU treats `-f` as --file-system and
+# would print filesystem info with a zero exit, masking the real permission bits.
+file_perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 assert_success() {
   [ "$status" -eq 0 ] || { printf 'expected success, got %s:\n%s\n' "$status" "$output" >&2; return 1; }
@@ -67,6 +73,14 @@ fake_response() {
 fake_status() {
   pane="$1" status_value="$2"
   printf '%s\n' "$status_value" > "$FAKE_HERDR_ROOT/status.$pane"
+}
+
+# Configure a pane's full agent-get shape for registration/gating tests:
+#   fake_pane <pane> <status> [kind] [interactive_ready:true|false]
+fake_pane() {
+  pane="$1"; printf '%s\n' "$2" > "$FAKE_HERDR_ROOT/status.$pane"
+  [ $# -ge 3 ] && printf '%s\n' "$3" > "$FAKE_HERDR_ROOT/kind.$pane"
+  printf '%s\n' "${4:-true}" > "$FAKE_HERDR_ROOT/ready.$pane"
 }
 
 start_event_server() {

@@ -49,8 +49,11 @@ are passed to the crew verbatim.
    message on actionable edges. **Never run `rozoro watch` in a foreground bash
    tool call**: that occupies your turn and queues operator messages. The
    extension starts automatically for this watchtower prompt; `/rozoro-monitor
-   status` reports it and `/rozoro-monitor on` repairs it. Outside Pi, run
-   `rozoro watch --once <id>` only through a genuinely external background waiter.
+   status` reports it and `/rozoro-monitor on` repairs it. Outside Pi (Codex or
+   Claude), register your validated wake target once with `rozoro register
+   --harness <h>`, then run `rozoro watch --once --wake <id>` only through a
+   genuinely external background waiter — the nudge is durable (at-least-once).
+   When it arrives, run `rozoro reconcile` to read verdicts and ack it.
    `state/<id>.status` remains the non-blocking current-state snapshot.
 3. On each edge, `rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;

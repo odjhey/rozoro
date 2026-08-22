@@ -67,8 +67,14 @@ case "$key" in
   session.list.--json) printf '{"sessions":[{"name":"test","socket_path":"%s"}]}\n' "$FAKE_HERDR_SOCKET" ;;
   tab.create.*) printf '{"result":{"root_pane":{"pane_id":"p1","tab_id":"t1"},"tab_id":"t1"}}\n' ;;
   agent.get.*)
+    # Mirror real herdr 0.8.x: harness under .result.agent.agent, plus
+    # agent_status and interactive_ready on the same object.
     pane="${key#agent.get.}"
-    if [ -f "$FAKE_HERDR_ROOT/status.$pane" ]; then printf '{"result":{"agent_status":"%s"}}\n' "$(cat "$FAKE_HERDR_ROOT/status.$pane")"
+    if [ -f "$FAKE_HERDR_ROOT/status.$pane" ]; then
+      kind=""; [ -f "$FAKE_HERDR_ROOT/kind.$pane" ] && kind="$(cat "$FAKE_HERDR_ROOT/kind.$pane")"
+      ready=false; [ -f "$FAKE_HERDR_ROOT/ready.$pane" ] && ready="$(cat "$FAKE_HERDR_ROOT/ready.$pane")"
+      printf '{"result":{"type":"agent_info","agent":{"agent":"%s","agent_status":"%s","interactive_ready":%s,"pane_id":"%s"}}}\n' \
+        "$kind" "$(cat "$FAKE_HERDR_ROOT/status.$pane")" "$ready" "$pane"
     else exit 1; fi ;;
   pane.get.*) exit 1 ;;
   *) printf '{"result":{}}\n' ;;
