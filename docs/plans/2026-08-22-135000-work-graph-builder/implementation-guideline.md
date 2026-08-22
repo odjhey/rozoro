@@ -40,7 +40,102 @@ Examples:
 
 Do not create graph nodes merely for local code review, testing, exploration, or parallel research when a crew can use its own subagents for those tasks.
 
-## 2. Implementation order
+## 2. Target user experience
+
+The graph runtime should mostly disappear behind the watchtower.
+
+A user should be able to describe the durable work shape in ordinary terms:
+
+```text
+"Implement #424 as three stacked PRs. Backend and frontend can run in parallel,
+then have an integration slice depend on both."
+```
+
+The watchtower should translate that into a crew-level graph:
+
+```text
+backend ─────┐
+             ├── integration ── cleanup
+frontend ────┘
+```
+
+The user should not need to specify reviewer/tester/scout agents. Those remain internal decisions of each crew and its harness.
+
+The watchtower can acknowledge the run with a compact view:
+
+```text
+run: issue-424
+4 crew responsibilities
+
+● backend
+● frontend
+○ integration   waiting on backend + frontend
+○ cleanup       waiting on integration
+```
+
+The normal interactive surface should then be simple status/show commands or equivalent watchtower requests:
+
+```text
+show graph
+status issue-424
+```
+
+Example status:
+
+```text
+issue-424    RUNNING
+
+✓ backend       PR #431   ready
+● frontend      working
+○ integration   waiting: frontend
+○ cleanup       waiting: integration
+```
+
+Deterministic graph progression should happen without waking the watchtower. When `frontend` finishes, `integration` should become runnable automatically.
+
+A crew's internal subagents must not appear as graph nodes:
+
+```text
+frontend crew
+  ├─ scout subagent
+  ├─ reviewer subagent
+  └─ test subagent
+```
+
+The graph still reports only:
+
+```text
+● frontend
+```
+
+For stacked PRs, outputs such as branch, PR number, and head SHA should flow automatically into downstream crew tasks. Users should not manually shuttle those values between crews.
+
+Intentional cross-crew feedback is different. If the watchtower explicitly creates an independent review boundary:
+
+```text
+implement ──> independent review
+    ^               |
+    |---- changes --|
+```
+
+then the graph may automatically resume the same implementation crew with the review findings. If the loop hits its configured limit, the watchtower should be brought back in with a concise explanation and current artifact identity.
+
+The primary UX principle is:
+
+> The user speaks in outcomes and durable work boundaries. The watchtower turns that into a graph of crews. The graph advances deterministic dependencies automatically. Each crew remains autonomous internally. The watchtower/user is interrupted only when judgment is actually required.
+
+A low-level CLI should still exist for inspectability, debugging, recovery, and automation:
+
+```text
+rozoro graph run <graph>
+rozoro graph status <run>
+rozoro graph show <run>
+rozoro graph reconcile <run>
+```
+
+But this should not be the primary interaction model for normal watchtower use.
+
+## 3. Implementation order
 
 Implement the system in layers. Each layer should remain usable and testable before moving to the next.
 
@@ -66,11 +161,11 @@ Reusable playbooks
 
 Avoid implementing the full graph runtime in one large PR.
 
-## 3. Groundwork: stabilize Rozoro automation contracts
+## 4. Groundwork: stabilize Rozoro automation contracts
 
 These should preferably land independently of the graph runtime.
 
-### 3.1 Idempotent crew start
+### 4.1 Idempotent crew start
 
 The graph reconciler must be safe to retry after crashes.
 
@@ -109,7 +204,7 @@ Exit criteria:
 - conflicting reuse fails rather than silently reusing the task;
 - normal interactive starts without a request id remain unchanged.
 
-### 3.2 Dynamic task sensing
+### 4.2 Dynamic task sensing
 
 The graph will create crews after the run has already started.
 
@@ -133,7 +228,7 @@ crew B completes
 
 without restarting or manually reconfiguring the monitor.
 
-### 3.3 Stable machine-readable CLI results
+### 4.3 Stable machine-readable CLI results
 
 Automation should not parse human-oriented terminal messages.
 
@@ -156,13 +251,13 @@ The exact schema can evolve initially, but it should expose at least:
 
 Do not make this graph-specific.
 
-## 4. Build the graph model before connecting agents
+## 5. Build the graph model before connecting agents
 
 The first graph implementation should work completely offline.
 
 Use fixtures and synthetic events rather than real crews.
 
-### 4.1 Define a small canonical IR
+### 5.1 Define a small canonical IR
 
 YAML can be the authoring format, but the runtime should consume a canonical representation.
 
@@ -188,7 +283,7 @@ Do not add a `subagent` node type.
 
 Do not add arbitrary scripting or expression evaluation.
 
-### 4.2 Keep the initial schema boring
+### 5.2 Keep the initial schema boring
 
 A rough authoring form is enough:
 
@@ -220,7 +315,7 @@ The canonical runtime representation can be JSON or equivalent.
 
 The important part is deterministic semantics, not authoring syntax.
 
-### 4.3 Validate aggressively
+### 5.3 Validate aggressively
 
 Reject invalid graphs before execution.
 
@@ -237,7 +332,7 @@ Validate:
 
 Prefer failing early over trying to interpret ambiguous graphs at runtime.
 
-## 5. Build a pure reconciler
+## 6. Build a pure reconciler
 
 Before spawning real crews, implement the central function conceptually as:
 
@@ -278,7 +373,7 @@ integration becomes runnable
 
 There should be no LLM inside this layer.
 
-## 6. Persist execution as an event journal
+## 7. Persist execution as an event journal
 
 Once the state machine works offline, add durable runs.
 
@@ -315,7 +410,7 @@ Persist decisions before performing external side effects whenever possible.
 
 The runtime should be restartable simply by reading disk and reconciling again.
 
-## 7. Connect the reconciler to Rozoro
+## 8. Connect the reconciler to Rozoro
 
 Only after the graph semantics and durable state are proven should the implementation start real crews.
 
@@ -343,7 +438,7 @@ If the process dies anywhere in that sequence, rerunning reconciliation must not
 
 This is one of the most important correctness requirements in the whole project.
 
-## 8. Define the graph result contract
+## 9. Define the graph result contract
 
 The graph needs machine-readable outcomes beyond the human `handoff.md`.
 
@@ -379,11 +474,11 @@ The graph runtime validates this before using it.
 
 Invalid results should stop for watchtower attention rather than guessing.
 
-## 9. Implement the acyclic useful subset first
+## 10. Implement the acyclic useful subset first
 
 The first live graph version should support the workflows that clearly justify cross-crew orchestration.
 
-### 9.1 Sequence
+### 10.1 Sequence
 
 ```text
 schema
@@ -395,7 +490,7 @@ frontend
 
 Useful for stacked work or ordered repository changes.
 
-### 9.2 Parallel fan-out
+### 10.2 Parallel fan-out
 
 ```text
         ┌─ backend
@@ -405,7 +500,7 @@ start ──┤
 
 Both crews can progress independently.
 
-### 9.3 Join
+### 10.3 Join
 
 ```text
 backend ──┐
@@ -428,7 +523,7 @@ Phase exit criteria:
 - malformed node results fail closed;
 - downstream task dispatch retries do not duplicate work.
 
-## 10. Add `resume` only after basic graphs are stable
+## 11. Add `resume` only after basic graphs are stable
 
 Once sequence/fan-out/join work reliably, add context-preserving transitions.
 
@@ -464,7 +559,7 @@ For a reaped crew, it may map to `resume`.
 
 That implementation detail belongs in the graph-to-Rozoro adapter.
 
-## 11. Add cycles conservatively
+## 12. Add cycles conservatively
 
 Cycles are useful, but they are where accidental autonomous loops appear.
 
@@ -496,7 +591,7 @@ Do not make ordinary crew-internal review/test iterations into graph cycles.
 
 Those remain inside the crew.
 
-## 12. Make artifact identity explicit
+## 13. Make artifact identity explicit
 
 Any cross-crew validation or stacked dependency should identify the artifact it evaluated.
 
@@ -518,7 +613,7 @@ graph still considers old approval valid
 
 If an upstream artifact changes, dependent approvals/results tied to the old artifact must be invalidated.
 
-## 13. Implement stacked PRs as the first higher-level workflow
+## 14. Implement stacked PRs as the first higher-level workflow
 
 Stacked PRs are a strong graph use case because each slice has durable identity and dependency.
 
@@ -558,7 +653,7 @@ head SHA
 
 so the next slice can build on the right base.
 
-## 14. Delay reusable playbooks
+## 15. Delay reusable playbooks
 
 Do not design a playbook framework before at least two or three real graph definitions repeat the same topology.
 
@@ -582,7 +677,7 @@ unless there is a genuine cross-crew reason for those boundaries.
 
 Ordinary review/test delegation belongs to the harness.
 
-## 15. Watchtower integration
+## 16. Watchtower integration
 
 The watchtower should not be involved in deterministic transitions.
 
@@ -608,7 +703,7 @@ Wake or pause for the watchtower when:
 
 The watchtower remains the judgment layer, not the scheduler loop.
 
-## 16. Suggested PR breakdown
+## 17. Suggested PR breakdown
 
 Implementation should preferably land as a sequence of independently understandable changes.
 
@@ -653,7 +748,7 @@ Some groundwork PRs can run in parallel.
 
 Avoid combining the runtime, monitoring changes, graph model, UI, and stacked workflows into one implementation branch.
 
-## 17. Testing priorities
+## 18. Testing priorities
 
 Favor failure-mode tests over only happy-path examples.
 
@@ -685,7 +780,7 @@ The expected answer should usually be:
 
 > The same logical state is recovered and no duplicate durable work is created.
 
-## 18. Things implementors should actively avoid
+## 19. Things implementors should actively avoid
 
 Do not let the implementation drift toward:
 
@@ -705,7 +800,7 @@ A useful smell test is:
 
 If yes, keep it above Rozoro.
 
-## 19. V1 definition of done
+## 20. V1 definition of done
 
 V1 does not need to solve every orchestration problem.
 
