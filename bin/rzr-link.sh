@@ -7,9 +7,10 @@
 # Finds the crew's transcript by searching the harness session store for the
 # unique `rozoro-task: <id>` marker rzr-render put in the brief (concurrency-safe:
 # no reliance on "newest file", which breaks when crews share a cwd). Supports
-# Claude and Codex. Idempotent — a no-op once a valid link exists — so the watch
+# Claude, Codex, and Pi. Idempotent — a no-op once a valid link exists — so the watch
 # step can call it freely. Run a few seconds after rzr-spawn (the crew must have
-# received the brief).
+# received the brief). Pi uses its native preallocated session UUID, with marker
+# discovery retained for sessions created before native linking was added.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -79,6 +80,53 @@ PY
     uuid="${found#*$'\t'}"
     [ "$uuid" != "$found" ] || uuid=""
     resume="codex resume $uuid"
+    ;;
+  pi)
+    # Pi accepts a caller-selected UUID at launch, so normally we only need to
+    # locate the file whose header confirms that UUID and cwd. For Pi tasks
+    # created by older Rozoro versions, fall back to matching the unique marker
+    # in a real user message. Respect both documented Pi storage overrides.
+    pi_data="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+    STORE="${PI_CODING_AGENT_SESSION_DIR:-$pi_data/sessions}"
+    [ -d "$STORE" ] || rzr_die "no Pi sessions dir $STORE"
+    expected="$(rzr_meta_get "$ID" session || true)"
+    found="$(RZR_STORE="$STORE" RZR_MARKER="rozoro-task: $ID" RZR_CWD="$CWD" RZR_EXPECTED="$expected" python3 - <<'PY'
+import glob, json, os
+
+for path in sorted(glob.glob(os.path.join(os.environ["RZR_STORE"], "**", "*.jsonl"), recursive=True), reverse=True):
+    try:
+        with open(path) as stream:
+            header = json.loads(next(stream))
+            if header.get("type") != "session" or header.get("cwd") != os.environ["RZR_CWD"]:
+                continue
+            session_id = header.get("id", "")
+            expected = os.environ["RZR_EXPECTED"]
+            if expected:
+                if session_id == expected:
+                    print(path + "\t" + session_id)
+                    raise SystemExit
+                continue
+            for line in stream:
+                item = json.loads(line)
+                message = item.get("message", {})
+                if item.get("type") != "message" or message.get("role") != "user":
+                    continue
+                content = message.get("content", "")
+                texts = [content] if isinstance(content, str) else [
+                    part.get("text", "") for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ]
+                if any(os.environ["RZR_MARKER"] in text.splitlines() for text in texts):
+                    print(path + "\t" + session_id)
+                    raise SystemExit
+    except (OSError, StopIteration, ValueError):
+        continue
+PY
+)"
+    match="${found%%$'\t'*}"
+    uuid="${found#*$'\t'}"
+    [ "$uuid" != "$found" ] || uuid=""
+    resume="pi --session $uuid"
     ;;
   *) rzr_die "session linking is not supported for harness '$HARNESS'" ;;
 esac

@@ -14,8 +14,8 @@
 #   --cwd       working directory for the tab (default: current dir). The agent
 #               loads THIS repo's own rules (AGENTS.md/skills) from here.
 #   --label     concise tab label (default: the exact task key)
-#   --harness   agent kind (overrides preset). Claude and Codex are wired for
-#               model/effort; other kinds have more limited mappings.
+#   --harness   agent kind (overrides preset). Claude, Codex, and Pi are wired
+#               for model/effort; other kinds have more limited mappings.
 #   --model     model for the crew, e.g. gpt-5.6-sol (overrides preset)
 #   --effort    reasoning effort: low|medium|high|xhigh|max (overrides preset)
 #   --permission-mode  autonomous permission signal for non-Codex harnesses;
@@ -26,10 +26,9 @@
 #
 # Precedence for harness/model/effort/permission-mode: explicit flag > preset >
 # built-in harness fallback, except Codex permission mode is always yolo. The
-# claude system prompt is the rendered handoff protocol plus any preset `rules`,
-# delivered via --append-system-prompt-file; the task prompt itself is passed
-# verbatim (harnesses lacking a system-prompt channel instead get the protocol
-# folded into the prompt — see below).
+# Claude/Pi system prompts contain the rendered handoff protocol plus any preset
+# `rules`; the task prompt itself is passed verbatim (harnesses lacking a
+# system-prompt channel instead get the protocol folded into the prompt).
 #
 # Mechanism: one herdr `tab create` (a clickable tab in the orchestrator's own
 # workspace), then `agent start` to bring up the agent in that tab's pane, then
@@ -97,15 +96,20 @@ esac
 [ "$HARNESS" = codex ] && PERMMODE="yolo"
 
 # The handoff protocol is rozoro overhead, kept OUT of the verbatim task prompt.
-# claude gets it (plus any preset rules) as a system prompt via a single combined
-# file — claude forbids --append-system-prompt alongside --append-system-prompt-file,
-# so they must be merged here. Harnesses with no system-prompt channel instead get
-# the protocol folded into the delivered prompt, so they still report handoffs.
+# Claude and Pi get it (plus any preset rules) through their system-prompt
+# channels. Harnesses without one get the protocol folded into the delivered
+# prompt, so they still report handoffs.
 FOLDER="$(rzr_task_dir "$ID")"
 rzr_render_handoff_protocol "$ID"
 HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
-if [ "$HARNESS" = claude ]; then
+SESSION_ID=""
+if [ "$HARNESS" = pi ]; then
+  # Pi can start with a caller-selected UUID. Preallocating it removes transcript
+  # discovery races and gives rzr-link/rzr-resume an exact durable identity.
+  SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+fi
+if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
   { cat "$HANDOFF"
     [ -n "$RULES" ] && printf '\n\n---\n## Crew rules\n\n%s\n' "$RULES"
@@ -149,6 +153,7 @@ do_spawn() {
   rzr_meta_set "$ID" model "${MODEL:-}"
   rzr_meta_set "$ID" effort "${EFFORT:-}"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
+  [ -n "$SESSION_ID" ] && rzr_meta_set "$ID" session "$SESSION_ID"
   rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
   echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
@@ -168,7 +173,7 @@ do_spawn() {
   # NUL-separated (a rule value may contain newlines), read into an array here.
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
-    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE")
+    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID")
   local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 

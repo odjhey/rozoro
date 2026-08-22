@@ -44,9 +44,14 @@ are passed to the crew verbatim.
    an immutable task key, then renders a durable brief (with
    the handoff protocol), spawns the crew, links its session. Prefer this over raw
    `rozoro spawn`.
-2. Sense without blocking: run `rozoro watch --once <id>` as a background waiter
-   (herdr push stream, ~0% CPU; wakes you on a real edge) or read
-   `state/<id>.status`. Don't sit in a poll loop.
+2. Sense without blocking. In Pi, this repo's `rozoro-watchtower` extension owns
+   the Herdr push subscriber in the background and injects a `[rozoro event]`
+   message on actionable edges. **Never run `rozoro watch` in a foreground bash
+   tool call**: that occupies your turn and queues operator messages. The
+   extension starts automatically for this watchtower prompt; `/rozoro-monitor
+   status` reports it and `/rozoro-monitor on` repairs it. Outside Pi, run
+   `rozoro watch --once <id>` only through a genuinely external background waiter.
+   `state/<id>.status` remains the non-blocking current-state snapshot.
 3. On each edge, `rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
    `needs-action` → answer with `rozoro send <id> "..."`; a no-new-block on an idle

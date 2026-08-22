@@ -239,22 +239,22 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 # with the wrong flags.
 #
 # `permmode` is a generic "run autonomously" signal: when non-empty, claude
-# passes its literal value (--permission-mode <v>) and copilot uses --mode
-# autopilot --allow-all. Codex is deliberately always launched with --yolo;
-# its permmode input cannot weaken that spawner invariant. `effort` maps to a
-# native flag for claude and to Codex's model_reasoning_effort config override.
-# Harnesses without a system-prompt channel get the protocol folded into the
-# delivered prompt.
+# passes its literal value (--permission-mode <v>), copilot uses --mode
+# autopilot --allow-all, and pi uses --approve so project-local resources load
+# without an interactive trust gate. Codex is deliberately always launched with
+# --yolo; its permmode input cannot weaken that spawner invariant. `effort` maps
+# to a native flag for claude, Pi's --thinking, and Codex's
+# model_reasoning_effort config override.
 #
 # The 5th arg is a PATH to a rendered system-prompt file (handoff protocol +
-# preset rules), delivered via --append-system-prompt-file. claude rejects
-# --append-system-prompt together with --append-system-prompt-file, so the two
-# must already be combined into this one file (rzr-spawn does that).
+# preset rules). Claude takes it through --append-system-prompt-file; Pi's
+# --append-system-prompt accepts either text or a file path. The 6th optional arg
+# is a preallocated harness session id (currently used by Pi for exact linking).
 #
-# Verified on this machine: claude and Codex argument parsing. Wired from the
-# operator's known invocations but NOT verified here: copilot, pi.
-rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file>
-  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5"
+# Verified on this machine: Claude, Codex, and Pi argument parsing. Wired from
+# the operator's known invocation but NOT verified here: Copilot.
+rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id]
+  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}"
   case "$harness" in
     claude)
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
@@ -271,8 +271,13 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$permmode" ] && printf '%s\0%s\0%s\0' --mode autopilot --allow-all
       ;;
-    pi)  # pi takes no launch flags; model/effort/permission are ignored
-      : ;;
+    pi)
+      [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
+      [ -n "$effort" ]     && printf '%s\0%s\0' --thinking "$effort"
+      [ -n "$permmode" ]   && printf '%s\0' --approve
+      [ -n "$sysfile" ]    && printf '%s\0%s\0' --append-system-prompt "$sysfile"
+      [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
+      ;;
     *) return 1 ;;
   esac
   # Known harness: succeed regardless of which optional fields were empty (a
