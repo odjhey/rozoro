@@ -379,16 +379,16 @@ rzr_status_get() {  # <id> -> last observed status, or fail if never seen
 # Live agent status of a pane. One of: idle working done blocked unknown
 # (a real agent), shell (pane exists, no agent - e.g. --no-agent), or gone
 # (pane no longer exists).
-rzr_agent_status() {  # <pane>
+rzr_agent_snapshot() {  # <pane> -> status<TAB>ordered-revision
   local out
   if out=$(rzr_herdr agent get "$1" 2>/dev/null); then
-    printf '%s' "$out" \
-      | jq -r '.result.agent_status // .result.agent.agent_status // .agent_status // "unknown"' 2>/dev/null \
-      | grep . || echo unknown
+    printf '%s' "$out" | jq -r '[.result.agent_status // .result.agent.agent_status // .agent_status // "unknown", (.result.state_change_seq // .result.agent.state_change_seq // .state_change_seq // "")] | @tsv' 2>/dev/null || printf 'unknown\t\n'
     return
   fi
-  if rzr_herdr pane get "$1" >/dev/null 2>&1; then echo shell; else echo gone; fi
+  if rzr_herdr pane get "$1" >/dev/null 2>&1; then printf 'shell\t\n'; else printf 'gone\t\n'; fi
 }
+
+rzr_agent_status() { rzr_agent_snapshot "$1" | cut -f1; }
 
 # `herdr agent start` can return agent_not_ready after it has successfully
 # claimed the pane and launched the harness, while the harness is still crossing
@@ -521,14 +521,12 @@ except Exception:
 PY
 }
 
-# Record one actionable edge: bump generation and remember the task's status.
-# Idempotent per (task,status) is NOT desired here - each real edge advances the
-# generation so a burst is represented, but coalescing (below) still collapses
-# delivery to one outstanding nudge.
-rzr_ledger_bump() {  # <driver-dir> <task-id> <status>
+# Record one semantic action edge. An edge ID makes overlapping watchers
+# idempotent while legacy callers without an edge ID retain per-call bumps.
+rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   local dir="$1"
   mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
-  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" \
+  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" RZR_LEDGER_EDGE="${4:-}" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
@@ -538,9 +536,15 @@ try:    d = json.load(open(p))
 except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {},
          "delivery_state": "idle", "retries": 0, "last_error": "", "updated": ""}
+task = d.setdefault("tasks", {}).get(os.environ["RZR_LEDGER_ID"], {})
+edge = os.environ["RZR_LEDGER_EDGE"]
+if edge and task.get("edge_id") == edge:
+    os.close(lock_fd)
+    raise SystemExit(0)
 d["generation"] = int(d.get("generation", 0)) + 1
-d.setdefault("tasks", {})[os.environ["RZR_LEDGER_ID"]] = {
-    "status": os.environ["RZR_LEDGER_STATUS"], "updated": os.environ["RZR_LEDGER_TS"]}
+d["tasks"][os.environ["RZR_LEDGER_ID"]] = {
+    "status": os.environ["RZR_LEDGER_STATUS"], "edge_id": edge or None,
+    "updated": os.environ["RZR_LEDGER_TS"]}
 d["updated"] = os.environ["RZR_LEDGER_TS"]
 tmp = p + ".tmp.%d" % os.getpid()
 os.umask(0o077)

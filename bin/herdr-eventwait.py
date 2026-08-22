@@ -24,7 +24,7 @@ Usage: herdr-eventwait.py <socket_path> <timeout_seconds> <pane_id> [<pane_id>..
 Output (one line per event, TAB-separated; a raw projection, the bash side adds
 timing and dedups):
   @subscribed
-  <pane_id>\t<workspace_id>\t<agent_status>\t<agent>
+  <pane_id>\t<workspace_id>\t<agent_status>\t<agent>\t<state_change_seq>
 
 Exit status:
   0  the bounded timeout elapsed cleanly, or the caller closed our stdout.
@@ -140,12 +140,15 @@ def main(argv):
         if message.get("event") != "pane.agent_status_changed":
             continue
         data = message.get("data") or {}
-        fields = (
+        fields = [
             _clean(data.get("pane_id") or ""),
             _clean(data.get("workspace_id") or ""),
             _clean(data.get("agent_status") or ""),
             _clean(data.get("agent") or ""),
-        )
+        ]
+        revision = data.get("state_change_seq") or data.get("revision")
+        if revision is not None:
+            fields.append(_clean(revision))
         sys.stdout.write("\t".join(fields) + "\n")
         sys.stdout.flush()
 

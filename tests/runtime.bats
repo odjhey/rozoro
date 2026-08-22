@@ -36,3 +36,20 @@ reduce() { python3 "$REPO_ROOT/bin/rzr-runtime.py" "$1" --id task --path "$ROZOR
   [ "$(jq -r .source.freshness "$ROZORO_HOME/state/task.runtime.json")" = stale ]
   [ "$(jq -r .foreground_status "$ROZORO_HOME/state/task.runtime.json")" = working ]
 }
+
+@test "older and duplicate Herdr revisions cannot regress projection" {
+  write_handoff task ""
+  python3 "$REPO_ROOT/bin/rzr-runtime.py" reconcile --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground done --seq 20 >/dev/null
+  python3 "$REPO_ROOT/bin/rzr-runtime.py" event --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground working --seq 19 >/dev/null
+  [ "$(jq -r .foreground_status "$ROZORO_HOME/state/task.runtime.json")" = done ]
+  [ "$(jq -r .source.event_seq "$ROZORO_HOME/state/task.runtime.json")" = 20 ]
+  [ "$(jq -r .source.sequence_kind "$ROZORO_HOME/state/task.runtime.json")" = herdr ]
+}
+
+@test "settlement performs exactly one bounded delayed handoff reconciliation" {
+  write_handoff task ""; RZR_HANDOFF_DELAY_MS=0 reduce reconcile working >/dev/null
+  (sleep 0.05; write_handoff task '## turn 1 — done' 'verdict: done' 'reason:' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: none') & register_pid "$!"
+  run env RZR_HANDOFF_DELAY_MS=200 python3 "$REPO_ROOT/bin/rzr-runtime.py" event --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground done
+  assert_success; wait; TEST_PIDS=""
+  [ "$(printf '%s' "$output" | jq -r .turn.report_status)" = reported ]
+}

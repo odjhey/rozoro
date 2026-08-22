@@ -44,3 +44,13 @@ block() { printf '%s\n' "## turn $1 — report" "verdict: $2" "reason: ${3:-}" "
   write_handoff task "$(block 1 done)" "$(block 3 done)"
   run rzr-status.sh task --json; assert_success; assert_output_contains 'turn sequence expected 2, got 3'
 }
+
+@test "parallel independent readers are equivalent and filesystem-pure" {
+  write_handoff task '## turn 1 — done' 'verdict: done' 'reason:' 'did: work' 'pending: none' 'inputs-needed: none' 'artifacts: none'
+  before=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort)
+  for n in 1 2 3 4 5 6 7 8; do rzr-status.sh task --json > "$BATS_TEST_TMPDIR/status.$n" & register_pid "$!"; done
+  wait; TEST_PIDS=""; first=$(cat "$BATS_TEST_TMPDIR/status.1")
+  for n in 2 3 4 5 6 7 8; do [ "$(cat "$BATS_TEST_TMPDIR/status.$n")" = "$first" ]; done
+  after=$(find "$ROZORO_HOME" -type f -exec shasum {} \; | sort); [ "$before" = "$after" ]
+  [ ! -e "$ROZORO_HOME/tasks/task/.seen-blocks" ]
+}

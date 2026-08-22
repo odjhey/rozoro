@@ -129,24 +129,14 @@ idx_for_pane() {  # <pane> -> index into IDS/PANES/SEEN, or fail
   return 1
 }
 
-# Seed / level-reconcile: record each task's current state up front (so the disk
-# status is authoritative from t0 and the driver can read it immediately), and
-# collect the live panes to subscribe to. Reading status here, just before we
-# subscribe, leaves a sub-second window where an edge could land before the
-# subscription is live; the next edge corrects the disk status, and agent-state
-# changes are seconds apart, so in practice nothing is missed.
+# Collect identities without querying agent state. Subscription must be active
+# before the synchronized level snapshot so every concurrent edge is either in
+# that snapshot or queued on the stream.
 for id in "${WANT[@]}"; do
   rzr_task_exists "$id" || { echo "rzr: skip unknown task '$id'" >&2; continue; }
-  p=$(rzr_pane_of "$id"); s=$(rzr_agent_status "$p")
-  rzr_status_set "$id" "$s"
-  projection=$(python3 "$RZR_BIN/rzr-runtime.py" reconcile --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$s")
-  if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"; fi
-  case "$s" in
-    gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2; continue ;;
-  esac
-  IDS+=("$id"); PANES+=("$p"); SEEN+=("$s")
+  IDS+=("$id"); PANES+=("$(rzr_pane_of "$id")"); SEEN+=("")
 done
-[ "${#PANES[@]}" -gt 0 ] || rzr_die "no live tasks to watch"
+[ "${#PANES[@]}" -gt 0 ] || rzr_die "no known tasks to watch"
 
 # Subscribe to the push stream for all live panes. The reader writes one line
 # per edge to a fifo; we hold only the READ end so its exit surfaces as EOF.
@@ -176,6 +166,22 @@ exec 3< "$PIPE"
 IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (socket $SOCK)"
 [ "$ack" = "@subscribed" ] || rzr_die "unexpected event subscriber output: $ack"
 
+# Synchronized post-subscription level reconciliation. Herdr 0.8.2 exposes the
+# ordered foreground state_change_seq; queued events at or below this revision
+# are harmlessly rejected by the locked reducer.
+i=0
+while [ "$i" -lt "${#PANES[@]}" ]; do
+  id="${IDS[$i]}"; p="${PANES[$i]}"; snapshot=$(rzr_agent_snapshot "$p")
+  IFS=$'\t' read -r s seq <<EOF
+$snapshot
+EOF
+  SEEN[$i]="$s"; rzr_status_set "$id" "$s"
+  seq_args=(); [ -n "${seq:-}" ] && seq_args=(--seq "$seq")
+  projection=$(python3 "$RZR_BIN/rzr-runtime.py" reconcile --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$s" ${seq_args[@]+"${seq_args[@]}"})
+  if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"; fi
+  i=$((i + 1))
+done
+
 # Recover an undelivered generation from a previous watcher process. Subscribe
 # first, then level-check, so a simultaneous driver transition is either seen by
 # this check or queued on the stream. Duplicate delivery remains acceptable under
@@ -199,7 +205,7 @@ fi
 # to state/<id>.status (an idempotent, last-writer-wins token) so the driver can
 # reconcile crew state. When the subscriber exits (socket closed / all panes
 # gone) the read returns EOF and we stop.
-while IFS=$'\t' read -r pane _ st _ <&3; do
+while IFS=$'\t' read -r pane _ st _ seq <&3; do
   # Driver status edges retry a retained Herdr wake even when no further crew
   # changes occur. Use the pushed status directly to avoid a stale follow-up
   # query racing the event we just received.
@@ -214,9 +220,11 @@ while IFS=$'\t' read -r pane _ st _ <&3; do
   prev="${SEEN[$i]}"
   [ "$st" = "$prev" ] && continue
   id="${IDS[$i]}"
-  SEEN[$i]="$st"
-  rzr_status_set "$id" "$st"
-  projection=$(python3 "$RZR_BIN/rzr-runtime.py" event --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$st")
+  seq_args=(); [ -n "${seq:-}" ] && seq_args=(--seq "$seq")
+  projection=$(python3 "$RZR_BIN/rzr-runtime.py" event --id "$id" --path "$RZR_STATE/$id.runtime.json" --handoff "$(rzr_task_dir "$id")/handoff.md" --parser "$RZR_BIN/rzr-handoff.py" --foreground "$st" ${seq_args[@]+"${seq_args[@]}"})
+  # A queued event older than the synchronized snapshot is not a real edge.
+  if [ -n "${seq:-}" ] && [ "$(printf '%s' "$projection" | jq -r '.source.event_seq // ""')" != "$seq" ]; then continue; fi
+  SEEN[$i]="$st"; rzr_status_set "$id" "$st"
   if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"; fi
   DELIVERED_WAKE=0
   # A wake means "the crew FINISHED a turn", so only a settle that FOLLOWS
@@ -230,7 +238,8 @@ while IFS=$'\t' read -r pane _ st _ <&3; do
     # Persist the generation BEFORE any delivery attempt, then let the ledger
     # coalesce a burst to one outstanding nudge and defer while the driver is
     # busy. A retained edge stays pending and retries on the next edge.
-    rzr_ledger_bump "$DRIVER_DIR" "$id" "$st"
+    edge_id=$(printf '%s' "$projection" | jq -r '.action.edge_id // ""')
+    rzr_ledger_bump "$DRIVER_DIR" "$id" "$st" "$edge_id"
     if rzr_ledger_should_deliver "$DRIVER_DIR"; then
       deliver_wake && rc=0 || rc=$?
       if [ "$rc" -eq 0 ]; then DELIVERED_WAKE=1

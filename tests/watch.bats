@@ -96,3 +96,12 @@ load test_helper/common
   [ "$(jq -r '.delivered' "$ledger")" -eq 0 ]
   [ "$(jq -r '.delivery_state' "$ledger")" = error ]
 }
+
+@test "subscription precedes snapshot and queued older revision cannot regress it" {
+  write_meta task 'pane=p1' 'tab=t1'; fake_status p1 done; printf '20\n' > "$FAKE_HERDR_ROOT/seq.p1"
+  start_event_server events 'p1,w1,working,claude,19'
+  run rzr-watch.sh task; assert_success
+  [ "$(jq -r .foreground_status "$ROZORO_HOME/state/task.runtime.json")" = done ]
+  [ "$(jq -r .source.event_seq "$ROZORO_HOME/state/task.runtime.json")" = 20 ]
+  [ "$(cat "$ROZORO_HOME/state/task.status")" = done ]
+}
