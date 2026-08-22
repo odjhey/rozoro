@@ -34,6 +34,56 @@ JSON
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
 }
 
+@test "Codex preset maps high effort and fast tier independently" {
+  mkdir -p "$ROZORO_HOME/crew"
+  printf '%s\n' '{"harness":"codex","model":"gpt-5.6-sol","effort":"high","fast":true,"permission_mode":"auto","rules":[]}' > "$ROZORO_HOME/crew/fast.json"
+  run rzr-spawn.sh task --crew fast --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'model=gpt-5.6-sol'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=high'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'permission_mode=yolo'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  expected=$'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tcodex\t--pane\tp1\t--\t--yolo\t--model\tgpt-5.6-sol\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
+  [ "$(grep -Fxc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+}
+
+@test "explicit no-fast overrides a fast preset without emitting a tier" {
+  mkdir -p "$ROZORO_HOME/crew"
+  printf '%s\n' '{"harness":"codex","model":"gpt-5.6-sol","effort":"high","fast":true}' > "$ROZORO_HOME/crew/fast.json"
+  run rzr-spawn.sh task --crew fast --no-fast --cwd "$TEST_ROOT"
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=false'
+  ! grep -F 'service_tier=' "$FAKE_HERDR_LOG"
+}
+
+@test "invalid and unsupported fast presets fail before Herdr mutation" {
+  mkdir -p "$ROZORO_HOME/crew"
+  printf '%s\n' '{"harness":"codex","model":"gpt-5.6-sol","effort":"high","fast":"yes"}' > "$ROZORO_HOME/crew/bad-type.json"
+  run rzr-spawn.sh task --crew bad-type --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'invalid JSON or known field types'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+
+  printf '%s\n' '{"harness":"codex","fast":' > "$ROZORO_HOME/crew/malformed.json"
+  run rzr-spawn.sh task --crew malformed --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'invalid JSON or known field types'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+
+  printf '%s\n' '{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"high","fast":true}' > "$ROZORO_HOME/crew/pi-fast.json"
+  run rzr-spawn.sh task --crew pi-fast --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'only for the codex harness'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+
+  printf '%s\n' '{"harness":"codex","model":"gpt-5.6-terra","effort":"high","fast":true}' > "$ROZORO_HOME/crew/wrong-model.json"
+  run rzr-spawn.sh task --crew wrong-model --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains 'only for codex model gpt-5.6-sol'
+  [ ! -s "$FAKE_HERDR_LOG" ]
+}
+
 @test "spawn retries transient pane busy" {
   export FAKE_HERDR_BUSY_ONCE_MATCH=' agent start '
   run rzr-spawn.sh task --cwd "$TEST_ROOT"
@@ -112,6 +162,38 @@ JSON
   assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"harness": "pi"'
   assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_id\": \"$uuid\""
   assert_file_contains "$ROZORO_HOME/tasks/task/session.json" "\"session_path\": \"$store/pi.jsonl\""
+  assert_file_contains "$ROZORO_HOME/tasks/task/session.json" '"fast": false'
+}
+
+@test "session link persists and enriches the effective launch profile" {
+  uuid='11111111-2222-4333-8444-555555555555'
+  write_meta task 'harness=pi' 'model=anthropic/claude-sonnet-4-6' 'effort=high' 'permission_mode=auto' 'fast=false' "session=$uuid"
+  store="$HOME/.pi/agent/sessions/--fixture--"
+  mkdir -p "$store" "$ROZORO_HOME/tasks/task"
+  printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/pi.jsonl"
+  printf '{"session_id":"%s","harness":"pi","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  [ "$(jq -r '.profile.model' "$ROZORO_HOME/tasks/task/session.json")" = 'anthropic/claude-sonnet-4-6' ]
+  [ "$(jq -r '.profile.effort' "$ROZORO_HOME/tasks/task/session.json")" = high ]
+  [ "$(jq -r '.profile.fast' "$ROZORO_HOME/tasks/task/session.json")" = false ]
+}
+
+@test "Codex session link stores a fast resolved profile" {
+  write_meta task 'harness=codex' 'model=gpt-5.6-sol' 'effort=high' 'permission_mode=yolo' 'fast=true'
+  store="$HOME/.codex/sessions/2026/08/22"
+  mkdir -p "$store"
+  cat > "$store/codex.jsonl" <<JSON
+{"type":"session_meta","payload":{"id":"uuid-codex","cwd":"$TEST_ROOT"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"rozoro-task: task\nbody"}]}}
+JSON
+  run rzr-link.sh task "$TEST_ROOT"
+  assert_success
+  descriptor="$ROZORO_HOME/tasks/task/session.json"
+  [ "$(jq -r '.profile.harness' "$descriptor")" = codex ]
+  [ "$(jq -r '.profile.model' "$descriptor")" = gpt-5.6-sol ]
+  [ "$(jq -r '.profile.effort' "$descriptor")" = high ]
+  [ "$(jq -r '.profile.fast' "$descriptor")" = true ]
 }
 
 @test "Pi session link falls back to an isolated real user marker" {
@@ -135,6 +217,44 @@ JSON
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-1'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+}
+
+@test "Codex resume reapplies durable model effort and fast tier" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
+{"session_id":"uuid-codex","harness":"codex","cwd":"$TEST_ROOT","profile":{"harness":"codex","model":"gpt-5.6-sol","effort":"high","permission_mode":"yolo","fast":true}}
+JSON
+  run rzr-resume.sh task --prompt 'continue'
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=high'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  expected=$'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tcodex\t--pane\tp1\t--\tresume\tuuid-codex\t--yolo\t--model\tgpt-5.6-sol\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
+  [ "$(grep -Fxc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+}
+
+@test "Codex resume overrides can disable fast and change effort" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
+{"session_id":"uuid-codex","harness":"codex","cwd":"$TEST_ROOT","profile":{"harness":"codex","model":"gpt-5.6-sol","effort":"high","permission_mode":"yolo","fast":true}}
+JSON
+  run rzr-resume.sh task --effort low --no-fast
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'effort=low'
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=false'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--config\tmodel_reasoning_effort=low'
+  ! grep -F 'service_tier=' "$FAKE_HERDR_LOG"
+}
+
+@test "legacy Codex descriptor resumes without injecting model effort or tier" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf '{"session_id":"uuid-codex","harness":"codex","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run rzr-resume.sh task
+  assert_success
+  agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tcodex\t--pane\tp1\t--\tresume\tuuid-codex\t--yolo'
+  ! grep -F 'model_reasoning_effort=' "$FAKE_HERDR_LOG"
+  ! grep -F 'service_tier=' "$FAKE_HERDR_LOG"
 }
 
 @test "ULID durable task key launches and resumes with one Herdr-safe identity" {
@@ -175,6 +295,17 @@ JSON
   assert_output_contains "still tracked"
 }
 
+@test "restart preserves Codex fast profile" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf 'continue\n' > "$ROZORO_HOME/tasks/task/brief.md"
+  write_meta task 'pane=p0' 'tab=t0' "cwd=$TEST_ROOT" 'crew=default' 'harness=codex' 'model=gpt-5.6-sol' 'effort=high' 'fast=true' 'permission_mode=yolo'
+  fake_status p1 idle
+  run rzr-control.sh task restart
+  assert_success
+  assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
+}
+
 @test "start gives repeated display names distinct durable task keys" {
   printf 'ship it\n' > "$TEST_ROOT/body"
   run rzr-start.sh same-name --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --no-agent
@@ -192,6 +323,14 @@ JSON
   [[ "$agent_name1" =~ ^[a-z0-9_-]{1,32}$ ]]
   [ "$agent_name1" != "$agent_name2" ]
   assert_file_contains "$ROZORO_HOME/tasks/$key1/identity.json" '"herdr_agent_name"'
+}
+
+@test "start passes fast through to spawn" {
+  printf 'ship it\n' > "$TEST_ROOT/body"
+  run rzr-start.sh fast-start --body "$TEST_ROOT/body" --cwd "$TEST_ROOT" --harness codex --model gpt-5.6-sol --effort high --fast --no-agent
+  assert_success
+  key="$(printf '%s\n' "$output" | sed -n 's/^rzr-start: task key -> //p')"
+  assert_file_contains "$ROZORO_HOME/state/$key.meta" 'fast=true'
 }
 
 @test "reuse after teardown preserves the old durable record" {

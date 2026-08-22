@@ -3,6 +3,7 @@
 #
 # Usage:
 #   rzr-resume.sh <id> [--cwd <dir>] [--permission-mode <mode>] [--model <m>]
+#                 [--effort <e>] [--fast|--no-fast]
 #                 [--label <text>] [--prompt <text> | --brief <file>]
 #
 #   <id>        a task previously started (its tasks/<id>/session.json must exist)
@@ -10,6 +11,9 @@
 #   --permission-mode  autonomous permission signal for non-Codex harnesses;
 #               Codex always resumes with --yolo
 #   --model     model override for the resumed run (default: session's own)
+#   --effort    reasoning effort override (default: durable profile/session)
+#   --fast      use Codex's priority service tier (currently gpt-5.6-sol only)
+#   --no-fast   disable fast from the durable profile
 #   --label     tab label (default: the recorded display name, then the id)
 #   --prompt    a follow-up delivered VERBATIM once the resumed agent is ready
 #   --brief     file whose contents become that follow-up (also verbatim)
@@ -30,16 +34,19 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-ID="" ; CWD_OV="" ; PERMMODE="auto" ; MODEL="" ; LABEL="" ; PROMPT="" ; BRIEF=""
+ID="" ; CWD_OV="" ; PERMMODE_OV="" ; MODEL_OV="" ; EFFORT_OV="" ; FAST_OV="" ; LABEL="" ; PROMPT="" ; BRIEF=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --cwd)             CWD_OV="$2"; shift 2 ;;
-    --permission-mode) PERMMODE="$2"; shift 2 ;;
-    --model)           MODEL="$2"; shift 2 ;;
+    --permission-mode) PERMMODE_OV="$2"; shift 2 ;;
+    --model)           MODEL_OV="$2"; shift 2 ;;
+    --effort)          EFFORT_OV="$2"; shift 2 ;;
+    --fast)            FAST_OV="true"; shift ;;
+    --no-fast)         FAST_OV="false"; shift ;;
     --label)           LABEL="$2"; shift 2 ;;
     --prompt)          PROMPT="$2"; shift 2 ;;
     --brief)           BRIEF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
     *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
   esac
@@ -67,7 +74,28 @@ case "$HARNESS" in
   claude|codex|pi) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
+PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
+if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then
+  jq -e '
+    .profile as $p |
+    ($p | type == "object") and
+    (["harness", "model", "effort", "permission_mode"] |
+      all(. as $k | ($p | has($k) | not) or ($p[$k] | type == "string"))) and
+    (($p | has("fast") | not) or ($p.fast | type == "boolean"))
+  ' "$SESS" >/dev/null 2>&1 || rzr_die "$SESS has an invalid profile"
+  PROFILE_HARNESS="$(jq -r '.profile.harness // empty' "$SESS")"
+  [ -z "$PROFILE_HARNESS" ] || [ "$PROFILE_HARNESS" = "$HARNESS" ] || rzr_die "$SESS profile harness does not match session harness"
+  PROFILE_MODEL="$(jq -r '.profile.model // empty' "$SESS")"
+  PROFILE_EFFORT="$(jq -r '.profile.effort // empty' "$SESS")"
+  PROFILE_PERMMODE="$(jq -r '.profile.permission_mode // empty' "$SESS")"
+  PROFILE_FAST="$(jq -r 'if .profile.fast == true then "true" else "false" end' "$SESS")"
+fi
+MODEL="${MODEL_OV:-$PROFILE_MODEL}"
+EFFORT="${EFFORT_OV:-$PROFILE_EFFORT}"
+PERMMODE="${PERMMODE_OV:-${PROFILE_PERMMODE:-auto}}"
+FAST="${FAST_OV:-$PROFILE_FAST}"
 [ "$HARNESS" = codex ] && PERMMODE="yolo"
+rzr_profile_validate "$HARNESS" "$MODEL" "$EFFORT" "$FAST"
 CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
@@ -118,6 +146,8 @@ do_resume() {
   rzr_meta_set "$ID" crew "resumed"
   rzr_meta_set "$ID" harness "$HARNESS"
   rzr_meta_set "$ID" model "${MODEL:-}"
+  rzr_meta_set "$ID" effort "${EFFORT:-}"
+  rzr_meta_set "$ID" fast "$FAST"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   rzr_meta_set "$ID" session "$UUID"
   rzr_meta_set "$ID" resumed "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -132,16 +162,20 @@ do_resume() {
       pass=(--resume "$UUID")
       [ -n "$PERMMODE" ] && pass+=(--permission-mode "$PERMMODE")
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
       ;;
     codex)
       pass=(resume "$UUID")
       pass+=(--yolo)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && pass+=(--config "model_reasoning_effort=$EFFORT")
+      [ "$FAST" = true ] && pass+=(--config service_tier=priority)
       ;;
     pi)
       pass=(--session "$UUID")
       [ -n "$PERMMODE" ] && pass+=(--approve)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && pass+=(--thinking "$EFFORT")
       # Pi rebuilds its system prompt on startup. Reapply the persisted handoff
       # protocol and crew rules when the original launch sysprompt survives.
       [ -s "$(rzr_task_dir "$ID")/sysprompt.md" ] && \
