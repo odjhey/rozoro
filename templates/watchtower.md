@@ -68,10 +68,11 @@ are passed to the crew verbatim.
    ```
 
    `.claude/settings.json` ships a `SessionStart` hook
-   (`hooks/claude-register-watchtower.sh`) that retries registration for a few
-   seconds at boot, past the gap between SessionStart firing and herdr's
-   readiness probe flipping true (measured ~2-3s in testing). The hook checks
-   for `ROZORO_ROLE=watchtower` before doing anything else — a plain Claude
+   (`hooks/claude-register-watchtower.sh`, run `async` so it can't block Claude
+   Code's own startup) that retries registration for a few seconds at boot,
+   past the gap between SessionStart firing and herdr's readiness probe
+   flipping true. The hook checks for `ROZORO_ROLE=watchtower` before doing
+   anything else — a plain Claude
    dev/crew session opened in this checkout (no marker) hits that check and
    no-ops immediately, so it never self-registers a stray wake target. It is
    silent and best-effort even when the marker is set — it never blocks or
