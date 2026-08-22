@@ -75,11 +75,11 @@ the optional `$ROZORO_HOME/crew/default.json`.
 | **Start** (low-level) | `rzr-spawn.sh <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
 | **Steer** (DATA — text the agent reads) | `rzr-send.sh <id> "<text>"` |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `rzr-control.sh <id> interrupt` · `rzr-control.sh <id> cancel` · `rzr-control.sh <id> key <name>` · `rzr-control.sh <id> restart` |
-| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude or Codex conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
+| **Resume** a reaped task | `rzr-resume.sh <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream; its stdout is only observable while your turn is live) · for a resident Codex watchtower, `rzr-watch.sh --once --wake-codex <ids>` queues a post-turn wake · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
+| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Resident Codex watchtowers use `rzr-watch.sh --once --wake-codex <ids>` to queue a post-turn wake. Otherwise run `rzr-watch.sh --once <ids>` only in a genuinely external background task. Read `state/<id>.status` for the latest watcher-produced snapshot. |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
@@ -112,8 +112,8 @@ standing rules) — never the task.
 - User asked for another model → override: `rzr-spawn.sh <id> --model <model> --cwd … --prompt …`.
 - Presets live at `$ROZORO_HOME/crew/<name>.json`; create new ones (e.g. a
   `senior` opus preset, or one whose `rules` say "open a draft PR, never push").
-- `rules` in a preset are crew-behavioral. Claude receives them through its
-  system prompt; other harnesses receive them in the delivered prompt.
+- `rules` in a preset are crew-behavioral. Claude and Pi receive them through
+  system-prompt channels; other harnesses receive them in the delivered prompt.
   Repo-specific rules stay in the repo, not the preset.
 
 Precedence: explicit flag > preset file > hardcoded harness fallback. Codex
@@ -179,22 +179,19 @@ answer itself, but whether the answer already exists.
    Front-load only the constraints the crew *can't* discover on its own (a merge
    rule, a "don't touch X", a preferred approach). If you catch yourself pasting
    issue comments or repro steps into the brief, you're doing the crew's job.
-3. **Do not sit in a poll loop.** Run `rzr-watch.sh --once <ids>` as a
-   **background task** — it blocks on herdr's native `pane.agent_status_changed`
-   PUSH stream at ~0% CPU and returns only on a real edge. Plain buffered stdout
-   does not wake a harness after its turn has completed. When the driver is a
-   resident Codex watchtower, opt in with `--wake-codex`; it requires the host's
-   `CODEX_THREAD_ID` and a Codex CLI with `queue`, then sends a fixed, content-free
-   reconciliation nudge on settled `idle`, `done`, or `blocked` edges. It ignores
-   initial reconciliation and `working` edges; combined `--once --wake-codex`
-   continues through those non-settled edges and exits only after successfully
-   queuing a settled-edge nudge. Reconcile, then re-arm another `--once` if the
-   crew is still live.
-   `rzr-list.sh` polling is the fallback when no background waiter is available.
-   `state/<id>.status` is **produced by** `rzr-watch` — it is not maintained by an
-   always-on daemon, and the file is absent until a watcher has run. Either way,
-   `done`/`idle` means the agent *ended a turn* — not that the task is correct or
-   landed.
+3. **Do not sit in a poll loop or occupy a foreground tool call with a watcher.**
+   A foreground `rzr-watch.sh` blocks the watchtower's model turn, so operator
+   messages queue behind it. In Pi, the project-local `rozoro-watchtower`
+   extension owns a long-lived Herdr push subscriber and injects
+   `[rozoro event]` messages on actionable edges; `/rozoro-monitor status`
+   reports it and `/rozoro-monitor on` repairs it. In a resident Codex watchtower,
+   use `--wake-codex` from a background task: it queues a fixed, content-free
+   nudge through `codex queue` on settled `idle`, `done`, or `blocked` edges and
+   ignores initial/working edges. Other harnesses need a genuinely external
+   background facility for `rzr-watch.sh --once <ids>`. `rzr-list.sh` polling is
+   only a fallback. `state/<id>.status` is produced by the active watcher. Either
+   way, `done`/`idle` means the agent ended a turn — not that the task is correct
+   or landed.
 4. On each edge, run `rzr-status.sh <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
    answer via `rzr-send.sh`; a `[same]`/no-new-block on an idle edge means the crew
@@ -218,7 +215,7 @@ answer itself, but whether the answer already exists.
      conversation. Same id, same agent, same context.
    - **If the crew was already reaped,** don't spawn a cold replacement either:
      `rzr-resume.sh <id> [--prompt "<follow-up>"]` reopens the *exact*
-     Claude or Codex conversation as a fresh crew tab from
+     Claude, Codex, or Pi conversation as a fresh crew tab from
      `tasks/<id>/session.json` and can deliver your follow-up in the same call.
      A brand-new `rzr-start` rehydrating from `handoff.md` is the last resort, not
      the default — it starts cold.
@@ -254,11 +251,11 @@ record that makes teardown non-lossy:
   scans *all* blocks and keeps surfacing any OPEN item until you `rzr-ack` it (the
   ack cursor `.acked-blocks` is separate from the miss-detector's `.seen-blocks` and
   advances only on an explicit ack).
-- `session.json` — the Claude/Codex resume link, captured by `rzr-link` via
-  marker-grep (concurrency-safe, unlike "newest file" when crews share a `--cwd`).
+- `session.json` — the Claude/Codex/Pi resume link. Pi uses its preallocated
+  native session UUID; Claude and Codex use marker discovery.
 
-The protocol is delivered as a Claude crew's **system prompt** or folded into
-the prompt for harnesses without that channel. It is rendered per task to
+The protocol is delivered through Claude and Pi **system prompts** or folded
+into the prompt for harnesses without that channel. It is rendered per task to
 `tasks/<id>/handoff-protocol.md` and re-injected into resume follow-ups. A
 standing system rule is more durable than a turn-1 instruction, but reliability
 still comes from the loop: detect a miss with
@@ -272,10 +269,10 @@ nudge with `rzr-send`. The folder lives in `$ROZORO_HOME` (data), never in this 
   `rzr-control.sh <id> key enter` (a key press is CONTROL, not chat text), then
   re-deliver the prompt.
 - One live agent per unique name — always give each task a distinct `<id>`.
-- Claude and Codex are wired for model and effort. Claude receives rules through
-  its system-prompt channel; Codex receives them in the delivered prompt.
-  `copilot`/`pi` remain mapped from known invocations but unverified. An unmapped
-  harness fails loudly.
+- Claude, Codex, and Pi are wired for model and effort. Claude and Pi receive
+  rules through system-prompt channels; Codex receives them in the delivered
+  prompt. Copilot remains mapped from a known invocation but unverified. An
+  unmapped harness fails loudly.
 - Concurrent crew in the **same** checkout will clobber each other — worktree
   isolation is the *crew's* job (via repo rules), so prefer repos/tasks whose
   rules handle it, or spawn against separate checkouts.
