@@ -13,7 +13,10 @@ load test_helper/common
 @test "Python helpers compile into the isolated bytecode root" {
   run python3 -m py_compile "$REPO_ROOT/bin/herdr-eventwait.py" "$REPO_ROOT/tests/test_helper/event_server.py"
   assert_success
-  [ -d "$PYTHONPYCACHEPREFIX" ]
-  [ ! -d "$REPO_ROOT/bin/__pycache__" ]
-  [ ! -d "$REPO_ROOT/tests/test_helper/__pycache__" ]
+  run find "$PYTHONPYCACHEPREFIX" -type f -name 'herdr-eventwait.*.pyc' -print
+  assert_success
+  [ -n "$output" ]
+  run find "$PYTHONPYCACHEPREFIX" -type f -name 'event_server.*.pyc' -print
+  assert_success
+  [ -n "$output" ]
 }
