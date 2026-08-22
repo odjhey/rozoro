@@ -519,9 +519,10 @@ Not verified here: `copilot` harness launches.
 
 ### Status v2 and background-work boundary
 
-`rozoro status` is read-only: it never contacts Herdr and never advances
-`.seen-blocks`. The watcher owns `state/<id>.runtime.json`, while the append-only
-handoff and `.acked-blocks-v2` own task reporting and FIFO acknowledgement.
+`rozoro status` is read-only: it never contacts Herdr and never writes any
+cursor (the old `.seen-blocks` miss-detector it used to advance is gone). The
+watcher owns `state/<id>.runtime.json`, while the append-only handoff and
+`.acked-blocks-v2` own task reporting and FIFO acknowledgement.
 `runtime_status`, `foreground_status`, `background_activity`, `task_status`, and
 `turn_report_status` are independent axes; `done` is a runtime/crew assertion,
 not user acceptance.

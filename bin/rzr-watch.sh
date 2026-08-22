@@ -199,7 +199,7 @@ fi
 # to state/<id>.status (an idempotent, last-writer-wins token) so the driver can
 # reconcile crew state. When the subscriber exits (socket closed / all panes
 # gone) the read returns EOF and we stop.
-while IFS=$'\t' read -r pane ws st agent <&3; do
+while IFS=$'\t' read -r pane _ st _ <&3; do
   # Driver status edges retry a retained Herdr wake even when no further crew
   # changes occur. Use the pushed status directly to avoid a stale follow-up
   # query racing the event we just received.

@@ -201,7 +201,10 @@ answer itself, but whether the answer already exists.
    or landed.
 4. On each edge, run `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
-   answer via `./bin/rozoro send`; a `[same]`/no-new-block on an idle edge means the crew
+   answer via `./bin/rozoro send`; `waiting` → leave the crew alone unless status also
+   reports `action_required` (Stage 1 can't certify Herdr background activity, so
+   an uncertified `waiting` is actionable — see the README's status v2 section);
+   a `[same]`/no-new-block on an idle edge means the crew
    ended a turn without reporting (e.g. backgrounded work) — nudge it. Status also
    prints any **unresolved OPEN items** (an earlier `needs-action`/`blocked`/`failed`
    or an unanswered `inputs-needed`): a `done` verdict with an OPEN list means the
@@ -251,7 +254,7 @@ record that makes teardown non-lossy:
   which appends the handoff protocol and a unique `rozoro-task: <id>` marker).
 - `handoff.md` — the OUTPUT, **append-only**. The protocol tells the crew to append
   a block before ending *every* turn, each carrying a `verdict:` line
-  (`done | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
+  (`done | waiting | needs-action | failed | blocked`) and `inputs-needed:`. This is how you
   tell "done" from "needs more input", and it accumulates across multiple `./bin/rozoro send`
   rounds so context is never lost. Because it is append-only, reading only the last
   block would let a later `done` bury an earlier open question — so `./bin/rozoro status`
