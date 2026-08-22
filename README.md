@@ -139,7 +139,7 @@ short `rzr <verb>`), or the underlying `rzr-<verb>.sh` script directly — e.g.
 | `rzr-link.sh <id> <cwd>` | capture `tasks/<id>/session.json` for Claude or Codex via marker-grep; idempotent |
 | `rzr-status.sh <id>` | latest handoff `verdict` + new-block miss-detector, plus any unresolved OPEN items (needs-action/blocked/failed or a set `inputs-needed`) that a later `done` would otherwise bury — surfaced until acked |
 | `rzr-ack.sh <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `rzr-watch.sh [--once] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; zero polling |
+| `rzr-watch.sh [--once] [--wake-codex] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; optionally queues a safe wake nudge to the resident Codex thread |
 | `rzr-send.sh <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `rzr-control.sh <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `rzr-resume.sh <id> [--prompt <t>]` | reopen a reaped Claude or Codex task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `rzr-send`) |
@@ -274,7 +274,7 @@ for n in 42 57 61; do
     > /tmp/task-$n.md
   rozoro start issue-$n --body /tmp/task-$n.md --cwd ~/proj/acme
 done
-rozoro watch issue-42 issue-57 issue-61     # wakes on each real edge; no polling
+rozoro watch issue-42 issue-57 issue-61     # streams each real edge; no polling
 ```
 
 On each edge, read the **handoff verdict** — not herdr's raw `done` — then reap:
@@ -352,8 +352,14 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - **event-driven** — `rzr-watch.sh` subscribes to herdr's native
   `pane.agent_status_changed` push stream over the control socket (via
   `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
-  nothing to spin. Each edge is deduped against `state/<id>.status`; only real
-  changes are printed and persisted.
+  nothing to spin. Each edge is deduped against this watch process's last-seen
+  state; only real changes are printed and persisted. Buffered stdout from a
+  background watcher cannot wake a Codex thread after its turn has completed.
+  Opt in with `--wake-codex`: the watcher uses the host's `CODEX_THREAD_ID` and
+  `codex queue` to send a fixed reconciliation nudge on `idle`, `done`, or
+  `blocked` edges. Initial reconciliation and `working` edges never wake Codex,
+  and no handoff or event contents are queued. The option fails up front if the
+  thread id or queue capability is unavailable.
 - **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
   atomically, and is rejected up front if the agent is blocked.
 - **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
@@ -390,6 +396,10 @@ bin/rzr-spawn.sh t2 --cwd /some/repo --harness codex --prompt 'Resolve issue #42
 bin/rzr-watch.sh t1 t2
 #    06:01:03  t1  working
 #    06:01:07  t1  done
+
+# From a resident Codex watchtower, opt in to an actual post-turn wake:
+bin/rzr-watch.sh --once --wake-codex t1 t2 &
+# Requires CODEX_THREAD_ID in the environment and a Codex CLI with `queue`.
 
 # 3. send a follow-up (DATA); --wait blocks until it settles:
 bin/rzr-send.sh t1 'Now count the lines in README.' --wait

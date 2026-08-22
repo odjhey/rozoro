@@ -2,9 +2,11 @@
 # rzr-watch.sh - event-driven fleet monitor.
 #
 # Usage:
-#   rzr-watch.sh [--once] [id ...]
+#   rzr-watch.sh [--once] [--wake-codex] [id ...]
 #     (no ids) watch every known task; otherwise just the listed ids
 #     --once   print the first event that arrives, then exit (handy for tests)
+#     --wake-codex  queue a fixed reconciliation nudge to $CODEX_THREAD_ID on
+#                   settled edges (idle, done, or blocked)
 #
 # Zero polling, genuinely: it consumes herdr's native pane.agent_status_changed
 # PUSH stream over the control socket (via bin/herdr-eventwait.py). Every stream
@@ -23,15 +25,24 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-ONCE=0 ; declare -a WANT=()
+ONCE=0 WAKE_CODEX=0 ; declare -a WANT=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) ONCE=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --wake-codex) WAKE_CODEX=1; shift ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
     *)  WANT+=("$1"); shift ;;
   esac
 done
+
+# This is intentionally a fixed adapter, not a configurable command or message:
+# event/task/handoff data must never become instructions queued into Codex.
+if [ "$WAKE_CODEX" -eq 1 ]; then
+  [ -n "${CODEX_THREAD_ID:-}" ] || rzr_die "--wake-codex requires CODEX_THREAD_ID from the resident Codex thread"
+  command -v codex >/dev/null 2>&1 || rzr_die "--wake-codex requires 'codex' on PATH"
+  codex queue --help >/dev/null 2>&1 || rzr_die "installed 'codex' does not provide the queue capability"
+fi
 # (no ids given) watch every known task. Read loop instead of `mapfile` so this
 # runs on stock macOS bash 3.2, which has no mapfile/readarray.
 if [ "${#WANT[@]}" -eq 0 ]; then
@@ -115,5 +126,14 @@ while IFS=$'\t' read -r pane ws st agent <&3; do
   printf '%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$id" "$st"
   SEEN[$i]="$st"
   rzr_status_set "$id" "$st"
+  if [ "$WAKE_CODEX" -eq 1 ]; then
+    case "$st" in
+      idle|done|blocked)
+        codex queue --thread "$CODEX_THREAD_ID" --message "Rozoro watch edge: reconcile crew status." \
+          || rzr_die "could not queue wake nudge to Codex thread '$CODEX_THREAD_ID'"
+        ;;
+    esac
+  fi
   [ "$ONCE" -eq 1 ] && break
 done
+exit 0

@@ -79,7 +79,7 @@ the optional `$ROZORO_HOME/crew/default.json`.
 | **Stop / reap** | `rzr-teardown.sh <id>` (≡ `rzr-control.sh <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read verdict** | `rzr-status.sh <id>` — latest handoff verdict + whether a NEW block appeared (miss-detector) **and any unresolved OPEN items** — every block with a `needs-action`/`blocked`/`failed` verdict or a set `inputs-needed` keeps surfacing until acked, so a later `done` can't bury an earlier open question |
 | **Resolve open items** | `rzr-ack.sh <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream, wakes you on an edge) · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
+| **Sense** (don't block) | `rzr-watch.sh --once <ids>` in a background task (push stream; its stdout is only observable while your turn is live) · for a resident Codex watchtower, `rzr-watch.sh --once --wake-codex <ids>` queues a post-turn wake · `rzr-list.sh` to poll · read `state/<id>.status` (written BY rzr-watch) |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
@@ -180,8 +180,13 @@ answer itself, but whether the answer already exists.
    issue comments or repro steps into the brief, you're doing the crew's job.
 3. **Do not sit in a poll loop.** Run `rzr-watch.sh --once <ids>` as a
    **background task** — it blocks on herdr's native `pane.agent_status_changed`
-   PUSH stream at ~0% CPU and returns (waking you, the driver) only on a real
-   edge; reconcile, then re-arm another `--once` if the crew is still live.
+   PUSH stream at ~0% CPU and returns only on a real edge. Plain buffered stdout
+   does not wake a harness after its turn has completed. When the driver is a
+   resident Codex watchtower, opt in with `--wake-codex`; it requires the host's
+   `CODEX_THREAD_ID` and a Codex CLI with `queue`, then sends a fixed, content-free
+   reconciliation nudge on settled `idle`, `done`, or `blocked` edges. It ignores
+   initial reconciliation and `working` edges. Reconcile, then re-arm another
+   `--once` if the crew is still live.
    `rzr-list.sh` polling is the fallback when no background waiter is available.
    `state/<id>.status` is **produced by** `rzr-watch` — it is not maintained by an
    always-on daemon, and the file is absent until a watcher has run. Either way,

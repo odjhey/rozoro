@@ -1,6 +1,7 @@
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
 setup() {
+  unset CODEX_THREAD_ID FAKE_CODEX_HAS_QUEUE FAKE_CODEX_QUEUE_FAIL
   export TEST_ROOT="$BATS_TEST_TMPDIR/fixture"
   export HOME="$TEST_ROOT/home"
   export ROZORO_HOME="$TEST_ROOT/rozoro"
@@ -8,9 +9,11 @@ setup() {
   export FAKE_HERDR_ROOT="$TEST_ROOT/herdr"
   export FAKE_HERDR_LOG="$FAKE_HERDR_ROOT/argv.log"
   export FAKE_HERDR_SOCKET="$TEST_ROOT/herdr.sock"
+  export FAKE_CODEX_LOG="$TEST_ROOT/codex.log"
   export PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache"
   export PATH="$REPO_ROOT/tests/fakes:$REPO_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   mkdir -p "$HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks" "$FAKE_HERDR_ROOT" "$PYTHONPYCACHEPREFIX"
+  : > "$FAKE_CODEX_LOG"
   SENTINEL="$BATS_TEST_TMPDIR/outside-sentinel"
   printf 'untouched\n' > "$SENTINEL"
   export SENTINEL
