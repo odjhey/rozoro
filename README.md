@@ -275,6 +275,14 @@ claude --append-system-prompt-file templates/watchtower.md
 pi --append-system-prompt templates/watchtower.md --approve
 ```
 
+The Pi launch also loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
+When it detects the watchtower system prompt, the extension starts `rzr-watch`
+as an owned asynchronous child, keeps the editor responsive, and injects a
+`[rozoro event]` message on actionable crew edges. This is deliberately different
+from calling `rzr-watch` through Pi's foreground bash tool, which would occupy the
+agent turn and queue operator messages. Use `/rozoro-monitor status|on|off` to
+inspect or control the monitor.
+
 Editing `templates/watchtower.md` and committing it is how you evolve the driver's
 standing behavior; every watchtower booted from the file inherits the change. Keep
 it short — the rozoro skill carries the detailed loop. The one idea it must anchor
@@ -453,6 +461,8 @@ bin/rzr-teardown.sh t1
 - ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
 - ✅ Pi with gpt-5.6-sol/low: model/thinking/trust/system-prompt passthrough,
   native session linking, teardown, exact resume, and continued handoff context
+- ✅ Pi watchtower monitor: Herdr push subscription runs outside tool execution,
+  preserving interactive operator input while actionable edges trigger a turn
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
