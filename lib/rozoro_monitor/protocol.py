@@ -15,6 +15,9 @@ VERSION = 1
 # Integers cross Python, Node, JSON, and SQLite boundaries.  The JavaScript
 # safe-integer limit is the narrowest exact range.
 MAX_INTEGER = 9_007_199_254_740_991
+# The limit covers the complete UTF-8 NDJSON frame, including its trailing
+# newline when present. encode() always emits and counts that newline; decode()
+# counts exactly the bytes supplied by the transport.
 MAX_FRAME_BYTES = 1_048_576
 
 # IDs are opaque but deliberately safe to use in logs and (for event_id) spool
@@ -242,11 +245,19 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _frame_size(frame: str | bytes) -> int:
+    if isinstance(frame, bytes):
+        return len(frame)
+    try:
+        return len(frame.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ProtocolError("invalid-json", "frame is not valid UTF-8 JSON") from exc
+
+
 def decode(line: str | bytes) -> dict[str, Any]:
     """Decode one bounded JSON frame and validate it."""
-    size = len(line) if isinstance(line, bytes) else len(line.encode("utf-8"))
-    if size > MAX_FRAME_BYTES:
-        _fail("frame-too-large", f"frame exceeds {MAX_FRAME_BYTES} bytes")
+    if _frame_size(line) > MAX_FRAME_BYTES:
+        _fail("frame-too-large", f"frame exceeds {MAX_FRAME_BYTES} bytes including newline")
     try:
         message = json.loads(
             line,
@@ -261,4 +272,7 @@ def decode(line: str | bytes) -> dict[str, Any]:
 def encode(message: Any) -> str:
     """Validate and encode one canonical, newline-terminated NDJSON frame."""
     validate(message)
-    return json.dumps(message, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    frame = json.dumps(message, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    if _frame_size(frame) > MAX_FRAME_BYTES:
+        _fail("frame-too-large", f"encoded frame exceeds {MAX_FRAME_BYTES} bytes including newline")
+    return frame

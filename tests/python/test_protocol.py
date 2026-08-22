@@ -200,10 +200,32 @@ class StrictValidationTest(unittest.TestCase):
             self.assert_code("invalid-field", {"v": 1, "type": "frame.error",
                                                "code": "invalid-field", invented: "unsafe"})
 
+    def test_encode_decode_share_newline_inclusive_frame_limit(self) -> None:
+        reports = [
+            {"task_id": f"task-{index}", "generation": 1, "availability": "unknown",
+             "report_state": "missing", "verdict": None,
+             "actionable_reason": "missing-report"}
+            for index in range(10_000)
+        ]
+        message = {"v": 1, "type": "reconcile.result", "request_id": "req-1",
+                   "through": 1, "reports": reports}
+        raw_frame = json.dumps(message, sort_keys=True, separators=(",", ":")) + "\n"
+        self.assertGreater(len(raw_frame.encode("utf-8")), MAX_FRAME_BYTES)
+        for operation in (lambda: encode(message), lambda: decode(raw_frame)):
+            with self.assertRaises(ProtocolError) as caught:
+                operation()
+            self.assertEqual(caught.exception.code, "frame-too-large")
+
     def test_decode_rejects_oversized_frames_before_json_parsing(self) -> None:
         with self.assertRaises(ProtocolError) as caught:
             decode("x" * (MAX_FRAME_BYTES + 1))
         self.assertEqual(caught.exception.code, "frame-too-large")
+
+    def test_decode_maps_invalid_unicode_to_protocol_error(self) -> None:
+        for frame in ("\ud800", '{"v":1,"type":"frame.error","code":"invalid-json","x":"\udfff"}'):
+            with self.assertRaises(ProtocolError) as caught:
+                decode(frame)
+            self.assertEqual(caught.exception.code, "invalid-json")
 
     def test_decode_rejects_duplicate_object_members_at_any_depth(self) -> None:
         frames = (
