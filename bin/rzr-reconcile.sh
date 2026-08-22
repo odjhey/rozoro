@@ -71,5 +71,5 @@ if [ "$JSON" -eq 1 ]; then
 fi
 
 echo "reconciled driver $(basename "$DIR") through generation $GEN"
-printf '%s' "$REPORTS" | jq -r '.[] | "  \(.id): runtime=\(.runtime_status) task=\(.task_status) turn=\(.turn_report_status) action=\(.action_reason // \"none\")"' 2>/dev/null || true
+printf '%s' "$REPORTS" | jq -r '.[] | "  \(.id): runtime=\(.runtime_status) task=\(.task_status) turn=\(.turn_report_status) action=\(.action_reason // "none")"' 2>/dev/null || true
 printf '%s' "$VANISHED" | jq -r '.[] | "  \(.) : vanished (no task folder)"' 2>/dev/null || true
