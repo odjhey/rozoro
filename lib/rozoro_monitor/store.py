@@ -290,7 +290,11 @@ class EventStore:
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.execute("PRAGMA journal_mode=WAL")
-        self._migrate()
+        try:
+            self._migrate()
+        except BaseException:
+            self._connection.close()
+            raise
         # WAL sidecars inherit process umask; tighten any that already exist.
         for suffix in ("-wal", "-shm"):
             sidecar = Path(str(self.path) + suffix)
@@ -315,12 +319,74 @@ class EventStore:
                 self._connection.rollback()
             raise
 
+    @staticmethod
+    def _validate_v2_upgrade(connection: sqlite3.Connection) -> None:
+        """Reject v2 state whose missing immutable history cannot be invented."""
+        invalid_owner = connection.execute(
+            """SELECT session_id FROM sessions
+               WHERE (role='crew' AND (task_id IS NULL OR driver_id IS NOT NULL))
+                  OR (role='watchtower' AND (driver_id IS NULL OR task_id IS NOT NULL))
+                  OR role NOT IN ('crew','watchtower')
+               LIMIT 1"""
+        ).fetchone()
+        if invalid_owner is not None:
+            raise RuntimeError(
+                f"cannot upgrade schema 2: session {invalid_owner[0]!r} has invalid owner identity"
+            )
+
+        # v2 allowed an upsert to replace identity. Compare every retained event
+        # with the latest session row so a contradictory legacy history is not
+        # blessed by installing the v3 immutability trigger.
+        identities = {
+            row["session_id"]: (row["harness"], row["role"], row["task_id"], row["driver_id"])
+            for row in connection.execute(
+                "SELECT session_id,harness,role,task_id,driver_id FROM sessions"
+            )
+        }
+        for row in connection.execute("SELECT session_id,payload_json FROM events ORDER BY durable_seq"):
+            expected = identities.get(row["session_id"])
+            if expected is None:
+                continue
+            try:
+                payload = json.loads(row["payload_json"])
+                observed = (
+                    payload["harness"], payload["role"],
+                    payload.get("task_id"), payload.get("driver_id"),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError("cannot upgrade schema 2: malformed event identity history") from exc
+            if observed != expected:
+                raise RuntimeError(
+                    f"cannot upgrade schema 2: session {row['session_id']!r} has contradictory identity history"
+                )
+
+        # v2 retained only each task's mutable latest projection. Once any
+        # generation existed, an exact historical snapshot through N cannot be
+        # proven, even when the latest row happens to carry N. This schema was
+        # unreleased, so fail closed rather than manufacture reconciliation data.
+        generated = connection.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM pending_generations) +
+                 (SELECT COUNT(*) FROM pending_generation_tasks) +
+                 (SELECT COUNT(*) FROM task_projections WHERE projection_generation<>0) +
+                 (SELECT COUNT(*) FROM watchtower_deliveries
+                    WHERE latest_generation<>0 OR delivered_generation<>0 OR acked_generation<>0) +
+                 (SELECT CASE WHEN CAST(value AS INTEGER)<>0 THEN 1 ELSE 0 END
+                    FROM daemon_metadata WHERE key='latest_generation')"""
+        ).fetchone()[0]
+        if generated:
+            raise RuntimeError(
+                "cannot upgrade schema 2 with generation state: immutable projection history is unavailable"
+            )
+
     def _migrate(self) -> None:
         with self._lock, self._immediate() as connection:
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if current > SCHEMA_VERSION:
                 raise RuntimeError(f"database schema {current} is newer than supported {SCHEMA_VERSION}")
             for version in range(current + 1, SCHEMA_VERSION + 1):
+                if version == 3:
+                    self._validate_v2_upgrade(connection)
                 # sqlite3.executescript() issues an implicit COMMIT and would
                 # split a migration from its version bump. Execute complete
                 # statements individually inside our BEGIN IMMEDIATE instead.

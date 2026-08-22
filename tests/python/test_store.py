@@ -1,4 +1,5 @@
 import concurrent.futures
+import json
 import os
 import sqlite3
 import stat
@@ -40,6 +41,25 @@ class StoreTests(unittest.TestCase):
                              "pending_generations", "pending_generation_tasks", "task_membership",
                              "generation_task_snapshots", "daemon_metadata"} <= names)
 
+    def create_v2_database(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.db)
+        connection.executescript(_MIGRATIONS[1])
+        connection.executescript(_MIGRATIONS[2])
+        connection.execute("PRAGMA user_version=2")
+        connection.commit()
+        return connection
+
+    def assert_database_remains_v2(self):
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='generation_task_snapshots'"
+            ).fetchone())
+        finally:
+            connection.close()
+
     def test_reopen_and_upgrade_from_migration_one(self):
         self.home.mkdir(parents=True)
         connection = sqlite3.connect(self.db)
@@ -57,6 +77,68 @@ class StoreTests(unittest.TestCase):
             ).fetchone())
         with EventStore(self.db) as reopened:
             self.assertEqual(reopened.schema_version, SCHEMA_VERSION)
+
+    def test_populated_v2_generation_state_is_rejected_without_version_bump(self):
+        connection = self.create_v2_database()
+        connection.execute(
+            """INSERT INTO task_projections(
+                   task_id,availability,actionable_reason,projection_generation,last_event_seq,projection_json)
+               VALUES('task-1','quiescent','quiescent',1,1,'{"state":"at-one"}')"""
+        )
+        connection.execute("INSERT INTO pending_generations(generation,priority) VALUES(1,'normal')")
+        connection.execute(
+            "INSERT INTO pending_generation_tasks VALUES(1,'task-1','quiescent')"
+        )
+        # v2 mutates latest-only state for N+1, destroying the exact N view.
+        connection.execute(
+            """UPDATE task_projections SET availability='blocked', actionable_reason='blocked',
+                   projection_generation=2, last_event_seq=2, projection_json='{"state":"at-two"}'
+               WHERE task_id='task-1'"""
+        )
+        connection.execute("INSERT INTO pending_generations(generation,priority) VALUES(2,'urgent')")
+        connection.execute("INSERT INTO pending_generation_tasks VALUES(2,'task-1','blocked')")
+        connection.execute("UPDATE daemon_metadata SET value='2' WHERE key='latest_generation'")
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "immutable projection history is unavailable"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
+
+    def test_populated_v2_invalid_session_owner_is_rejected_without_version_bump(self):
+        connection = self.create_v2_database()
+        connection.execute(
+            """INSERT INTO sessions(
+                   session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
+               VALUES('session-bad','task-1','driver-1','claude','crew','{}',1)"""
+        )
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "invalid owner identity"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
+
+    def test_populated_v2_contradictory_identity_history_is_rejected(self):
+        connection = self.create_v2_database()
+        first = event()
+        connection.execute(
+            """INSERT INTO events(event_id,session_id,task_id,event_type,payload_json)
+               VALUES(?,?,?,?,?)""",
+            (first["event_id"], first["session_id"], first["task_id"], first["type"],
+             json.dumps(first)),
+        )
+        connection.execute(
+            """INSERT INTO sessions(
+                   session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
+               VALUES('session-1','task-2',NULL,'claude','crew','{}',1)"""
+        )
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "contradictory identity history"):
+            EventStore(self.db)
+        self.assert_database_remains_v2()
 
     def test_duplicate_returns_original_sequence_without_rereduction(self):
         calls = []
