@@ -4,22 +4,22 @@ on:
   push:
   pull_request:
 
-env:
-  BATS_VERSION: 1.14.0
-
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Bats-core
-        shell: bash
+      - name: Run tests in pinned Bats container
+        run: CONTAINER_ENGINE=docker ./tests/run.sh
+
+  macos-shell-syntax:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check stock macOS Bash compatibility
         run: |
-          git clone --depth 1 --branch "v${BATS_VERSION}" https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
-          echo "$RUNNER_TEMP/bats-core/bin" >> "$GITHUB_PATH"
-      - name: Run tests
-        run: ./tests/run.sh
+          for file in bin/* hooks/*.sh tests/run.sh tests/fakes/herdr tests/test_helper/common.bash; do
+            [ -f "$file" ] || continue
+            case "$file" in *.py) continue ;; esac
+            bash -n "$file"
+          done
