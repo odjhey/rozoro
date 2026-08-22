@@ -2,11 +2,18 @@
 # Claude Code SessionStart hook: register this watchtower's wake target.
 #
 # `rozoro register --harness claude` requires the herdr pane to report
-# interactive_ready, but SessionStart fires while Claude Code is still
-# booting -- well before herdr's own readiness probe flips true (measured
-# ~2-3s gap in testing: SessionStart lands under 1s in, interactive_ready
-# only lands once `herdr agent start`'s own readiness wait resolves). A
-# single-shot call reliably fails at boot, so retry briefly instead.
+# interactive_ready, which herdr only flips once Claude Code finishes
+# booting. SessionStart hooks run SYNCHRONOUSLY by default -- Claude Code
+# blocks its own startup on them -- so a retry loop run here would be
+# polling for a condition that structurally cannot become true until this
+# hook returns: a self-deadlock. Confirmed live: with the hook run
+# blocking, 20 retries over ~10s in-hook never saw interactive_ready go
+# true, and ~/.rozoro/watchtowers/ stayed empty after boot.
+#
+# Fix: `.claude/settings.json` marks this hook `"async": true`, so Claude
+# Code proceeds with startup without waiting for it. That lets Claude Code
+# reach its idle prompt (flipping interactive_ready) WHILE this loop is
+# still retrying in the background, instead of only after it exits.
 #
 # Best-effort and silent: exits 0 unconditionally so a missing herdr pane,
 # a non-claude harness mismatch, or exhausted retries never blocks or
