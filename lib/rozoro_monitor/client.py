@@ -30,27 +30,72 @@ def _check_private(info: os.stat_result, label: str, *, directory: bool) -> None
         raise UnsafePathError(f"refusing unsafe {'directory' if directory else 'file'}: {label}")
 
 
+def _trusted_directory(info: os.stat_result, label: str) -> None:
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise UnsafePathError(f"refusing untrusted ancestor directory: {label}")
+
+
+def _create_home_from_trusted_ancestor(path: Path) -> int:
+    """Create missing components privately and durably, holding dirfds throughout."""
+    path = path.absolute()
+    if ".." in path.parts:
+        raise UnsafePathError(f"refusing parent traversal in ROZORO_HOME: {path}")
+
+    missing: list[str] = []
+    ancestor = path
+    while True:
+        try:
+            ancestor.lstat()
+            break
+        except FileNotFoundError:
+            if ancestor.parent == ancestor:
+                raise UnsafePathError(f"no existing ancestor for ROZORO_HOME: {path}")
+            missing.append(ancestor.name)
+            ancestor = ancestor.parent
+
+    fd = os.open(ancestor, _DIR_FLAGS)
+    try:
+        _trusted_directory(os.fstat(fd), str(ancestor))
+        for name in reversed(missing):
+            try:
+                os.mkdir(name, 0o700, dir_fd=fd)
+            except FileExistsError:
+                created = False
+            else:
+                created = True
+            child_fd = os.open(name, _DIR_FLAGS, dir_fd=fd)
+            try:
+                _check_private(os.fstat(child_fd), name, directory=True)
+                if created:
+                    # Persist this link before creating anything beneath it.
+                    os.fsync(fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
+            os.close(fd)
+            fd = child_fd
+        _check_private(os.fstat(fd), str(path), directory=True)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _open_home(home: str | os.PathLike[str] | None, *, create: bool = True) -> tuple[Path, int]:
     path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
+    path = path.absolute()
     if create:
-        existed = path.exists()
         try:
-            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = _create_home_from_trusted_ancestor(path)
         except OSError as exc:
             raise UnsafePathError(f"cannot create private directory {path}: {exc}") from exc
-        if not existed:
-            parent_fd = os.open(path.parent, _DIR_FLAGS)
-            try:
-                os.fsync(parent_fd)
-            finally:
-                os.close(parent_fd)
+        return path, fd
+    fd = os.open(path, _DIR_FLAGS)
     try:
-        fd = os.open(path, _DIR_FLAGS)
         _check_private(os.fstat(fd), str(path), directory=True)
         return path, fd
-    except Exception:
-        if "fd" in locals():
-            os.close(fd)
+    except BaseException:
+        os.close(fd)
         raise
 
 

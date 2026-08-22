@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -266,6 +267,61 @@ class ClientTests(unittest.TestCase):
                 prepare_event(event(), self.home)
         after = open_fd_count()
         self.assertEqual(before, after)
+
+    def test_multilevel_home_creation_fsyncs_each_parent_in_order_and_is_private(self):
+        trusted = Path(self.temp.name) / "trusted"
+        trusted.mkdir(mode=0o700)
+        home = trusted / "level-one" / "level-two" / "home"
+        synced = []
+        real_fsync = os.fsync
+
+        def recording_fsync(fd):
+            info = os.fstat(fd)
+            if stat.S_ISDIR(info.st_mode):
+                synced.append((info.st_dev, info.st_ino))
+            return real_fsync(fd)
+
+        with mock.patch.object(client.os, "fsync", side_effect=recording_fsync):
+            _, fd = client._open_home(home)
+        os.close(fd)
+        expected = []
+        for parent in (trusted, trusted / "level-one", trusted / "level-one" / "level-two"):
+            info = parent.stat()
+            expected.append((info.st_dev, info.st_ino))
+        self.assertEqual(expected, synced)
+        for component in (trusted / "level-one", trusted / "level-one" / "level-two", home):
+            self.assertEqual(0o700, stat.S_IMODE(component.stat().st_mode))
+
+    def test_multilevel_home_ancestor_fsync_failure_closes_all_fds(self):
+        trusted = Path(self.temp.name) / "trusted-failure"
+        trusted.mkdir(mode=0o700)
+        home = trusted / "level-one" / "level-two" / "home"
+        real_fsync = os.fsync
+        calls = 0
+
+        def fail_second_parent(fd):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected ancestor fsync failure")
+            return real_fsync(fd)
+
+        before = open_fd_count()
+        with mock.patch.object(client.os, "fsync", side_effect=fail_second_parent):
+            with self.assertRaises(UnsafePathError):
+                client._open_home(home)
+        self.assertEqual(before, open_fd_count())
+        self.assertFalse(home.exists())
+        self.assertEqual(0o700, stat.S_IMODE((trusted / "level-one").stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE((trusted / "level-one" / "level-two").stat().st_mode))
+
+    def test_home_creation_rejects_writable_existing_ancestor(self):
+        untrusted = Path(self.temp.name) / "untrusted"
+        untrusted.mkdir(mode=0o777)
+        untrusted.chmod(0o777)
+        with self.assertRaises(UnsafePathError):
+            client._open_home(untrusted / "home")
+        self.assertFalse((untrusted / "home").exists())
 
     def test_locked_fd_closes_descriptor_on_flock_failure(self):
         (self.home / "spool").mkdir(mode=0o700)
