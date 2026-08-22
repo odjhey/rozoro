@@ -518,7 +518,7 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
-Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interrupt, and exact resume. Run the opt-in, cost-incurring smoke with `RZR_LIVE_COPILOT=1 tests/live/copilot-lifecycle.sh`. Copilot model availability is account-specific: persisted model metadata is the requested profile, and Copilot may warn and route an unavailable named model through `auto`.
+Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interrupt, and exact resume. Run the opt-in, cost-incurring lifecycle and Copilot-hosted watchtower smokes with `RZR_LIVE_COPILOT=1 tests/live/copilot-lifecycle.sh` and `RZR_LIVE_COPILOT=1 tests/live/copilot-watchtower.sh`. Copilot model availability is account-specific: persisted model metadata is the requested profile, and Copilot may warn and route an unavailable named model through `auto`.
 
 ### Status v2 and background-work boundary
 
