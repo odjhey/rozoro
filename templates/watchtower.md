@@ -72,10 +72,11 @@ are passed to the crew verbatim.
    !./bin/rozoro register --harness claude
    ```
 
-   This is the one documented registration path — not a fallback. It always
-   works once you're idle, requires no setup, and doesn't depend on any
-   settings file loading correctly. Do it once per session, before relying on
-   `./bin/rozoro watch --wake`.
+   This is the documented manual registration path — not a fallback (the
+   opt-in `./bin/rozoro claude-watchtower` launcher registers automatically
+   instead). It always works once you're idle, requires no setup, and doesn't
+   depend on any settings file loading correctly. Do it once per session,
+   before relying on `./bin/rozoro watch --wake`.
 
    A Claude watchtower is launched with `ROZORO_ROLE=watchtower` in its
    environment. That marker is session identity, not a registration

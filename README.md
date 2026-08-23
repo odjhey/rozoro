@@ -146,7 +146,7 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, Copilot, or Pi; Copilot and Pi use preallocated native session UUIDs; idempotent unless `--refresh` replaces the link after restart |
 | `./bin/rozoro status <id>` | pure schema-v2 projection separating persisted runtime, foreground, background, task, turn-report, and action state; unresolved items remain until explicitly acked |
 | `./bin/rozoro ack <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `./bin/rozoro register --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!./bin/rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the one documented registration path, not a fallback. `ROZORO_ROLE=watchtower` marks session identity independently of registration |
+| `./bin/rozoro register --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!./bin/rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the documented manual registration path, not a fallback (the opt-in `./bin/rozoro claude-watchtower` launcher registers automatically instead). `ROZORO_ROLE=watchtower` marks session identity independently of registration |
 | `./bin/rozoro watch [--once] [--wake\|--wake-codex\|--wake-herdr] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; `--wake` delivers a fixed nudge through the REGISTERED backend via a durable at-least-once ledger (bursts coalesce; the Herdr backend defers while the driver is working/blocked). `--wake-codex`/`--wake-herdr` force an explicit backend |
 | `./bin/rozoro reconcile [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' v2 projections, flag vanished tasks, and ack exactly the snapshotted generation (never resolves OPEN items) |
 | `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
@@ -307,10 +307,12 @@ ROZORO_ROLE=watchtower claude \
 watchtower, distinct from a rozoro-spawned crew or a plain dev session opened
 in the same checkout. Nothing reads it yet, but it's reserved for
 watchtower-scoped tooling, such as the planned long-lived monitor daemon
-(#25). A Claude watchtower still registers its wake target by hand at its
-first idle prompt (`!./bin/rozoro register --harness claude`, see the
-`./bin/rozoro register` row below and `templates/watchtower.md`) — there is no
-automatic registration to opt into.
+(#25). A Claude watchtower launched this way still registers its wake target by
+hand at its first idle prompt (`!./bin/rozoro register --harness claude`, see the
+`./bin/rozoro register` row below and `templates/watchtower.md`). The separate,
+opt-in `./bin/rozoro claude-watchtower` command instead launches (or `--resume`s)
+Claude and registers automatically once herdr reports the pane ready — see
+[`docs/claude-watchtower-live-gate.md`](docs/claude-watchtower-live-gate.md).
 
 Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
 command supplies the control-tower prompt and approves the project-local

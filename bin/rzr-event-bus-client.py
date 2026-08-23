@@ -184,7 +184,7 @@ def compat(report):
       "snapshot_folder_present":p.get("folder_present")}
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true")
+    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true")
     a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME",str(Path.home()/".rozoro"))
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
@@ -192,7 +192,12 @@ def main():
       with AuthorityBoundary(home_fd) as boundary:
         flow=DaemonFlow(home,home_fd)
         try:
-          if a.operation=="authority-disable":
+          if a.operation=="authority-activate":
+            if not a.driver: ap.error("--driver is required")
+            authority=flow.request(req("driver.authority",driver_id=a.driver))["authority"]
+            if authority!="active": raise BridgeError(f"driver {a.driver} has {authority} daemon authority")
+            boundary.require_clean(a.driver); boundary.activate(a.driver); print(a.driver)
+          elif a.operation=="authority-disable":
             if not a.driver: ap.error("--driver is required")
             if any(os.environ.get(name)!="1" for name in ("ROZORO_EVENT_BUS","ROZORO_EVENT_BUS_FALLBACK","ROZORO_EVENT_BUS_DISABLE")):
               raise BridgeError("authority-disable requires ROZORO_EVENT_BUS=1, ROZORO_EVENT_BUS_FALLBACK=1, and ROZORO_EVENT_BUS_DISABLE=1")

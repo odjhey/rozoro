@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -24,12 +25,13 @@ SPEC.loader.exec_module(HOOK)
 def identity(session=FIXTURE["redactions"]["session_id"]):
     values = {
         "ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "crew", "ROZORO_TASK_ID": "task-1",
-        "ROZORO_SESSION_ID": session, "ROZORO_CLAUDE_CAPABILITY": "2.1.240",
+        "ROZORO_SESSION_ID": session, "ROZORO_CLAUDE_BINARY": str(ROOT / "tests/fakes/claude"),
     }
     old = {key: os.environ.get(key) for key in values}
     os.environ.update(values)
     try:
-        yield
+        with mock.patch.object(HOOK, "_claude_version", return_value="2.1.240"):
+            yield
     finally:
         for key, value in old.items():
             if value is None:
@@ -38,7 +40,28 @@ def identity(session=FIXTURE["redactions"]["session_id"]):
                 os.environ[key] = value
 
 
+def capability_proof(directory: Path) -> Path:
+    binary = (ROOT / "tests/fakes/claude").resolve(); info = binary.stat()
+    proof = directory / "capability.json"
+    proof.write_text(json.dumps({"version": "2.1.240", "binary": str(binary),
+                                 "identity": [info.st_dev, info.st_ino]}))
+    proof.chmod(0o600)
+    return proof
+
+
 class ClaudeProducerTests(unittest.TestCase):
+    def test_watchtower_identity_is_stable_and_never_uses_task_identity(self):
+        payload = {"hook_event_name": "SessionStart", "session_id": "watch-session"}
+        values = {"ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "watchtower",
+                  "ROZORO_DRIVER_ID": "herdr-pane-7", "ROZORO_SESSION_ID": "watch-session",
+                  "ROZORO_CLAUDE_BINARY": str(ROOT / "tests/fakes/claude")}
+        with mock.patch.dict(os.environ, values, clear=True), \
+             mock.patch.object(HOOK, "_claude_version", return_value="2.1.240"):
+            event = HOOK.map_payload(payload)[0]
+        self.assertEqual(event["role"], "watchtower")
+        self.assertEqual(event["driver_id"], "herdr-pane-7")
+        self.assertNotIn("task_id", event)
+
     def test_fixture_maps_only_frozen_lifecycle_fields(self):
         expected = ["session.register", "turn.start", "background.start",
                     "turn.stop", "turn.stop", "turn.stop", "session.end"]
@@ -121,12 +144,13 @@ class ClaudeProducerTests(unittest.TestCase):
     def test_daemon_down_retains_exact_redacted_events_in_spool(self):
         payload = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"][-1]
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / "home"
+            home = Path(temporary) / "home"; home.mkdir(mode=0o700)
+            proof = capability_proof(home)
             env = os.environ.copy()
             env.update({"ROZORO_HOME": str(home), "ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "crew",
                         "ROZORO_TASK_ID": "task-1", "ROZORO_SESSION_ID": payload["session_id"],
-                        "ROZORO_CLAUDE_CAPABILITY": "2.1.240", "ROZORO_HOOK_TIMEOUT": "0.05"})
-            result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py")], input=json.dumps(payload),
+                        "ROZORO_CLAUDE_BINARY": str(ROOT / "tests/fakes/claude"), "ROZORO_HOOK_TIMEOUT": "0.05"})
+            result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py"), "--claude-binary", str((ROOT / "tests/fakes/claude").resolve()), "--capability-proof", str(proof)], input=json.dumps(payload),
                                     text=True, env=env, capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             events = [json.loads(path.read_text()) for path in (home / "spool").glob("*.json")]
@@ -141,6 +165,7 @@ class ClaudeProducerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / "home"
             home.mkdir(mode=0o700)
+            proof = capability_proof(home)
             sock = home / "monitor.sock"
             ready = threading.Event()
 
@@ -156,9 +181,9 @@ class ClaudeProducerTests(unittest.TestCase):
             env = os.environ.copy()
             env.update({"ROZORO_HOME": str(home), "ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "crew",
                         "ROZORO_TASK_ID": "task-1", "ROZORO_SESSION_ID": payload["session_id"],
-                        "ROZORO_CLAUDE_CAPABILITY": "2.1.240", "ROZORO_HOOK_TIMEOUT": "9"})
+                        "ROZORO_CLAUDE_BINARY": str(ROOT / "tests/fakes/claude"), "ROZORO_HOOK_TIMEOUT": "9"})
             started = time.monotonic()
-            result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py")], input=json.dumps(payload),
+            result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py"), "--claude-binary", str((ROOT / "tests/fakes/claude").resolve()), "--capability-proof", str(proof)], input=json.dumps(payload),
                                     text=True, env=env, capture_output=True, timeout=2)
             elapsed = time.monotonic() - started
             self.assertEqual(result.returncode, 0, result.stderr)

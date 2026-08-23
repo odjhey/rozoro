@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code 2.1.240 lifecycle hook for opt-in Rozoro crew sessions.
+"""Claude Code 2.1.240 lifecycle hook for opt-in Rozoro crew and watchtower sessions.
 
 The hook deliberately extracts only opaque lifecycle identifiers and never
 publishes prompt, transcript, command, description, or assistant content.
@@ -24,17 +24,42 @@ CAPABILITY = "2.1.240"
 EVENTS = {"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"}
 
 
+_CLAUDE_BINARY: str | None = None
+_CAPABILITY_PROOF: str | None = None
+
+
+def _claude_version() -> str | None:
+    """Verify a private launch-time proof against the pinned executable inode."""
+    binary, proof = _CLAUDE_BINARY, _CAPABILITY_PROOF
+    if not binary or not proof or not os.path.isabs(binary) or not os.path.isabs(proof):
+        return None
+    try:
+        info = os.stat(proof, follow_symlinks=False)
+        if not __import__("stat").S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            return None
+        value = json.loads(Path(proof).read_text())
+        actual = os.stat(os.path.realpath(binary))
+        if value.get("binary") != os.path.realpath(binary) or [actual.st_dev, actual.st_ino] != value.get("identity"):
+            return None
+        return value.get("version") if isinstance(value.get("version"), str) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     if os.environ.get("ROZORO_EVENT_BUS") != "1":
         return None
-    if os.environ.get("ROZORO_ROLE") != "crew" or os.environ.get("ROZORO_CLAUDE_CAPABILITY") != CAPABILITY:
+    role = os.environ.get("ROZORO_ROLE")
+    if role not in {"crew", "watchtower"} or _claude_version() != CAPABILITY:
         return None
-    task_id = os.environ.get("ROZORO_TASK_ID", "")
     expected_session = os.environ.get("ROZORO_SESSION_ID", "")
+    native_session = os.environ.get("ROZORO_NATIVE_SESSION_ID", expected_session)
     actual_session = payload.get("session_id")
-    if not task_id or not expected_session or actual_session != expected_session:
+    identity_name = "task_id" if role == "crew" else "driver_id"
+    identity = os.environ.get("ROZORO_TASK_ID" if role == "crew" else "ROZORO_DRIVER_ID", "")
+    if not identity or not expected_session or actual_session != native_session:
         return None
-    return {"v": 1, "session_id": expected_session, "harness": "claude", "role": "crew", "task_id": task_id}
+    return {"v": 1, "session_id": expected_session, "harness": "claude", "role": role, identity_name: identity}
 
 
 def _event(base: dict[str, Any], event_type: str, **fields: Any) -> dict[str, Any]:
@@ -91,6 +116,11 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def main() -> int:
+    global _CLAUDE_BINARY, _CAPABILITY_PROOF
+    if (len(sys.argv) != 5 or sys.argv[1] != "--claude-binary" or sys.argv[3] != "--capability-proof"
+            or not os.path.isabs(sys.argv[2]) or not os.path.isabs(sys.argv[4])):
+        return 0
+    _CLAUDE_BINARY, _CAPABILITY_PROOF = sys.argv[2], sys.argv[4]
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
