@@ -31,7 +31,10 @@ RZR_TASKS="$RZR_HOME/tasks"
 # this checkout, not RZR_HOME. Override with RZR_TEMPLATES.
 RZR_REPO="$(cd "$RZR_BIN/.." && pwd)"
 RZR_TEMPLATES="${RZR_TEMPLATES:-$RZR_REPO/templates}"
+[ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
 mkdir -p "$RZR_STATE"
+[ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
+chmod 700 "$RZR_STATE"
 
 # Task keys and legacy ids are deliberately conservative filesystem components.
 # Existing unsuffixed folders remain valid; unsafe historical names must be

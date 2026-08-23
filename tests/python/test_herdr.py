@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rozoro_monitor.herdr import MembershipMonitor, PaneLevel, inventory
+from rozoro_monitor.herdr import MembershipMonitor, PaneLevel, inventory, read_pane_level
 from rozoro_monitor.store import EventStore
 
 
@@ -64,6 +64,18 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
         await sub.queue.put(PaneLevel('p1','done',True)); await asyncio.sleep(0)
         self.assertIn(('a',True,'done'),self.seen)
 
+    async def test_event_after_subscribe_wins_over_stale_inflight_level(self):
+        (self.state/'a.meta').write_text('pane=p1\n'); entered=asyncio.Event(); release=asyncio.Event(); seen=[]; subs=[]
+        def factory(panes): sub=FakeSubscription(panes,[]); subs.append(sub); return sub
+        async def level(_): entered.set(); await release.wait(); return PaneLevel('p1','unknown',False)
+        async def reconcile(task,value): seen.append((task,value.exists,value.status))
+        monitor=MembershipMonitor(self.state,factory,level,reconcile,scan_interval=99,debounce=0)
+        start=asyncio.create_task(monitor.start()); await entered.wait()
+        await subs[0].queue.put(PaneLevel('p1','done',True)); await asyncio.sleep(0); release.set(); await start
+        try:
+            self.assertIn(('a',True,'done'),seen); self.assertNotIn(('a',False,'unknown'),seen)
+        finally: await monitor.close()
+
     async def test_stream_error_forces_rebuild_with_same_membership(self):
         (self.state/'a.meta').write_text('pane=p1\n'); await self.monitor.start()
         first = self.subs[-1]
@@ -89,6 +101,24 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
     def test_inventory_same_id(self):
         (self.state/'x.meta').write_text('pane=p\n')
         self.assertEqual(set(inventory(self.state).members),{'x'})
+
+    async def test_real_socket_uses_082_target_and_error_absence_vs_transport_unknown(self):
+        sock=str(self.state/'herdr.sock'); requests=[]
+        async def handler(reader,writer):
+            request=__import__('json').loads(await reader.readline()); requests.append(request)
+            if request['method']=='agent.get':
+                reply={"id":"x","error":{"code":"agent_not_found","message":"not found"}}
+            else:
+                reply={"id":"x","error":{"code":"pane_not_found","message":"not found"}}
+            writer.write((__import__('json').dumps(reply)+'\n').encode()); await writer.drain(); writer.close()
+        server=await asyncio.start_unix_server(handler,sock)
+        try: level=await read_pane_level(sock,'p1',timeout=.5)
+        finally: server.close(); await server.wait_closed()
+        self.assertFalse(level.exists)
+        self.assertEqual(requests[0]['params'],{"target":"p1"})
+        self.assertEqual(requests[1]['params'],{"pane_id":"p1"})
+        unknown=await read_pane_level(str(self.state/'missing.sock'),'p1',timeout=.05)
+        self.assertIsNone(unknown.exists)
 
     def test_store_gone_reappear_is_unknown_and_never_clears_native_active(self):
         db = self.state / 'monitor.db'; task = self.state / 'tasks' / 'task-1'; task.mkdir(parents=True)

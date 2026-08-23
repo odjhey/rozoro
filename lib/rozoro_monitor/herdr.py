@@ -95,6 +95,7 @@ class MembershipMonitor:
         self.members: dict[str,Member]={}; self._subscription=None; self._consumer=None; self._runner=None; self._hints=None
         self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
         self._force_rebuild=False; self._dir_signature=None
+        self._active_token=None; self._pane_epoch: dict[str,int]={}; self._apply_lock=asyncio.Lock()
     def hint(self): self._wake.set()
     async def start(self):
         try: await self.scan(force=True)
@@ -136,14 +137,20 @@ class MembershipMonitor:
         await self._levels(self.members); return False
     async def _replace(self, found):
         panes=tuple(sorted({m.pane_id for m in found.values()})); new=self.subscriber(panes); consumer=None; previous=self.members
+        previous_token=self._active_token; token=object()
         try:
-            await new.start(); self.members=dict(found); consumer=asyncio.create_task(self._consume(new)); await self._levels(found)
+            await new.start(); self.members=dict(found); self._active_token=token
+            consumer=asyncio.create_task(self._consume(new,token,dict(found)))
+            levels_ok=await self._levels(found)
+            if consumer.done():
+                await consumer
+                raise ConnectionError("new Herdr stream died during level reconciliation")
         except Exception:
-            self.members=previous
+            self.members=previous; self._active_token=previous_token
             if consumer: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             await new.close(); raise
         old,old_consumer=self._subscription,self._consumer
-        self._subscription,self._consumer=new,consumer; self.connected=True
+        self._subscription,self._consumer=new,consumer; self.connected=levels_ok
         if not self.last_scan_errors: self.last_error=None
         # Both streams stay routed during the bounded drain. Old queued edges
         # are consumed before its transport is closed and task is cancelled.
@@ -153,21 +160,33 @@ class MembershipMonitor:
             try: await asyncio.wait_for(old_consumer,self.drain_interval)
             except TimeoutError: old_consumer.cancel(); await asyncio.gather(old_consumer,return_exceptions=True)
             except Exception: pass  # the replacement was commonly caused by this stream failure
+    async def _apply(self,task_id,level,*,expected_epoch=None):
+        async with self._apply_lock:
+            if expected_epoch is not None and self._pane_epoch.get(level.pane_id,0) != expected_epoch:
+                return
+            await self.reconcile(task_id,level)
     async def _levels(self,members):
+        ok=True
         for member in members.values():
+            frontier=self._pane_epoch.get(member.pane_id,0)
             try: level=await self.level_reader(member.pane_id)
             except Exception as exc:
-                self.last_error=str(exc)[:128]; level=PaneLevel(member.pane_id,"unknown",None)
-            await self.reconcile(member.task_id,level)
-    async def _consume(self,sub):
+                self.last_error=str(exc)[:128]; self.connected=False
+                level=PaneLevel(member.pane_id,"unknown",None)
+            if level.exists is None:
+                ok=False; self.connected=False; self.last_error=self.last_error or "Herdr level RPC unavailable"
+            await self._apply(member.task_id,level,expected_epoch=frontier)
+        return ok
+    async def _consume(self,sub,token,routing):
         try:
             async for level in sub.events():
-                for member in tuple(self.members.values()):
-                    if member.pane_id==level.pane_id: await self.reconcile(member.task_id,level)
+                self._pane_epoch[level.pane_id]=self._pane_epoch.get(level.pane_id,0)+1
+                for member in tuple(routing.values()):
+                    if member.pane_id==level.pane_id: await self._apply(member.task_id,level)
             raise ConnectionError("Herdr subscription ended")
         except asyncio.CancelledError: pass
         except Exception as exc:
-            if sub is self._subscription:
+            if token is self._active_token:
                 self.connected=False; self.last_error=str(exc)[:128]; self._force_rebuild=True; self.hint()
     def health(self):
         return {"herdr_connected":self.connected,"herdr_last_error":self.last_error,
@@ -208,6 +227,14 @@ class UnixHerdrSubscription:
         if self.writer:
             self.writer.close(); await self.writer.wait_closed(); self.writer=None
 
+class HerdrAPIError(RuntimeError):
+    def __init__(self,error):
+        self.error=error; super().__init__(str(error))
+
+def _not_found(error):
+    text=json.dumps(error,sort_keys=True).casefold()
+    return "not_found" in text or "not found" in text or "pane_not_found" in text
+
 async def herdr_rpc(socket_path,method,params,*,timeout=3.0):
     """One bounded RPC to the configured socket; never consults default CLI state."""
     reader,writer=await asyncio.wait_for(asyncio.open_unix_connection(socket_path),timeout)
@@ -216,19 +243,26 @@ async def herdr_rpc(socket_path,method,params,*,timeout=3.0):
         await asyncio.wait_for(writer.drain(),timeout)
         line=await asyncio.wait_for(reader.readline(),timeout)
         if not line: raise ConnectionError("Herdr RPC closed")
-        return json.loads(line)
+        response=json.loads(line)
+        if response.get("error") is not None: raise HerdrAPIError(response["error"])
+        return response
     finally:
         writer.close(); await writer.wait_closed()
 
 async def read_pane_level(socket_path,pane_id,*,timeout=3.0):
+    """Use Herdr 0.8.2 schemas and distinguish absence from uncertainty."""
     try:
-        data=await herdr_rpc(socket_path,"agent.get",{"pane_id":pane_id},timeout=timeout)
+        data=await herdr_rpc(socket_path,"agent.get",{"target":pane_id},timeout=timeout/2)
         result=data.get("result") or {}; agent=result.get("agent") or result
-        if agent.get("agent_status") is not None:
-            return PaneLevel(pane_id,agent.get("agent_status") or "unknown",True,agent.get("state_change_seq"))
-    except Exception: pass
+        return PaneLevel(pane_id,agent.get("agent_status") or "unknown",True,agent.get("state_change_seq"))
+    except HerdrAPIError as exc:
+        if not _not_found(exc.error): return PaneLevel(pane_id,"unknown",None)
+    except (OSError,TimeoutError,ConnectionError,ValueError):
+        return PaneLevel(pane_id,"unknown",None)
     try:
-        await herdr_rpc(socket_path,"pane.get",{"pane_id":pane_id},timeout=timeout)
+        await herdr_rpc(socket_path,"pane.get",{"pane_id":pane_id},timeout=timeout/2)
         return PaneLevel(pane_id,"unknown",True)
-    except Exception:
-        return PaneLevel(pane_id,"unknown",False)
+    except HerdrAPIError as exc:
+        return PaneLevel(pane_id,"unknown",False if _not_found(exc.error) else None)
+    except (OSError,TimeoutError,ConnectionError,ValueError):
+        return PaneLevel(pane_id,"unknown",None)

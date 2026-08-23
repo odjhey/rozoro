@@ -209,6 +209,20 @@ class MonitorServer:
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
+            explicit_state = os.environ.get("ROZORO_STATE_DIR")
+            state_dir = Path(explicit_state or str(self.home / "state"))
+            try:
+                state_dir.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            state_info = state_dir.lstat()
+            if (not stat.S_ISDIR(state_info.st_mode) or state_info.st_uid != os.geteuid()
+                    or state_dir.is_symlink()):
+                raise UnsafeStateError("state must be an owner-controlled directory")
+            if stat.S_IMODE(state_info.st_mode) != 0o700:
+                if explicit_state:
+                    raise UnsafeStateError("external state directory must already be owner-private")
+                os.chmod(state_dir, 0o700, follow_symlinks=False)
             herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
             if not herdr_socket:
                 try:
@@ -218,11 +232,11 @@ class MonitorServer:
                     stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
                     sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
                     wanted = os.environ.get("RZR_SESSION")
-                    selected = next((item for item in sessions if not wanted or item.get("name") == wanted), None)
+                    selected = (next((item for item in sessions if item.get("name") == wanted), None)
+                                if wanted else next((item for item in sessions if item.get("default") is True), None))
                     herdr_socket = None if selected is None else selected.get("socket_path")
                 except (OSError, ValueError, TimeoutError):
                     herdr_socket = None
-            state_dir = os.environ.get("ROZORO_STATE_DIR", str(self.home / "state"))
             if herdr_socket:
                 async def level_reader(pane_id: str) -> PaneLevel:
                     return await read_pane_level(

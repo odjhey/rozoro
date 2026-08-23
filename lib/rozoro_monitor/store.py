@@ -360,15 +360,15 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
 def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
     """Map projections exactly onto protocol v1's frozen report tuple matrix."""
     report_state = report.get("state")
-    # Certified host disappearance is the immediate lifecycle action even when
-    # the independent handoff is missing or malformed.
-    if state.availability == "gone":
-        return "gone"
+    # The frozen report tuple gives missing/malformed precedence: `gone` is
+    # not a protocol-valid actionable reason for either report state.
     if report_state == "missing":
         return "missing-report"
     if report_state == "malformed":
         return "malformed-report"
     verdict = report.get("verdict")
+    if state.availability == "gone":
+        return "gone"
     if verdict == "done":
         return "quiescent" if state.availability == "quiescent" else "none"
     if verdict == "waiting":
