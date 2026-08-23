@@ -16,7 +16,7 @@ def req(kind: str, **fields):
 
 class AuthorityBoundary:
     """Exclude every legacy ledger writer while validating and using the daemon."""
-    def __init__(self, home_fd: int, *, validate: bool=True): self.home_fd=home_fd; self.root_fd=-1; self.lock_fd=-1; self.validate=validate
+    def __init__(self, home_fd: int): self.home_fd=home_fd; self.root_fd=-1; self.lock_fd=-1; self.cursors={}
     def __enter__(self):
         try: os.mkdir("watchtowers", 0o700, dir_fd=self.home_fd)
         except FileExistsError: pass
@@ -30,9 +30,9 @@ class AuthorityBoundary:
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
             raise BridgeError("unsafe legacy authority lock")
         fcntl.flock(self.lock_fd,fcntl.LOCK_EX)
-        if self.validate: self._validate_clean()
+        self._validate_structure()
         return self
-    def _validate_clean(self):
+    def _validate_structure(self):
         for name in os.listdir(self.root_fd):
             if name==".authority.lock": continue
             try:
@@ -46,8 +46,7 @@ class AuthorityBoundary:
                 generation,delivered=self._pending(dfd,name); ack=self._ack(dfd,name)
                 if not 0<=ack<=delivered<=generation:
                     raise BridgeError(f"malformed legacy cursor invariants for {name}: require 0<=ack<=delivered<=generation")
-                if generation>ack:
-                    raise BridgeError(f"legacy wake ledger still has pending work ({name} generation={generation} ack={ack}). Reconcile legacy state first with ROZORO_EVENT_BUS_FALLBACK=1 ./bin/rozoro reconcile --driver {name}")
+                self.cursors[name]=(generation,delivered,ack)
             finally: os.close(dfd)
     @staticmethod
     def _read(dfd,name,required):
@@ -105,6 +104,10 @@ class AuthorityBoundary:
             if value>protocol.MAX_INTEGER: raise ValueError
             return value
         except (UnicodeError,ValueError) as exc: raise BridgeError(f"malformed legacy ACK ledger for {driver}") from exc
+    def require_clean(self,driver:str):
+        generation,_,ack=self.cursors.get(driver,(0,0,0))
+        if generation>ack:
+            raise BridgeError(f"legacy wake ledger still has pending work ({driver} generation={generation} ack={ack}). Reconcile legacy state first with ROZORO_EVENT_BUS_FALLBACK=1 ./bin/rozoro reconcile --driver {driver}")
     def drivers(self):
         return [n for n in os.listdir(self.root_fd) if n!=".authority.lock"]
     def activate(self, driver: str|None=None):
@@ -186,7 +189,7 @@ def main():
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
     try:
-      with AuthorityBoundary(home_fd,validate=a.operation!="authority-disable") as boundary:
+      with AuthorityBoundary(home_fd) as boundary:
         flow=DaemonFlow(home,home_fd)
         try:
           if a.operation=="authority-disable":
@@ -199,13 +202,13 @@ def main():
             if not a.task: ap.error("--task is required")
             for driver in boundary.drivers():
               authority=flow.request(req("driver.authority",driver_id=driver))["authority"]
-              if authority=="active": boundary.activate(driver)
+              if authority=="active": boundary.require_clean(driver); boundary.activate(driver)
             print(json.dumps(flow.request(req("task.status",task_id=a.task)),sort_keys=True,separators=(",",":")))
           else:
             if not a.driver: ap.error("--driver is required")
             authority=flow.request(req("driver.authority",driver_id=a.driver))["authority"]
             if authority!="active": raise BridgeError(f"driver {a.driver} has {authority} daemon authority; reconcile through explicit fallback")
-            boundary.activate(a.driver)
+            boundary.require_clean(a.driver); boundary.activate(a.driver)
             snap=flow.request(req("reconcile.pending",driver_id=a.driver)); through=snap["through"]
             projected=[compat(r) for r in snap["reports"]]
             vanished=[r["id"] for r in projected if r["snapshot_folder_present"] is False]

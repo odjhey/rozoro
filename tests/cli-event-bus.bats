@@ -50,6 +50,8 @@ PY
   start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_failure; assert_output_contains 'Reconcile legacy state first'
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_failure; assert_output_contains 'Reconcile legacy state first'
   run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_success; [ "$(jq -r .availability_source <<<"$output")" = legacy-v2 ]
 }
@@ -189,7 +191,7 @@ PY
   PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
 import os
 from rozoro_monitor.store import EventStore
-s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')); s.register_driver('driver-2','adapter-2','pi'); s.close()
+s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')); r=s.register_driver('driver-2','adapter-2','pi'); o=s.offer_notification('driver-2','adapter-2',r['epoch']); s.confirm_delivery('driver-2','adapter-2',r['epoch'],o['generation']); s.close()
 PY
   mkdir -p "$ROZORO_HOME/watchtowers/driver-2"; chmod 700 "$ROZORO_HOME/watchtowers/driver-2"
   printf '%s\n' '{"driver_id":"driver-2","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-2/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-2/target.json"
@@ -229,14 +231,17 @@ try: s.register_driver('driver-1','adapter-race','pi')
 finally: s.close()
 PY
   assert_failure
+  # Disabled d1 independently resumes legacy work; it must not block active d2.
+  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
+  assert_success
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_success
   [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   [ -f "$ROZORO_HOME/watchtowers/driver-2/.event-bus-authority" ]
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-2 --json
+  assert_success; [ "$(jq '.reports|length' <<<"$output")" = 1 ]
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
   assert_failure; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
-  assert_success
 }
 
 @test "bridge rejects unsafe home and fake socket entries" {
