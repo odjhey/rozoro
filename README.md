@@ -473,6 +473,15 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps
   once before re-reading the handoff when a foreground settle event races its
   append; `0` disables the retry.
+- `ROZORO_EVENT_BUS` — opt-in, default `0`. `1` routes `status`/`reconcile`
+  through the resident daemon's API instead of the legacy JSON/v2 files,
+  adding normalized `availability`/`availability_source` fields on top of the
+  existing v2 output. Refuses to run while any legacy driver ledger still has
+  `generation > ack`, naming `ROZORO_EVENT_BUS_FALLBACK=1 ./bin/rozoro
+  reconcile` to drain it first, and fails loudly (rather than silently
+  falling back) if the daemon socket is unreachable.
+- `ROZORO_EVENT_BUS_FALLBACK` — with `ROZORO_EVENT_BUS=1`, set to `1` to use
+  the legacy JSON/v2 path for `status`/`reconcile` instead of the daemon.
 
 ## Try it
 
