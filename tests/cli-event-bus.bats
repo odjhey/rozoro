@@ -153,6 +153,17 @@ PY
   assert_failure; assert_output_contains 'oversized legacy ledger'
 }
 
+@test "dirty legacy ledger refuses both status and reconcile until drained" {
+  seed_task
+  printf '%s\n' '{"schema":1,"generation":2,"delivered":1,"tasks":{}}' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"
+  printf '1\n' > "$ROZORO_HOME/watchtowers/driver-1/ack"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json" "$ROZORO_HOME/watchtowers/driver-1/ack"
+  start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
+  assert_failure; assert_output_contains 'legacy wake ledger still has pending work'
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_failure; assert_output_contains 'legacy wake ledger still has pending work'
+}
+
 @test "strict legacy JSON rejects duplicate keys schema booleans and ambiguous members" {
   seed_task; start_monitor
   for payload in \

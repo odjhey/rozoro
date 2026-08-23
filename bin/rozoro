@@ -21,7 +21,7 @@ case "$verb" in
     echo "  watch ...                  diagnostics/legacy compatibility only"
     for f in "$BIN"/rzr-*.sh; do
       b="$(basename "$f" .sh)"; b="${b#rzr-}"
-      [ "$b" = "lib" ] && continue
+      case "$b" in lib|monitor|reconcile|watch) continue ;; esac
       printf '  %s\n' "$b"
     done
     exit 0 ;;

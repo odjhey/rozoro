@@ -107,7 +107,7 @@ class AuthorityBoundary:
     def require_clean(self,driver:str):
         generation,_,ack=self.cursors.get(driver,(0,0,0))
         if generation>ack:
-            raise BridgeError(f"legacy wake ledger still has pending work ({driver} generation={generation} ack={ack}). Drain it before upgrading with the prior release: ./bin/rozoro reconcile --driver {driver}")
+            raise BridgeError(f"legacy wake ledger still has pending work ({driver} generation={generation} ack={ack}). This release refuses until it is drained; check out the prior release and run: ./bin/rozoro reconcile --driver {driver}")
     def drivers(self):
         return [n for n in os.listdir(self.root_fd) if n!=".authority.lock"]
     def activate(self, driver: str|None=None):
