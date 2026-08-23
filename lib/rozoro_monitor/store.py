@@ -695,9 +695,12 @@ class EventStore:
                 ).fetchone()
                 before_tuple = None if before_projection is None else tuple(before_projection)
                 after_tuple = None if after_projection is None else tuple(after_projection)
-                change = (ActionableChange(event["task_id"], after_projection["actionable_reason"])
-                          if after_projection is not None
-                          and after_projection["actionable_reason"] != "none"
+                reason = None if after_projection is None else after_projection["actionable_reason"]
+                change = (ActionableChange(
+                              event["task_id"], reason,
+                              "urgent" if reason in {"blocked", "failed", "needs-action"} else "normal",
+                          )
+                          if reason is not None and reason != "none"
                           and before_tuple != after_tuple else None)
             else:
                 change = None
@@ -801,6 +804,52 @@ class EventStore:
         if row is None or row["session_id"] != session_id or int(row["registration_epoch"]) != epoch:
             raise ValueError("stale or mismatched driver connection epoch")
 
+    def notification_frontier(self, driver_id: str, session_id: str,
+                              epoch: int) -> tuple[int, str, bool] | None:
+        """Return pending generation, aggregate priority, and immediate-retry flag.
+
+        This read does not create an offer or mutate delivery state.  Urgency is
+        aggregated across the whole unacknowledged range rather than inferred
+        only from its highest generation.
+        """
+        with self._lock:
+            self._require_registration(self._connection, driver_id, session_id, epoch)
+            ledger = self._connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            g, d, a = map(int, ledger)
+            offer = self._connection.execute(
+                """SELECT generation FROM delivery_offers
+                   WHERE driver_id=? AND registration_epoch=? AND session_id=? AND confirmed=0
+                     AND generation>? ORDER BY generation LIMIT 1""",
+                (driver_id, epoch, session_id, a),
+            ).fetchone()
+            if offer is not None:
+                generation = int(offer[0])
+                immediate = True
+            elif g <= a:
+                return None
+            elif d > a:
+                confirmed_here = self._connection.execute(
+                    """SELECT 1 FROM delivery_offers WHERE driver_id=? AND registration_epoch=?
+                       AND session_id=? AND generation=? AND confirmed=1""",
+                    (driver_id, epoch, session_id, d),
+                ).fetchone()
+                if confirmed_here is not None:
+                    return None
+                generation = d
+                immediate = True
+            else:
+                generation = g
+                immediate = False
+            urgent = self._connection.execute(
+                """SELECT 1 FROM pending_generations
+                   WHERE generation>? AND generation<=? AND priority='urgent' LIMIT 1""",
+                (a, generation),
+            ).fetchone()
+            return generation, "urgent" if urgent is not None else "normal", immediate
+
     def offer_notification(self, driver_id: str, session_id: str, epoch: int) -> dict[str, Any] | None:
         """Return one exact offer until confirmation or registration invalidation."""
         with self._lock, self._immediate() as connection:
@@ -846,14 +895,64 @@ class EventStore:
                     (driver_id, epoch, session_id, generation),
                 )
             priority = connection.execute(
-                "SELECT priority FROM pending_generations WHERE generation=?", (generation,)
+                """SELECT 1 FROM pending_generations
+                   WHERE generation>? AND generation<=? AND priority='urgent' LIMIT 1""",
+                (a, generation),
             ).fetchone()
             count = connection.execute(
                 "SELECT COUNT(DISTINCT task_id) FROM pending_generation_tasks WHERE generation<=? AND generation>?",
                 (generation, a),
             ).fetchone()[0]
-            return {"generation": generation, "priority": "normal" if priority is None else priority[0],
+            return {"generation": generation, "priority": "urgent" if priority else "normal",
                     "task_count": int(count)}
+
+    def withdraw_unconfirmed_offer(self, driver_id: str, session_id: str, epoch: int,
+                                   generation: int) -> None:
+        """Withdraw only this epoch/session's exact unconfirmed offer.
+
+        Used when selection advances beyond the frontier whose coalescer
+        eligibility was claimed. Confirmed or mismatched offers fail closed.
+        """
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            deleted = connection.execute(
+                """DELETE FROM delivery_offers WHERE driver_id=? AND registration_epoch=?
+                   AND session_id=? AND generation=? AND confirmed=0""",
+                (driver_id, epoch, session_id, generation),
+            )
+            if deleted.rowcount != 1:
+                raise ValueError("generation does not match the exact unconfirmed offer")
+
+    def record_delivery_outcome(self, driver_id: str, session_id: str, epoch: int,
+                                generation: int, state: str, error: str | None = None) -> None:
+        """Record deferred/error diagnostics without consuming the exact offer."""
+        if state not in {"deferred", "error"}:
+            raise ValueError("non-delivery state must be deferred or error")
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            offer = connection.execute(
+                """SELECT 1 FROM delivery_offers WHERE driver_id=? AND registration_epoch=?
+                   AND session_id=? AND generation=? AND confirmed=0""",
+                (driver_id, epoch, session_id, generation),
+            ).fetchone()
+            if offer is None:
+                # Concurrent reconciliation may ACK and retire this exact
+                # in-flight offer before a deferred/error actuator returns.
+                consumed = connection.execute(
+                    """SELECT 1 FROM delivery_offers o JOIN watchtower_deliveries w
+                         ON w.driver_id=o.driver_id
+                       WHERE o.driver_id=? AND o.registration_epoch=? AND o.session_id=?
+                         AND o.generation=? AND o.confirmed=1 AND w.acked_generation>=?""",
+                    (driver_id, epoch, session_id, generation, generation),
+                ).fetchone()
+                if consumed is not None:
+                    return
+                raise ValueError("generation does not match the exact outstanding offer")
+            connection.execute(
+                """UPDATE watchtower_deliveries SET delivery_state=?,last_error=?,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?""",
+                (state, None if error is None else error[:128], driver_id),
+            )
 
     def confirm_delivery(self, driver_id: str, session_id: str, epoch: int, generation: int) -> bool:
         """Confirm only the current epoch's exact outstanding offer."""
@@ -874,7 +973,7 @@ class EventStore:
                 (driver_id, epoch, generation),
             )
             connection.execute(
-                "UPDATE watchtower_deliveries SET delivered_generation=MAX(delivered_generation,?),delivery_state='delivered',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                "UPDATE watchtower_deliveries SET delivered_generation=MAX(delivered_generation,?),delivery_state='delivered',last_error=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
                 (generation, driver_id),
             )
             return True

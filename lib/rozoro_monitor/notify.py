@@ -1,0 +1,183 @@
+"""Deterministic notification collection and narrow delivery actuator contract.
+
+The coalescer owns no authoritative task state.  It observes the durable ledger,
+waits on an injected monotonic clock, and offers a content-free notification.
+Only an actuator's explicit ``delivered`` result confirms the exact durable
+offer; every other outcome leaves that offer pending for an identical retry.
+"""
+
+from __future__ import annotations
+
+import time
+import threading
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable, Protocol
+
+from .store import EventStore
+
+DEFAULT_COLLECTION_WINDOW = 0.350
+
+
+class DeliveryStatus(str, Enum):
+    DELIVERED = "delivered"
+    DEFERRED = "deferred"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class DeliveryResult:
+    status: DeliveryStatus
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class Notification:
+    """The complete, deliberately prose-free actuator payload."""
+
+    generation: int
+    priority: str
+    task_count: int
+
+
+class DeliveryActuator(Protocol):
+    def deliver(self, notification: Notification) -> DeliveryResult:
+        """Return DELIVERED only after the actuator's exact confirmation contract."""
+
+
+@dataclass
+class _Collection:
+    generation: int
+    deadline: float
+
+
+class Coalescer:
+    """Controlled-clock scheduler for one durable watchtower registration.
+
+    ``poll`` is intentionally synchronous and non-blocking.  Production event
+    loops call it when facts arrive and when their timer fires; tests advance a
+    virtual clock and never sleep.
+    """
+
+    def __init__(
+        self,
+        store: EventStore,
+        driver_id: str,
+        session_id: str,
+        epoch: int,
+        actuator: DeliveryActuator,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        collection_window: float = DEFAULT_COLLECTION_WINDOW,
+    ):
+        if collection_window < 0:
+            raise ValueError("collection_window must be non-negative")
+        self.store = store
+        self.driver_id = driver_id
+        self.session_id = session_id
+        self.epoch = epoch
+        self.actuator = actuator
+        self.clock = clock
+        self.collection_window = collection_window
+        self._collection: _Collection | None = None
+        self._collection_lock = threading.Lock()
+        self._in_flight_generation: int | None = None
+        # A non-reentrant claim suppresses both recursive actuator callbacks and
+        # simultaneous event-loop/thread polls without blocking either caller.
+        self._delivery_claim = threading.Lock()
+
+    @property
+    def deadline(self) -> float | None:
+        with self._collection_lock:
+            return None if self._collection is None else self._collection.deadline
+
+    def poll(self) -> DeliveryResult | None:
+        now = self.clock()
+        frontier = self.store.notification_frontier(self.driver_id, self.session_id, self.epoch)
+        if frontier is None:
+            with self._collection_lock:
+                self._collection = None
+            return None
+
+        generation, priority, immediate = frontier
+        with self._collection_lock:
+            if self._collection is None:
+                self._collection = _Collection(generation, now + self.collection_window)
+            elif generation > self._collection.generation:
+                if (self._in_flight_generation is not None
+                        and self._collection.generation <= self._in_flight_generation
+                        and generation > self._in_flight_generation):
+                    # The first >N generation exposed by a concurrent ACK gets
+                    # one first-seen boundary while N remains in flight.
+                    self._collection = _Collection(generation, now + self.collection_window)
+                else:
+                    # Ordinary arrivals, including N+2 after that transition,
+                    # batch into the already-open original window.
+                    self._collection.generation = generation
+            deadline = self._collection.deadline
+
+            # Urgent facts flush an existing normal window immediately. A
+            # durable delivered-but-unacked wake still suppresses N+1.
+            if not immediate and priority != "urgent" and now < deadline:
+                return None
+            if not self._delivery_claim.acquire(blocking=False):
+                # Another poll owns the exact offer. Suppression is a normal
+                # no-op, not permission to duplicate delivery.
+                return None
+            # Publish the claimed frontier under the same bookkeeping lock as
+            # collection mutation. ACK cannot expose N+1 in the gap between
+            # claim acquisition and offer_notification returning.
+            self._in_flight_generation = generation
+
+        try:
+            offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
+            if offer is None:
+                with self._collection_lock:
+                    # Do not erase a collection concurrently advanced beyond
+                    # the frontier observed by this poll.
+                    if (self._collection is not None
+                            and self._collection.generation <= generation):
+                        self._collection = None
+                return None
+            notification = Notification(**offer)
+            if notification.generation != generation:
+                # Eligibility was claimed only for the observed frontier. ACK
+                # may retire N before selection and expose N+1; never spend N's
+                # immediate eligibility on that newer exact offer.
+                self.store.withdraw_unconfirmed_offer(
+                    self.driver_id, self.session_id, self.epoch,
+                    notification.generation,
+                )
+                return None
+            try:
+                result = self.actuator.deliver(notification)
+            except Exception as exc:
+                # Timeout, disconnect, and uncertainty are errors, never implicit delivery.
+                result = DeliveryResult(DeliveryStatus.ERROR, type(exc).__name__)
+            if (not isinstance(result, DeliveryResult)
+                    or not isinstance(result.status, DeliveryStatus)):
+                result = DeliveryResult(DeliveryStatus.ERROR, "invalid actuator result")
+            if result.status is DeliveryStatus.DELIVERED:
+                self.store.confirm_delivery(
+                    self.driver_id, self.session_id, self.epoch, notification.generation
+                )
+                with self._collection_lock:
+                    # ACK/reconcile may expose and collect N+1 while this N
+                    # actuator is still in flight. Preserve N+1's first deadline.
+                    if (self._collection is not None
+                            and self._collection.generation <= notification.generation):
+                        self._collection = None
+            else:
+                self.store.record_delivery_outcome(
+                    self.driver_id, self.session_id, self.epoch, notification.generation,
+                    result.status.value, result.error,
+                )
+            # The unconfirmed delivery_offers row preserves the exact generation,
+            # priority, and count for deferred/error retries.
+            return result
+        finally:
+            # Includes delivered, deferred, error, invalid result, timeout,
+            # disconnect, actuator exception, and durable-store exception paths.
+            with self._collection_lock:
+                self._in_flight_generation = None
+            self._delivery_claim.release()
