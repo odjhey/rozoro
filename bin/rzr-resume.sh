@@ -75,7 +75,7 @@ case "$HARNESS" in
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
 EVENT_BUS=false
-[ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "$HARNESS" = claude ] && EVENT_BUS=true
+[ "$HARNESS" = claude ] && EVENT_BUS=true
 [ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
 if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then

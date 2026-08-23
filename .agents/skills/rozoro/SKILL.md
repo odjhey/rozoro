@@ -77,7 +77,7 @@ default harness. It does not create or rewrite the optional
 | **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
 | **Read state** | `./bin/rozoro status <id>` — pure v2 runtime/background/task/turn/action projection plus unresolved OPEN items; status reads never advance observation state |
 | **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`./bin/rozoro register --harness <h>`) then run `./bin/rozoro watch --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver runs `./bin/rozoro reconcile` on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
+| **Sense** (don't block) | Managed Pi and supported-Claude watchtowers use the resident daemon/event bus. Their thin adapters deliver one fixed wake; run `./bin/rozoro reconcile` and then `status`. Use `monitor status --json` for health. `rzr-watch` is diagnostics/legacy compatibility only, never normal Pi/Claude management. |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.

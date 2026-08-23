@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "gate": "G4/G5",
+  "recorded_utc": "2026-08-23T14:45:00Z",
+  "versions": {"pi": "0.84.2", "herdr": "0.8.2", "monitor_schema": 6},
+  "privacy": "structural-only; paths, prompts, transcripts, session/task/driver IDs, model prose, and credentials omitted",
+  "landed_g3": {
+    "status": "passed-and-merged",
+    "claude": "2.1.240",
+    "fixture": "claude-watchtower-g3-2.1.240.json",
+    "reviewed_head": "7ede79ccf2c06b3db87049121b0cfd1820cb0c14"
+  },
+  "g4": {
+    "real_pi_startup": {"result": "pass", "fixed_reply": true, "real_daemon": true, "schema": 6, "spool_backlog": 0},
+    "native_adapter_daemon_regressions": {
+      "result": "12/12 pass",
+      "fixed_wake_reconcile": true,
+      "delivered_unacked_restart": true,
+      "metadata_rewrite_epoch_churn": 0,
+      "clustered_completions": {"wake_count": 1, "task_count": 2},
+      "daemon_restarts": 5,
+      "synthetic_completions": 0
+    }
+  },
+  "g5": {
+    "fresh_install": "pass: private empty home start/status/stop and Pi startup",
+    "upgrade": "pass: dirty legacy generation is refused; clean cursor activates daemon authority",
+    "health_states": ["down", "disconnected", "unknown", "deferred", "delivered-unacked", "retrying", "spool-backlog"],
+    "preservation": ["task folder", "brief", "append-only handoff", "session link", "handoff ACK cursors"],
+    "semantic_owners": {"pi": "rozorod", "claude-2.1.240": "rozorod", "count_per_harness": 1},
+    "rollback": "pass: stop daemon; restore prior release; tasks/handoffs require no reverse migration"
+  },
+  "commands": [
+    "node --test --experimental-strip-types tests/pi-event-bus-adapter.test.ts",
+    "python3 -m unittest discover -s tests/python -q",
+    "tests/run.sh",
+    "pi -p --approve --no-extensions --extension .pi/extensions/rozoro-watchtower.ts"
+  ]
+}

@@ -8,7 +8,9 @@ for a in "$@"; do case "$a" in --json) JSON=1 ;; --peek) : ;; *) rzr_die "unknow
 FOLDER="$(rzr_task_dir "$ID")"; HF="$FOLDER/handoff.md"
 [ -f "$HF" ] || rzr_die "no task folder for '$ID' ($HF missing)"
 BUS_PROJECTION=""
-if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" != 1 ]; then
+BUS_PROJECTION=""
+# Explicit diagnostics for old releases only; never selected automatically.
+if [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
   BUS_PROJECTION="$(python3 "$RZR_BIN/rzr-event-bus-client.py" status --task "$ID")"
 fi
 RZR_ID="$ID" RZR_HF="$HF" RZR_ACK2="$FOLDER/.acked-blocks-v2" RZR_ACK="$FOLDER/.acked-blocks" \

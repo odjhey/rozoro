@@ -16,6 +16,9 @@ case "$verb" in
   help|-h|--help)
     echo "usage: ./bin/rozoro <verb> [args...]"
     echo "verbs:"
+    echo "  monitor start|status|stop   resident Pi+Claude event-bus authority"
+    echo "  reconcile [--driver ID]    consume and ACK a daemon generation"
+    echo "  watch ...                  diagnostics/legacy compatibility only"
     for f in "$BIN"/rzr-*.sh; do
       b="$(basename "$f" .sh)"; b="${b#rzr-}"
       [ "$b" = "lib" ] && continue

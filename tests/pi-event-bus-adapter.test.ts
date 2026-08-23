@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import test from "node:test";
-import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/extensions/rozoro-event-bus-client.ts";
+import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
 
 const waitFor = async (predicate: () => boolean, timeout = 2000) => {
 	const end = Date.now() + timeout;

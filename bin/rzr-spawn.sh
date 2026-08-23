@@ -112,7 +112,7 @@ HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
 SESSION_ID=""
 EVENT_BUS=false
-[ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "$HARNESS" = claude ] && EVENT_BUS=true
+[ "$HARNESS" = claude ] && EVENT_BUS=true
 [ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 case "$HARNESS" in
   pi|copilot)

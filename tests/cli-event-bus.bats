@@ -22,7 +22,7 @@ PY
   printf '%s\n' '{"driver_id":"driver-1","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-1/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/target.json"
 }
 
-@test "opt-in status preserves v2 fields and adds daemon availability source" {
+@test "daemon status preserves v2 fields and adds daemon availability source" {
   seed_task; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_success
@@ -32,7 +32,7 @@ PY
   [ "$(jq -r .acked_through <<<"$output")" = 0 ]
 }
 
-@test "opt-in reconcile renders snapshot then ACKs exactly its generation without handoff ACK" {
+@test "daemon reconcile renders snapshot then ACKs exactly its generation without handoff ACK" {
   seed_task; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
   assert_success
@@ -43,18 +43,6 @@ PY
   assert_success; [ "$(jq -r .acknowledged_generation <<<"$output")" = "$gen" ]; [ "$(jq '.reports|length' <<<"$output")" = 0 ]
 }
 
-@test "legacy pending ledger refuses opt-in and explicit fallback remains available" {
-  seed_task
-  printf '%s\n' '{"schema":1,"generation":2,"delivered":1,"tasks":{}}' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"
-  printf '1\n' > "$ROZORO_HOME/watchtowers/driver-1/ack"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json" "$ROZORO_HOME/watchtowers/driver-1/ack"
-  start_monitor
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
-  assert_failure; assert_output_contains 'Reconcile legacy state first'
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
-  assert_failure; assert_output_contains 'Reconcile legacy state first'
-  run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
-  assert_success; [ "$(jq -r .availability_source <<<"$output")" = legacy-v2 ]
-}
 
 @test "exact confirmed delivery reconciles despite invalidated and duplicate unconfirmed redeliveries" {
   seed_task
@@ -186,63 +174,6 @@ PY
   assert_failure
 }
 
-@test "authority-disable retries after lost response and tombstone prevents mixed-driver marker recreation" {
-  seed_task
-  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
-import os
-from rozoro_monitor.store import EventStore
-s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')); r=s.register_driver('driver-2','adapter-2','pi'); o=s.offer_notification('driver-2','adapter-2',r['epoch']); s.confirm_delivery('driver-2','adapter-2',r['epoch'],o['generation']); s.close()
-PY
-  mkdir -p "$ROZORO_HOME/watchtowers/driver-2"; chmod 700 "$ROZORO_HOME/watchtowers/driver-2"
-  printf '%s\n' '{"driver_id":"driver-2","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-2/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-2/target.json"
-  start_monitor
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json; assert_success
-  [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
-  assert_failure; assert_output_contains 'event-bus authoritative'
-  # Send driver.disable and intentionally lose the response before marker unlink.
-  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
-import os,socket,time,sqlite3
-from rozoro_monitor.protocol import encode
-s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.sock'))
-s.sendall(encode({'v':1,'type':'driver.disable','request_id':'lost-response','driver_id':'driver-1'}).encode()); s.close()
-for _ in range(100):
-    if sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')).execute("select count(*) from disabled_drivers where driver_id='driver-1'").fetchone()[0]: break
-    time.sleep(.02)
-else: raise SystemExit('disable commit did not land')
-PY
-  [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-  run python3 "$REPO_ROOT/bin/rzr-event-bus-client.py" authority-disable --driver driver-1
-  assert_failure; assert_output_contains 'requires ROZORO_EVENT_BUS=1'
-  # Retry the same disable idempotently, then unlink the legacy-block marker.
-  run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 ROZORO_EVENT_BUS_DISABLE=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
-  assert_success; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-  [ "$(python3 - <<'PY'
-import os,sqlite3
-c=sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
-print(c.execute("select count(*) from disabled_drivers where driver_id='driver-1'").fetchone()[0],c.execute("select count(*) from watchtower_registrations where driver_id='driver-1'").fetchone()[0],c.execute("select count(*) from watchtower_deliveries where driver_id='driver-1'").fetchone()[0])
-PY
-)" = '1 0 0' ]
-  run env PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
-import os
-from rozoro_monitor.store import EventStore
-s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
-try: s.register_driver('driver-1','adapter-race','pi')
-finally: s.close()
-PY
-  assert_failure
-  # Disabled d1 independently resumes legacy work; it must not block active d2.
-  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
-  assert_success
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
-  assert_success
-  [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-  [ -f "$ROZORO_HOME/watchtowers/driver-2/.event-bus-authority" ]
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-2 --json
-  assert_success; [ "$(jq '.reports|length' <<<"$output")" = 1 ]
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
-  assert_failure; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
-}
 
 @test "bridge rejects unsafe home and fake socket entries" {
   seed_task; chmod 755 "$ROZORO_HOME"
@@ -267,12 +198,4 @@ print(sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')).exec
 PY
 )"
   [ "$before" = "$after" ]
-}
-
-@test "daemon-down opt-in diagnoses failure and does not silently fallback" {
-  seed_task
-  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
-  assert_failure; assert_output_contains 'event-bus daemon unavailable'
-  run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
-  assert_success
 }

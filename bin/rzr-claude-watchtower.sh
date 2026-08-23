@@ -46,7 +46,7 @@ READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
   ready=0
   for _ in $(seq 1 40); do [ -s "$READY" ] && ready=1 && break; kill -0 "$poller" 2>/dev/null || break; sleep .05; done
   [ "$ready" -eq 1 ] || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
-  ROZORO_EVENT_BUS=1 python3 "$RZR_BIN/rzr-event-bus-client.py" authority-activate --driver "$DRIVER" >/dev/null \
+  python3 "$RZR_BIN/rzr-event-bus-client.py" authority-activate --driver "$DRIVER" >/dev/null \
     || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
   [ -f "$DIR/.event-bus-authority" ] || { kill "$poller" 2>/dev/null || true; exit 1; }
   wait "$poller"

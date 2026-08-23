@@ -26,11 +26,7 @@ done
 
 DIR="$(rzr_resolve_driver_dir "$DRIVER")"
 
-if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_DISABLE:-0}" = 1 ]; then
-  python3 "$RZR_BIN/rzr-event-bus-client.py" authority-disable --driver "$(basename "$DIR")" >/dev/null
-fi
-
-if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" != 1 ]; then
+if [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
   args=(reconcile --driver "$(basename "$DIR")")
   [ "$JSON" -eq 1 ] && args+=(--json)
   exec python3 "$RZR_BIN/rzr-event-bus-client.py" "${args[@]}"

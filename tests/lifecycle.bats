@@ -33,7 +33,7 @@ load test_helper/common
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
-@test "Claude event-bus opt-in generates isolated hooks and exact launch identity" {
+@test "Claude event-bus production generates isolated hooks and exact launch identity" {
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --prompt 'do exactly this'
   assert_success
   session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
@@ -59,14 +59,6 @@ load test_helper/common
   [ "$(cat "$SENTINEL")" = untouched ]
 }
 
-@test "Claude default launch has no event hooks or identity behavior change" {
-  run rzr-spawn.sh task --cwd "$TEST_ROOT"
-  assert_success
-  [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = false ]
-  [ ! -e "$ROZORO_HOME/tasks/task/claude-event-settings.json" ]
-  ! grep -F -- '--settings' "$FAKE_HERDR_LOG"
-  ! grep -F -- '--session-id' "$FAKE_HERDR_LOG"
-}
 
 @test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
   mkdir -p "$ROZORO_HOME/crew"
