@@ -57,9 +57,11 @@ class BlockingActuator:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.calls = 0
+        self.notifications = []
 
     def deliver(self, notification):
         self.calls += 1
+        self.notifications.append(notification)
         self.entered.set()
         if not self.release.wait(timeout=5):
             raise TimeoutError("test release was not signalled")
@@ -206,7 +208,16 @@ class CoalescerTests(unittest.TestCase):
             self.assertEqual(actuator.calls, 1)
             self.assertEqual(coalescer.deadline, 10.350)
 
-            self.clock.advance(.349)
+            # N+2 arrives 100 ms into N+1's collection while reconnect N is
+            # still blocked. It batches into that first window and must not
+            # move eligibility to t=10.450.
+            self.clock.advance(.100)
+            store.accept_event(event(3))
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(coalescer.deadline, 10.350)
+            self.assertEqual(actuator.calls, 1)
+
+            self.clock.advance(.249)
             actuator.release.set(); worker.join(timeout=5)
             self.assertFalse(worker.is_alive())
             self.assertEqual(redelivery[0].status, DeliveryStatus.DELIVERED)
@@ -214,11 +225,12 @@ class CoalescerTests(unittest.TestCase):
             self.assertIsNone(coalescer.poll())
             self.assertEqual(actuator.calls, 1)
 
-            # N+1 is eligible at its original 350 ms boundary, not 350 ms
-            # after N's cleanup/release.
+            # N+1 and N+2 are eligible together at the original 350 ms
+            # boundary, not 350 ms after either N cleanup or N+2 arrival.
             self.clock.advance(.001)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
             self.assertEqual(actuator.calls, 2)
+            self.assertEqual([item.generation for item in actuator.notifications], [1, 3])
 
     def test_invalid_result_and_exception_release_guard_for_exact_retry(self):
         with EventStore(self.db) as store:

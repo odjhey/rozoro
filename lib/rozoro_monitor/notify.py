@@ -105,12 +105,14 @@ class Coalescer:
                 self._collection = _Collection(generation, now + self.collection_window)
             elif generation > self._collection.generation:
                 if (self._in_flight_generation is not None
+                        and self._collection.generation <= self._in_flight_generation
                         and generation > self._in_flight_generation):
-                    # N+1 exposed by a concurrent ACK gets its own first-seen
-                    # boundary while N remains in flight.
+                    # The first >N generation exposed by a concurrent ACK gets
+                    # one first-seen boundary while N remains in flight.
                     self._collection = _Collection(generation, now + self.collection_window)
                 else:
-                    # Ordinary arrivals batch into the original window.
+                    # Ordinary arrivals, including N+2 after that transition,
+                    # batch into the already-open original window.
                     self._collection.generation = generation
             deadline = self._collection.deadline
 
