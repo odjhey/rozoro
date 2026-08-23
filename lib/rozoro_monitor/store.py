@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from .handoff import parse_task_report
-from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
+from .reducer import (
+    LifecycleState, PendingEvent, ReportState, observe_gone, reduce_event,
+    set_adapter_connected,
+)
 
 SCHEMA_VERSION = 6
 
@@ -42,6 +45,9 @@ class ActionableChange:
     task_id: str
     reason: str
     priority: str = "normal"
+    # Infrastructure edges can be actionable while the frozen report tuple
+    # must retain its protocol-valid reason (for example valid/done/none).
+    preserve_projection_reason: bool = False
 
 
 ReducerHook = Callable[["StoreTransaction", Mapping[str, Any], int], Any]
@@ -282,11 +288,17 @@ class StoreTransaction:
             "INSERT INTO pending_generations(generation,priority) VALUES(?,?)",
             (generation, change.priority),
         )
-        updated = self._connection.execute(
-            """UPDATE task_projections SET projection_generation=?, actionable_reason=?
-               WHERE task_id=?""",
-            (generation, change.reason, change.task_id),
-        )
+        if change.preserve_projection_reason:
+            updated = self._connection.execute(
+                "UPDATE task_projections SET projection_generation=? WHERE task_id=?",
+                (generation, change.task_id),
+            )
+        else:
+            updated = self._connection.execute(
+                """UPDATE task_projections SET projection_generation=?, actionable_reason=?
+                   WHERE task_id=?""",
+                (generation, change.reason, change.task_id),
+            )
         if updated.rowcount != 1:
             raise ValueError(f"actionable task {change.task_id!r} has no projection")
         self._connection.execute(
@@ -357,6 +369,8 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
 def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
     """Map projections exactly onto protocol v1's frozen report tuple matrix."""
     report_state = report.get("state")
+    # The frozen report tuple gives missing/malformed precedence: `gone` is
+    # not a protocol-valid actionable reason for either report state.
     if report_state == "missing":
         return "missing-report"
     if report_state == "malformed":
@@ -770,6 +784,66 @@ class EventStore:
                 "SELECT * FROM task_projections WHERE task_id=?", (task_id,)
             ).fetchone()
             return None if row is None else dict(row)
+
+    def reconcile_herdr_liveness(
+        self, task_id: str, *, pane_exists: bool | None,
+        adapter_connected: bool | None = None,
+    ) -> None:
+        """Atomically apply certified host/adapter facts and dedupe action edges.
+
+        ``None`` means no observation and preserves exact native state. Herdr
+        live/idle never proves adapter disconnect or background clear.
+        """
+        with self._lock, self._immediate() as connection:
+            rows = connection.execute(
+                "SELECT session_id,reducer_state_json,latest_durable_seq FROM sessions WHERE task_id=?",
+                (task_id,),
+            ).fetchall()
+            for row in rows:
+                state = _state_from_json(row["reducer_state_json"])
+                was_adapter_connected = state.adapter_connected
+                before = connection.execute(
+                    "SELECT actionable_reason,projection_json FROM task_projections WHERE task_id=?", (task_id,)
+                ).fetchone()
+                if pane_exists is not None:
+                    state = observe_gone(state, not pane_exists)
+                if adapter_connected is not None:
+                    state = set_adapter_connected(state, adapter_connected)
+                connection.execute(
+                    """UPDATE sessions SET foreground=?,background=?,background_count=?,availability=?,
+                       reducer_state_json=?,last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                       WHERE session_id=?""",
+                    (state.foreground, state.background, state.active_count, state.availability,
+                     _state_to_json(state), row["session_id"]),
+                )
+                projection = connection.execute(
+                    "SELECT projection_json FROM task_projections WHERE task_id=?", (task_id,)
+                ).fetchone()
+                if projection is not None:
+                    detail = json.loads(projection[0])
+                    detail.update({"foreground": state.foreground, "background": state.background,
+                                   "background_count": state.active_count,
+                                   "availability": state.availability})
+                    if pane_exists is not None:
+                        detail["herdr_pane_exists"] = pane_exists
+                    report = detail.get("report") or {"state": "missing"}
+                    reason = _actionable_reason(state, report)
+                    connection.execute(
+                        "UPDATE task_projections SET availability=?,actionable_reason=?,projection_json=? WHERE task_id=?",
+                        (state.availability, reason, json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id),
+                    )
+                    # Host/silence transitions are durable actionable edges,
+                    # deduped by the prior projection reason and availability.
+                    old_detail = {} if before is None else json.loads(before["projection_json"])
+                    projection_changed = (before is None or before["actionable_reason"] != reason
+                                          or old_detail.get("availability") != state.availability)
+                    disconnected_edge = adapter_connected is False and was_adapter_connected
+                    if (reason != "none" and projection_changed) or disconnected_edge:
+                        edge_reason = "unknown" if disconnected_edge and reason == "none" else reason
+                        StoreTransaction(connection).bump_actionable(ActionableChange(
+                            task_id, edge_reason,
+                            "urgent" if edge_reason in {"gone", "blocked", "failed", "needs-action"} else "normal",
+                            preserve_projection_reason=(edge_reason != reason)))
 
     def driver_authority(self, driver_id: str) -> str:
         """Return durable authority without changing registration epochs or cursors."""

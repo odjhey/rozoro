@@ -17,6 +17,10 @@ from typing import Any
 from . import protocol
 from .client import _open_home
 from .store import EventStore
+from .herdr import (
+    EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription,
+    read_pane_level,
+)
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
@@ -51,6 +55,7 @@ class MonitorServer:
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
         self._spool_task: asyncio.Task[None] | None = None
+        self._herdr: MembershipMonitor | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._capacity = asyncio.Event()
@@ -204,6 +209,52 @@ class MonitorServer:
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
+            explicit_state = os.environ.get("ROZORO_STATE_DIR")
+            state_dir = Path(explicit_state or str(self.home / "state"))
+            try:
+                state_dir.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            state_info = state_dir.lstat()
+            if (not stat.S_ISDIR(state_info.st_mode) or state_info.st_uid != os.geteuid()
+                    or state_dir.is_symlink()):
+                raise UnsafeStateError("state must be an owner-controlled directory")
+            if stat.S_IMODE(state_info.st_mode) != 0o700:
+                if explicit_state:
+                    raise UnsafeStateError("external state directory must already be owner-private")
+                os.chmod(state_dir, 0o700, follow_symlinks=False)
+            herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
+            if not herdr_socket:
+                try:
+                    command = ["herdr", "session", "list", "--json"]
+                    proc = await asyncio.create_subprocess_exec(
+                        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
+                    sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
+                    wanted = os.environ.get("RZR_SESSION")
+                    selected = (next((item for item in sessions if item.get("name") == wanted), None)
+                                if wanted else next((item for item in sessions if item.get("default") is True), None))
+                    herdr_socket = None if selected is None else selected.get("socket_path")
+                except (OSError, ValueError, TimeoutError):
+                    herdr_socket = None
+            if herdr_socket:
+                async def level_reader(pane_id: str) -> PaneLevel:
+                    return await read_pane_level(
+                        herdr_socket, pane_id,
+                        timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
+
+                async def reconcile(task_id: str, level: PaneLevel) -> None:
+                    assert self._store is not None
+                    self._store.reconcile_herdr_liveness(task_id, pane_exists=level.exists)
+
+                self._herdr = MembershipMonitor(
+                    state_dir, lambda panes: (UnixHerdrSubscription(herdr_socket, panes)
+                                              if panes else EmptySubscription()),
+                    level_reader, reconcile,
+                    scan_interval=float(os.environ.get("ROZORO_HERDR_SCAN_INTERVAL", "30")),
+                    hint_interval=float(os.environ.get("ROZORO_HERDR_HINT_INTERVAL", ".2")),
+                    debounce=float(os.environ.get("ROZORO_HERDR_DEBOUNCE", ".15")))
+                await self._herdr.start()
         except BaseException:
             await self.close()
             raise
@@ -413,7 +464,12 @@ class MonitorServer:
                                  "clients": self._clients, **self._store.health_snapshot(),
                                  "spool_backlog": self._spool_backlog,
                                  "spool_errors": self._spool_errors, "pid": os.getpid(),
-                                 "last_spool_error": self._last_spool_error}
+                                 "last_spool_error": self._last_spool_error,
+                                 **(self._herdr.health() if self._herdr else {
+                                     "herdr_connected": False,
+                                     "herdr_last_error": "Herdr socket unavailable",
+                                     "herdr_inventory_errors": 0,
+                                     "herdr_task_count": 0})}
                     elif message["type"] == "task.status":
                         assert self._store is not None
                         projection = self._store.task_projection(message["task_id"])
@@ -520,6 +576,9 @@ class MonitorServer:
                 pass
 
     async def close(self) -> None:
+        if self._herdr is not None:
+            await self._herdr.close()
+            self._herdr = None
         if self._spool_task is not None:
             self._spool_task.cancel()
             await asyncio.gather(self._spool_task, return_exceptions=True)
