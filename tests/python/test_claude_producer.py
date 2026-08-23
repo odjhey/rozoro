@@ -51,28 +51,149 @@ class ClaudeProducerTests(unittest.TestCase):
         self.assertEqual(event["driver_id"], "herdr-pane-7")
         self.assertNotIn("task_id", event)
 
-    def test_watchtower_actuator_fails_closed_until_empty_stop_and_confirms_success(self):
-        base = {"session_id": "s", "driver_id": "d"}
-        calls = []
-        def request(message, _timeout):
-            calls.append(message)
-            if message["type"] == "notification.pending":
-                return {"type": "ok"}, {"generation": 9}
-            return {"type": "ok"}, None
-        completed = subprocess.CompletedProcess([], 0)
-        with mock.patch.dict(os.environ, {"ROZORO_HERDR_PANE_ID": "pane-7"}, clear=True), \
-             mock.patch.object(HOOK, "_request", side_effect=request), \
-             mock.patch.object(HOOK.subprocess, "run", return_value=completed) as run:
-            HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
-                                           "background_tasks": [{"id": "job"}]}, .5)
+    def test_watchtower_actuator_registers_polls_and_confirms_over_one_connection(self):
+        # A fake daemon reproducing the real per-connection binding: the pending
+        # poll and delivery are rejected unless watchtower.register arrived
+        # earlier on the SAME connection (server.py binds registered_driver to
+        # the socket). If the hook opened a fresh socket per request, the poll
+        # would be refused and nothing would ever be delivered.
+        transcript = []
+        delivered = []
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            sock = home / "monitor.sock"
+            ready = threading.Event()
+            holder = {}
+
+            def handle(connection, index):
+                registered = None
+                with connection:
+                    stream = connection.makefile("rwb", buffering=0)
+                    for line in stream:
+                        try:
+                            message = json.loads(line)
+                        except ValueError:
+                            return
+                        transcript.append((index, message))
+                        request_id = message.get("request_id")
+                        kind = message.get("type")
+                        if kind == "watchtower.register":
+                            registered = message["driver_id"]
+                            stream.write(json.dumps(
+                                {"v": 1, "type": "ok", "request_id": request_id}).encode() + b"\n")
+                        elif kind in {"notification.pending", "notification.delivered"}:
+                            if registered != message.get("driver_id"):
+                                stream.write(json.dumps({"v": 1, "type": "request.error",
+                                    "request_id": request_id, "code": "invalid-field"}).encode() + b"\n")
+                                continue
+                            stream.write(json.dumps(
+                                {"v": 1, "type": "ok", "request_id": request_id}).encode() + b"\n")
+                            if kind == "notification.pending":
+                                stream.write(json.dumps({"v": 1, "type": "notification",
+                                    "generation": 9, "priority": "normal", "task_count": 0}).encode() + b"\n")
+                            else:
+                                delivered.append(message["generation"])
+
+            def serve():
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                holder["server"] = server
+                server.bind(str(sock)); server.listen(4); ready.set()
+                index = 0
+                while True:
+                    try:
+                        connection, _ = server.accept()
+                    except OSError:
+                        return
+                    index += 1
+                    threading.Thread(target=handle, args=(connection, index), daemon=True).start()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start(); ready.wait(1)
+            completed = subprocess.CompletedProcess([], 0)
+            base = {"session_id": "watch-session", "driver_id": "herdr-pane-7"}
+            try:
+                with mock.patch.dict(os.environ, {"ROZORO_HOME": str(home),
+                                                  "ROZORO_HERDR_PANE_ID": "pane-7"}, clear=True), \
+                     mock.patch.object(HOOK.subprocess, "run", return_value=completed) as run:
+                    HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
+                                                   "background_tasks": [{"id": "job"}]}, .5)
+                    self.assertFalse(run.called)
+                    self.assertEqual(delivered, [])
+                    HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
+                                                   "background_tasks": []}, .5)
+                    run.assert_called_once_with(
+                        ["herdr", "agent", "prompt", "pane-7",
+                         "Rozoro notification pending; run ./bin/rozoro reconcile."],
+                        timeout=mock.ANY, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, check=False)
+            finally:
+                server = holder.get("server")
+                if server is not None:
+                    server.close()
+        polls = [index for index, message in transcript if message["type"] == "notification.pending"]
+        confirms = [(index, message) for index, message in transcript
+                    if message["type"] == "notification.delivered"]
+        registers = [index for index, message in transcript if message["type"] == "watchtower.register"]
+        self.assertEqual(delivered, [9])
+        self.assertEqual(len(polls), 1)
+        self.assertEqual(len(confirms), 1)
+        self.assertEqual(confirms[0][0], polls[0])
+        self.assertIn(polls[0], registers)
+        self.assertEqual(confirms[0][1]["generation"], 9)
+
+    def test_quiescent_poll_without_notification_does_not_block_for_the_budget(self):
+        # An empty Stop with nothing pending gets only the ok reply, no
+        # notification frame. The actuator must bound the wait rather than
+        # block for the whole hook budget on every clean Stop.
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            sock = home / "monitor.sock"
+            ready = threading.Event()
+            holder = {}
+
+            def handle(connection):
+                registered = None
+                with connection:
+                    stream = connection.makefile("rwb", buffering=0)
+                    for line in stream:
+                        message = json.loads(line)
+                        request_id = message.get("request_id")
+                        if message.get("type") == "watchtower.register":
+                            registered = message["driver_id"]
+                        stream.write(json.dumps(
+                            {"v": 1, "type": "ok", "request_id": request_id}).encode() + b"\n")
+                        assert registered is not None
+
+            def serve():
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                holder["server"] = server
+                server.bind(str(sock)); server.listen(4); ready.set()
+                while True:
+                    try:
+                        connection, _ = server.accept()
+                    except OSError:
+                        return
+                    threading.Thread(target=handle, args=(connection,), daemon=True).start()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start(); ready.wait(1)
+            base = {"session_id": "watch-session", "driver_id": "herdr-pane-7"}
+            try:
+                with mock.patch.dict(os.environ, {"ROZORO_HOME": str(home),
+                                                  "ROZORO_HERDR_PANE_ID": "pane-7"}, clear=True), \
+                     mock.patch.object(HOOK.subprocess, "run") as run:
+                    started = time.monotonic()
+                    HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
+                                                   "background_tasks": []}, 2.0)
+                    elapsed = time.monotonic() - started
+            finally:
+                server = holder.get("server")
+                if server is not None:
+                    server.close()
             self.assertFalse(run.called)
-            HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
-                                           "background_tasks": []}, .5)
-        run.assert_called_once_with(["herdr", "agent", "prompt", "pane-7",
-                                     "Rozoro notification pending; run ./bin/rozoro reconcile."],
-                                    timeout=.5, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, check=False)
-        self.assertEqual(calls[-1], {"type": "notification.delivered", "driver_id": "d", "generation": 9})
+            self.assertLess(elapsed, 1.0)
 
     def test_fixture_maps_only_frozen_lifecycle_fields(self):
         expected = ["session.register", "turn.start", "background.start",

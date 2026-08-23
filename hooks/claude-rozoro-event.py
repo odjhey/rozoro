@@ -94,43 +94,74 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
-def _request(message: dict[str, Any], timeout: float) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """One bounded daemon request; an optional notification follows its reply."""
-    path = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser() / "monitor.sock"
-    message = dict(message, v=1, request_id=uuid.uuid4().hex)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(str(path))
-        client.sendall((json.dumps(message, separators=(",", ":")) + "\n").encode())
-        stream = client.makefile("rb")
-        reply = json.loads(stream.readline())
-        extra = json.loads(stream.readline()) if message["type"] == "notification.pending" else None
-        return reply, extra
+NOTIFICATION_READ_BUDGET = 0.1
 
 
 def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: float) -> None:
-    """Register durably and claim/deliver only at a certified clear Stop."""
+    """Register durably and claim/deliver only at a certified clear Stop.
+
+    The daemon binds watchtower registration to the connection that carried
+    watchtower.register, so registration, the pending poll, and the delivery
+    confirmation must travel one persistent connection.
+    """
     driver = base["driver_id"]
-    _request({"type": "watchtower.register", "session_id": base["session_id"],
-              "harness": "claude", "driver_id": driver}, timeout)
-    snapshot = payload.get("background_tasks")
-    if payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active") is not False:
-        return
-    if not isinstance(snapshot, list) or snapshot:  # missing/malformed/nonempty fails closed
-        return
-    reply, notification = _request({"type": "notification.pending", "driver_id": driver}, timeout)
-    if reply.get("type") != "ok" or not notification:
-        return
-    pane = os.environ.get("ROZORO_HERDR_PANE_ID", "")
-    if not pane:
-        return
-    fixed = "Rozoro notification pending; run ./bin/rozoro reconcile."
-    completed = subprocess.run(["herdr", "agent", "prompt", pane, fixed], timeout=timeout,
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, check=False)
-    if completed.returncode == 0:
-        _request({"type": "notification.delivered", "driver_id": driver,
-                  "generation": notification["generation"]}, timeout)
+    path = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser() / "monitor.sock"
+    deadline = time.monotonic() + timeout
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(str(path))
+        stream = client.makefile("rb")
+
+        def send(message: dict[str, Any]) -> None:
+            frame = dict(message, v=1, request_id=uuid.uuid4().hex)
+            client.sendall((json.dumps(frame, separators=(",", ":")) + "\n").encode())
+
+        def receive(bound: float) -> dict[str, Any] | None:
+            remaining = min(bound, deadline - time.monotonic())
+            if remaining <= 0:
+                return None
+            client.settimeout(remaining)
+            line = stream.readline()
+            return json.loads(line) if line else None
+
+        send({"type": "watchtower.register", "session_id": base["session_id"],
+              "harness": "claude", "driver_id": driver})
+        registered = receive(timeout)
+        if not isinstance(registered, dict) or registered.get("type") != "ok":
+            return
+        snapshot = payload.get("background_tasks")
+        if payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active") is not False:
+            return
+        if not isinstance(snapshot, list) or snapshot:  # missing/malformed/nonempty fails closed
+            return
+        send({"type": "notification.pending", "driver_id": driver})
+        reply = receive(timeout)
+        if not isinstance(reply, dict) or reply.get("type") != "ok":
+            return
+        try:
+            notification = receive(NOTIFICATION_READ_BUDGET)
+        except TimeoutError:
+            return
+        if not isinstance(notification, dict) or notification.get("type") != "notification":
+            return
+        generation = notification.get("generation")
+        if not isinstance(generation, int):
+            return
+        pane = os.environ.get("ROZORO_HERDR_PANE_ID", "")
+        remaining = deadline - time.monotonic()
+        if not pane or remaining <= 0:
+            return
+        fixed = "Rozoro notification pending; run ./bin/rozoro reconcile."
+        completed = subprocess.run(["herdr", "agent", "prompt", pane, fixed], timeout=remaining,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, check=False)
+        if completed.returncode != 0:
+            return
+        send({"type": "notification.delivered", "driver_id": driver, "generation": generation})
+        try:
+            receive(timeout)
+        except OSError:
+            pass
 
 
 def main() -> int:
