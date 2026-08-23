@@ -487,8 +487,14 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - `ROZORO_EVENT_BUS_DISABLE` — only with both flags above, set to `1` on an
   explicit fallback `reconcile` to disable that driver's event-bus authority.
   Disable is refused unless daemon generation, delivered, and ACK cursors are
-  equal; after success legacy writers may resume. For the schema migration
-  reset required by pre-v6 generation snapshots, see
+  equal, then atomically tombstones the driver and unregisters its adapter
+  before the local marker is removed; retrying after a lost response or a
+  crash between the tombstone and marker removal is safe and just finishes
+  removing the marker. Once tombstoned, `status` and `reconcile` query
+  durable daemon authority before touching the marker and never reactivate a
+  disabled driver — `reconcile` fails instead of falling back silently, and
+  legacy writers may resume. For the schema migration reset required by
+  pre-v6 generation snapshots, see
   [`docs/event-bus-rollback.md`](docs/event-bus-rollback.md).
 
 ## Try it
