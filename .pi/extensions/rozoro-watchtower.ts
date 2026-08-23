@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isTaskKey, observeProjection, type WatchProjection } from "./rozoro-watchtower-observer.ts";
+import { RozoroEventBusClient, WAKE_CONTENT } from "./rozoro-event-bus-client.ts";
 
 const WATCHTOWER_MARKER = "rozoro **watchtower**";
 const STATUS_KEY = "rozoro-monitor";
@@ -18,6 +19,7 @@ export default function (pi: ExtensionAPI) {
 	const stateDir = join(rozoroHome, "state");
 
 	let currentCtx: ExtensionContext | undefined;
+	let busClient: RozoroEventBusClient | undefined;
 	let child: ChildProcess | undefined;
 	let childLines: Interface | undefined;
 	let stateWatcher: FSWatcher | undefined;
@@ -160,11 +162,31 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
 		const requested = process.env.ROZORO_WATCHTOWER === "1" || ctx.getSystemPrompt().includes(WATCHTOWER_MARKER);
-		if (requested) await startMonitor();
+		if (!requested) return;
+		if (process.env.ROZORO_EVENT_BUS === "1" && process.env.ROZORO_EVENT_BUS_FALLBACK !== "1") {
+			const sessionId = process.env.PI_SESSION_ID || ctx.sessionManager.getSessionId();
+			const driverId = process.env.ROZORO_DRIVER_ID || `pi:${sessionId}`;
+			busClient = new RozoroEventBusClient({
+				socketPath: join(rozoroHome, "monitor.sock"), sessionId, driverId,
+				onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
+				onNotification: () => pi.sendMessage(
+					{ customType: "rozoro-event", content: WAKE_CONTENT, display: true },
+					{ triggerTurn: true, deliverAs: "followUp" },
+				),
+			});
+			busClient.start();
+			return;
+		}
+		await startMonitor();
 	});
+
+	pi.on("agent_start", () => busClient?.publish("turn.start"));
+	pi.on("agent_settled", () => busClient?.publish("turn.stop"));
 
 	pi.on("session_shutdown", async () => {
 		shuttingDown = true;
+		busClient?.close();
+		busClient = undefined;
 		stopMonitor();
 		process.removeListener("exit", cleanupOnProcessExit);
 		currentCtx = undefined;
@@ -174,6 +196,10 @@ export default function (pi: ExtensionAPI) {
 		description: "Control the non-blocking Rozoro crew event monitor (on|off|status)",
 		handler: async (args, ctx) => {
 			currentCtx = ctx;
+			if (busClient) {
+				ctx.ui.notify("Rozoro event-bus adapter is authoritative; legacy monitor controls are disabled", "info");
+				return;
+			}
 			switch (args.trim()) {
 				case "":
 				case "status":
