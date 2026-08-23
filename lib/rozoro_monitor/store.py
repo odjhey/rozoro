@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from .handoff import parse_task_report
-from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
+from .reducer import (
+    LifecycleState, PendingEvent, ReportState, observe_gone, reduce_event,
+    set_adapter_connected,
+)
 
 SCHEMA_VERSION = 6
 
@@ -770,6 +773,45 @@ class EventStore:
                 "SELECT * FROM task_projections WHERE task_id=?", (task_id,)
             ).fetchone()
             return None if row is None else dict(row)
+
+    def reconcile_herdr_liveness(self, task_id: str, *, pane_exists: bool) -> None:
+        """Apply defensive host facts without treating Herdr idle as semantic truth.
+
+        A missing pane is ``gone``. A live pane cannot certify a disconnected
+        adapter's foreground or background axes, so a previously gone session
+        returns as ``unknown``. This method never generates completion work.
+        """
+        with self._lock, self._immediate() as connection:
+            rows = connection.execute(
+                "SELECT session_id,reducer_state_json,latest_durable_seq FROM sessions WHERE task_id=?",
+                (task_id,),
+            ).fetchall()
+            for row in rows:
+                state = _state_from_json(row["reducer_state_json"])
+                if pane_exists:
+                    state = set_adapter_connected(observe_gone(state, False), False)
+                else:
+                    state = observe_gone(state, True)
+                connection.execute(
+                    """UPDATE sessions SET foreground=?,background=?,background_count=?,availability=?,
+                       reducer_state_json=?,last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                       WHERE session_id=?""",
+                    (state.foreground, state.background, state.active_count, state.availability,
+                     _state_to_json(state), row["session_id"]),
+                )
+                projection = connection.execute(
+                    "SELECT projection_json FROM task_projections WHERE task_id=?", (task_id,)
+                ).fetchone()
+                if projection is not None:
+                    detail = json.loads(projection[0])
+                    detail.update({"foreground": state.foreground, "background": state.background,
+                                   "background_count": state.active_count,
+                                   "availability": state.availability,
+                                   "herdr_pane_exists": pane_exists})
+                    connection.execute(
+                        "UPDATE task_projections SET availability=?,projection_json=? WHERE task_id=?",
+                        (state.availability, json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id),
+                    )
 
     def driver_authority(self, driver_id: str) -> str:
         """Return durable authority without changing registration epochs or cursors."""

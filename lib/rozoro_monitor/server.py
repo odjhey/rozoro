@@ -17,6 +17,7 @@ from typing import Any
 from . import protocol
 from .client import _open_home
 from .store import EventStore
+from .herdr import EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
@@ -51,6 +52,7 @@ class MonitorServer:
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
         self._spool_task: asyncio.Task[None] | None = None
+        self._herdr: MembershipMonitor | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._capacity = asyncio.Event()
@@ -204,6 +206,35 @@ class MonitorServer:
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
+            herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
+            state_dir = os.environ.get("ROZORO_STATE_DIR")
+            if herdr_socket and state_dir:
+                async def level_reader(pane_id: str) -> PaneLevel:
+                    proc = await asyncio.create_subprocess_exec(
+                        "herdr", "agent", "get", pane_id,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await proc.communicate()
+                    if proc.returncode == 0:
+                        data = json.loads(stdout)
+                        agent = (data.get("result") or {}).get("agent") or {}
+                        return PaneLevel(pane_id, agent.get("agent_status") or "unknown", True,
+                                         agent.get("state_change_seq"))
+                    pane = await asyncio.create_subprocess_exec(
+                        "herdr", "pane", "get", pane_id,
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    return PaneLevel(pane_id, "unknown", await pane.wait() == 0)
+
+                async def reconcile(task_id: str, level: PaneLevel) -> None:
+                    assert self._store is not None
+                    self._store.reconcile_herdr_liveness(task_id, pane_exists=level.exists)
+
+                self._herdr = MembershipMonitor(
+                    state_dir, lambda panes: (UnixHerdrSubscription(herdr_socket, panes)
+                                              if panes else EmptySubscription()),
+                    level_reader, reconcile,
+                    scan_interval=float(os.environ.get("ROZORO_HERDR_SCAN_INTERVAL", "30")),
+                    debounce=float(os.environ.get("ROZORO_HERDR_DEBOUNCE", ".15")))
+                await self._herdr.start()
         except BaseException:
             await self.close()
             raise
@@ -520,6 +551,9 @@ class MonitorServer:
                 pass
 
     async def close(self) -> None:
+        if self._herdr is not None:
+            await self._herdr.close()
+            self._herdr = None
         if self._spool_task is not None:
             self._spool_task.cancel()
             await asyncio.gather(self._spool_task, return_exceptions=True)
