@@ -487,10 +487,9 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - `ROZORO_EVENT_BUS_DISABLE` — only with both flags above, set to `1` on an
   explicit fallback `reconcile` to disable that driver's event-bus authority.
   Disable is refused unless daemon generation, delivered, and ACK cursors are
-  equal; after success legacy writers may resume. Schema-5 databases containing
-  old generation snapshots must be reset with `rozoro monitor reset --force`
-  (task folders are preserved), because omitted immutable report fields cannot
-  be losslessly backfilled.
+  equal; after success legacy writers may resume. For the schema migration
+  reset required by pre-v6 generation snapshots, see
+  [`docs/event-bus-rollback.md`](docs/event-bus-rollback.md).
 
 ## Try it
 
