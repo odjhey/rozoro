@@ -129,6 +129,19 @@ PY
   assert_success; [ "$(jq -r '.reports[0].availability' <<<"$output")" = gone ]; [ "$(jq '.vanished|length' <<<"$output")" = 0 ]
 }
 
+@test "snapshotted absent folder is emitted only as vanished" {
+  seed_task
+  python3 - <<'PY'
+import json,os,sqlite3
+p=os.path.join(os.environ['ROZORO_HOME'],'monitor.db'); db=sqlite3.connect(p)
+row=db.execute('select generation,task_id,projection_json from generation_task_snapshots').fetchone(); value=json.loads(row[2]); value['folder_present']=False
+db.execute('update generation_task_snapshots set projection_json=? where generation=? and task_id=?',(json.dumps(value),row[0],row[1])); db.commit(); db.close()
+PY
+  start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success; [ "$(jq '.reports|length' <<<"$output")" = 0 ]; [ "$(jq -r '.vanished[0]' <<<"$output")" = task-1 ]
+}
+
 @test "legacy boundary fails closed on malformed ledger evidence" {
   seed_task; printf '{bad' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json"; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
@@ -150,14 +163,51 @@ PY
   assert_failure; assert_output_contains 'oversized legacy ledger'
 }
 
-@test "persistent event-bus authority prevents dual legacy ownership until clean explicit disable" {
+@test "strict legacy JSON rejects duplicate keys schema booleans and ambiguous members" {
+  seed_task; start_monitor
+  for payload in \
+    '{"schema":1,"generation":0,"generation":1,"delivered":0,"tasks":{}}' \
+    '{"schema":true,"generation":0,"delivered":0,"tasks":{}}' \
+    '{"schema":1,"generation":0,"delivered":0,"tasks":{},"mystery":1}'; do
+    printf '%s\n' "$payload" > "$ROZORO_HOME/watchtowers/driver-1/pending.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json"
+    run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
+    assert_failure; assert_output_contains 'malformed legacy pending ledger'
+  done
+}
+
+@test "broken authority marker fails closed in legacy writer and wake gates" {
+  seed_task
+  ln -s missing "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority"
+  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
+  assert_failure; assert_output_contains 'event-bus authoritative'
+  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_should_deliver '$ROZORO_HOME/watchtowers/driver-1'"
+  assert_failure
+}
+
+@test "authority-disable requires flags and atomically tombstones daemon adapter before legacy resumes" {
   seed_task; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json; assert_success
   [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
   assert_failure; assert_output_contains 'event-bus authoritative'
+  run python3 "$REPO_ROOT/bin/rzr-event-bus-client.py" authority-disable --driver driver-1
+  assert_failure; assert_output_contains 'requires ROZORO_EVENT_BUS=1'
   run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 ROZORO_EVENT_BUS_DISABLE=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
   assert_success; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
+  [ "$(python3 - <<'PY'
+import os,sqlite3
+c=sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
+print(c.execute('select count(*) from disabled_drivers').fetchone()[0],c.execute('select count(*) from watchtower_registrations').fetchone()[0],c.execute('select count(*) from watchtower_deliveries').fetchone()[0])
+PY
+)" = '1 0 0' ]
+  run env PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
+import os
+from rozoro_monitor.store import EventStore
+s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
+try: s.register_driver('driver-1','adapter-race','pi')
+finally: s.close()
+PY
+  assert_failure
   run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
   assert_success
 }

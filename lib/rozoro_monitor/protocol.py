@@ -151,6 +151,7 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
                             "report_state": _REPORT_STATE, "verdict": _nullable(_VERDICT),
                             "actionable_reason": _ACTIONABLE_REASON}),
     "driver.snapshot": ({"request_id": _ID, "driver_id": _ID}, {}),
+    "driver.disable": ({"request_id": _ID, "driver_id": _ID}, {}),
     "driver.snapshot.result": ({"request_id": _ID, "driver_id": _ID,
                                 "generation": _NONNEGATIVE, "delivered_generation": _NONNEGATIVE,
                                 "acked_generation": _NONNEGATIVE}, {}),

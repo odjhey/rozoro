@@ -184,6 +184,10 @@ _MIGRATIONS = {
     """,
     6: """
         ALTER TABLE generation_task_snapshots ADD COLUMN compat_complete INTEGER NOT NULL DEFAULT 0 CHECK(compat_complete IN (0,1));
+        CREATE TABLE disabled_drivers (
+            driver_id TEXT PRIMARY KEY,
+            disabled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
     """,
 }
 
@@ -577,6 +581,7 @@ class EventStore:
     def _migrate(self) -> None:
         with self._lock, self._immediate() as connection:
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            original_version = current
             if current > SCHEMA_VERSION:
                 raise RuntimeError(f"database schema {current} is newer than supported {SCHEMA_VERSION}")
             for version in range(current + 1, SCHEMA_VERSION + 1):
@@ -598,7 +603,7 @@ class EventStore:
                 if version == 5:
                     self._validate_v4_delivery_upgrade(connection)
                 if version == 6:
-                    self._validate_v5_compat_upgrade(connection)
+                    self._validate_v5_compat_upgrade(connection, reject_task_projections=original_version == 5)
                     connection.execute("UPDATE generation_task_snapshots SET compat_complete=1")
                 connection.execute(f"PRAGMA user_version={version}")
 
@@ -622,9 +627,10 @@ class EventStore:
             )
 
     @staticmethod
-    def _validate_v5_compat_upgrade(connection: sqlite3.Connection) -> None:
+    def _validate_v5_compat_upgrade(connection: sqlite3.Connection, *, reject_task_projections: bool) -> None:
         """v5 snapshots omitted immutable compatibility details and cannot be backfilled losslessly."""
-        generated = int(connection.execute(
+        task_rows = int(connection.execute("SELECT COUNT(*) FROM task_projections").fetchone()[0]) if reject_task_projections else 0
+        generated = task_rows + int(connection.execute(
             """SELECT
                  (SELECT COUNT(*) FROM generation_task_snapshots) +
                  (SELECT COUNT(*) FROM pending_generations) +
@@ -765,6 +771,21 @@ class EventStore:
             ).fetchone()
             return None if row is None else dict(row)
 
+    def disable_driver_authority(self, driver_id: str) -> None:
+        """Atomically require a clean ledger, tombstone the driver, and unregister its adapter."""
+        with self._lock, self._immediate() as connection:
+            row = connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("unknown driver")
+            if not int(row[0]) == int(row[1]) == int(row[2]):
+                raise ValueError("cannot disable driver authority with pending generations")
+            connection.execute("INSERT OR IGNORE INTO disabled_drivers(driver_id) VALUES(?)", (driver_id,))
+            connection.execute("DELETE FROM watchtower_registrations WHERE driver_id=?", (driver_id,))
+            connection.execute("DELETE FROM watchtower_deliveries WHERE driver_id=?", (driver_id,))
+
     def driver_snapshot(self, driver_id: str) -> dict[str, int]:
         """Return one driver's exact generation cursors for CLI reconciliation."""
         with self._lock:
@@ -812,6 +833,8 @@ class EventStore:
     def register_driver(self, driver_id: str, session_id: str, harness: str) -> dict[str, Any]:
         """Bind a new connection epoch, including for same-session reconnects."""
         with self._lock, self._immediate() as connection:
+            if connection.execute("SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)).fetchone():
+                raise ValueError("driver authority is disabled for legacy fallback")
             current = connection.execute(
                 "SELECT harness,registration_epoch FROM watchtower_registrations WHERE driver_id=?",
                 (driver_id,),

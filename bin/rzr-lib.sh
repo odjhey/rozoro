@@ -628,7 +628,7 @@ PY
 # Coalescing gate: deliver iff generation > ack AND delivered <= ack.
 rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
   local dir="$1" g a d
-  [ ! -e "$dir/.event-bus-authority" ] || return 1
+  [ ! -e "$dir/.event-bus-authority" ] && [ ! -L "$dir/.event-bus-authority" ] || return 1
   g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
   [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
 }

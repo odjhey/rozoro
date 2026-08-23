@@ -72,8 +72,24 @@ class AuthorityBoundary:
         raw=self._read(dfd,"pending.json",False)
         if raw is None: return 0,0
         try:
-            value=json.loads(raw)
-            if not isinstance(value,dict) or value.get("schema")!=1 or not {"generation","delivered","tasks"}<=value.keys() or not isinstance(value["tasks"],dict): raise ValueError
+            def unique(pairs):
+                result={}
+                for key,item in pairs:
+                    if key in result: raise ValueError("duplicate JSON key")
+                    result[key]=item
+                return result
+            value=json.loads(raw,object_pairs_hook=unique)
+            allowed={"schema","generation","delivered","tasks","delivery_state","retries","last_error","updated"}
+            schema=value.get("schema") if isinstance(value,dict) else None
+            if type(schema) is not int or schema!=1 or set(value)-allowed or not {"generation","delivered","tasks"}<=value.keys() or not isinstance(value["tasks"],dict): raise ValueError
+            for task_id,item in value["tasks"].items():
+                if not isinstance(task_id,str) or not isinstance(item,dict) or set(item)-{"status","edge_id","updated"}: raise ValueError
+                if "status" not in item or not isinstance(item["status"],str): raise ValueError
+                if item.get("edge_id") is not None and not isinstance(item["edge_id"],str): raise ValueError
+                if "updated" in item and not isinstance(item["updated"],str): raise ValueError
+            for field in ("delivery_state","last_error","updated"):
+                if field in value and not isinstance(value[field],str): raise ValueError
+            if "retries" in value and (type(value["retries"]) is not int or not 0<=value["retries"]<=protocol.MAX_INTEGER): raise ValueError
             generation=value["generation"]; delivered=value["delivered"]
             for cursor in (generation,delivered):
                 if not isinstance(cursor,int) or isinstance(cursor,bool) or not 0<=cursor<=protocol.MAX_INTEGER: raise ValueError
@@ -173,9 +189,9 @@ def main():
         try:
           if a.operation=="authority-disable":
             if not a.driver: ap.error("--driver is required")
-            state=flow.request(req("driver.snapshot",driver_id=a.driver))
-            if not state["generation"]==state["delivered_generation"]==state["acked_generation"]:
-              raise BridgeError("cannot disable event-bus authority while daemon generations are pending")
+            if any(os.environ.get(name)!="1" for name in ("ROZORO_EVENT_BUS","ROZORO_EVENT_BUS_FALLBACK","ROZORO_EVENT_BUS_DISABLE")):
+              raise BridgeError("authority-disable requires ROZORO_EVENT_BUS=1, ROZORO_EVENT_BUS_FALLBACK=1, and ROZORO_EVENT_BUS_DISABLE=1")
+            flow.request(req("driver.disable",driver_id=a.driver))
             boundary.disable(a.driver); print(a.driver)
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
@@ -185,12 +201,15 @@ def main():
             if not a.driver: ap.error("--driver is required")
             boundary.activate(a.driver)
             snap=flow.request(req("reconcile.pending",driver_id=a.driver)); through=snap["through"]
-            reports=[compat(r) for r in snap["reports"]]; vanished=[r["id"] for r in reports if r["snapshot_folder_present"] is False]
+            projected=[compat(r) for r in snap["reports"]]
+            vanished=[r["id"] for r in projected if r["snapshot_folder_present"] is False]
+            reports=[r for r in projected if r["snapshot_folder_present"] is True]
             out={"driver":a.driver,"acknowledged_generation":through,"reports":reports,"vanished":vanished,"source":"event-bus"}
             if a.json: print(json.dumps(out,sort_keys=True,separators=(",",":")))
             else:
               print(f"reconciled driver {a.driver} through generation {through}")
               for r in reports: print(f"  {r['id']}: runtime={r['runtime_status']} task={r['task_status']} turn={r['turn_report_status']} action={r['action_reason'] or 'none'}")
+              for task_id in vanished: print(f"  {task_id} : vanished (no task folder)")
             sys.stdout.flush()
             if through>0 and snap["reports"]: flow.request(req("reconcile.ack",driver_id=a.driver,through=through))
         finally: flow.close()

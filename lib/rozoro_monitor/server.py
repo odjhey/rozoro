@@ -353,7 +353,7 @@ class MonitorServer:
             if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif message_type in {"health", "task.status", "driver.snapshot", "reconcile.pending", "reconcile.ack",
+        elif message_type in {"health", "task.status", "driver.snapshot", "driver.disable", "reconcile.pending", "reconcile.ack",
                               "monitor.stop", "watchtower.register", "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
@@ -432,6 +432,10 @@ class MonitorServer:
                         assert self._store is not None
                         reply = {"v": 1, "type": "driver.snapshot.result", "request_id": message["request_id"],
                                  "driver_id": message["driver_id"], **self._store.driver_snapshot(message["driver_id"])}
+                    elif message["type"] == "driver.disable":
+                        assert self._store is not None
+                        self._store.disable_driver_authority(message["driver_id"])
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                     elif message["type"] == "reconcile.pending":
                         assert self._store is not None
                         through, reports = self._store.reconcile_delivered(message["driver_id"])
