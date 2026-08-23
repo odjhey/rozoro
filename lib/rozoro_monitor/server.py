@@ -20,7 +20,8 @@ from .store import EventStore
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
-if MAX_CLIENTS < 2 or READ_TIMEOUT <= 0:
+SPOOL_INTERVAL = float(os.environ.get("ROZORO_MONITOR_SPOOL_INTERVAL", "2.0"))
+if MAX_CLIENTS < 2 or READ_TIMEOUT <= 0 or SPOOL_INTERVAL <= 0:
     raise RuntimeError("invalid monitor resource limits")
 # asyncio pauses each transport at twice its StreamReader limit. The client cap
 # therefore makes aggregate userspace input buffering finite and auditable.
@@ -49,12 +50,17 @@ class MonitorServer:
         self._store: EventStore | None = None
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
+        self._spool_task: asyncio.Task[None] | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._capacity = asyncio.Event()
         self._capacity.set()
         self._socket_identity: tuple[int, int] | None = None
         self._clients = 0
+        self.shutdown_requested = asyncio.Event()
+        self._spool_backlog = 0
+        self._spool_errors = 0
+        self._last_spool_error: str | None = None
         try:
             soft_fds = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
             open_fds = len(os.listdir("/dev/fd"))
@@ -175,6 +181,7 @@ class MonitorServer:
             self._assert_home_anchor()
             self._prepare_entries()
             self._store = EventStore(self.db_path)
+            self._import_spool()
             db_info = self._entry("monitor.db")
             if db_info is None or not stat.S_ISREG(db_info.st_mode):
                 raise UnsafeStateError("database creation escaped private home")
@@ -196,9 +203,95 @@ class MonitorServer:
             self._record_owner()
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
+            self._spool_task = asyncio.create_task(self._spool_loop())
         except BaseException:
             await self.close()
             raise
+
+    def _import_spool(self) -> None:
+        """Import complete spool envelopes; COMMIT always precedes unlink."""
+        assert self._store is not None
+        try:
+            os.mkdir("spool", 0o700, dir_fd=self._home_fd)
+        except FileExistsError:
+            pass
+        spool_fd = os.open("spool", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                           | getattr(os, "O_NOFOLLOW", 0), dir_fd=self._home_fd)
+        try:
+            info = os.fstat(spool_fd)
+            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+                raise UnsafeStateError("spool must be an owner-private directory")
+            lock_fd = os.open(".lock", os.O_RDWR | os.O_CREAT
+                              | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=spool_fd)
+            try:
+                lock_info = os.fstat(lock_fd)
+                if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
+                        or stat.S_IMODE(lock_info.st_mode) & 0o077):
+                    raise UnsafeStateError("spool lock must be an owner-private regular file")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                names = [name for name in os.listdir(spool_fd) if name != ".lock"]
+                self._spool_backlog = len(names)
+                errors: list[str] = []
+                valid: list[tuple[int, str, bytes, dict[str, Any]]] = []
+                for name in names:
+                    if not name.endswith(".json"):
+                        errors.append(f"incomplete spool evidence retained: {name}")
+                        continue
+                    try:
+                        fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK
+                                     | getattr(os, "O_NOFOLLOW", 0), dir_fd=spool_fd)
+                        try:
+                            file_info = os.fstat(fd)
+                            if (not stat.S_ISREG(file_info.st_mode) or file_info.st_uid != os.geteuid()
+                                    or stat.S_IMODE(file_info.st_mode) & 0o077):
+                                raise ValueError("unsafe entry")
+                            data = os.read(fd, protocol.MAX_FRAME_BYTES + 1)
+                        finally:
+                            os.close(fd)
+                        if len(data) > protocol.MAX_FRAME_BYTES:
+                            raise ValueError("oversized envelope")
+                        message = protocol.decode(data)
+                        if not protocol.requires_producer_seq(message["type"]):
+                            raise ValueError("not a lifecycle event")
+                        if name != f"{message['event_id']}.json":
+                            raise ValueError("filename/event identity mismatch")
+                        valid.append((message["producer_seq"], name, data, message))
+                    except (OSError, ValueError, UnicodeError, protocol.ProtocolError) as exc:
+                        errors.append(f"malformed spool evidence retained: {name}: {exc}")
+                for _, name, original, message in sorted(valid, key=lambda item: (item[0], item[1])):
+                    try:
+                        self._store.accept_event(message)  # returns only after COMMIT
+                        check_fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK
+                                           | getattr(os, "O_NOFOLLOW", 0), dir_fd=spool_fd)
+                        try:
+                            current = os.read(check_fd, protocol.MAX_FRAME_BYTES + 1)
+                        finally:
+                            os.close(check_fd)
+                        if current != original:
+                            raise ValueError("evidence changed after commit")
+                        os.unlink(name, dir_fd=spool_fd)
+                        os.fsync(spool_fd)
+                        self._spool_backlog -= 1
+                    except Exception as exc:
+                        errors.append(f"spool import retained {name}: {exc}")
+                self._spool_errors = len(errors)
+                self._last_spool_error = errors[-1][:128] if errors else None
+            finally:
+                os.close(lock_fd)
+        finally:
+            os.close(spool_fd)
+
+    async def _spool_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(SPOOL_INTERVAL)
+                try:
+                    self._import_spool()
+                except Exception as exc:
+                    self._spool_errors += 1
+                    self._last_spool_error = f"spool scan failed: {exc}"[:128]
+        except asyncio.CancelledError:
+            pass
 
     async def _accept_loop(self) -> None:
         assert self._listener is not None
@@ -260,8 +353,8 @@ class MonitorServer:
             if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif message_type in {"health", "watchtower.register", "notification.delivered",
-                              "reconcile", "ack-generation"}:
+        elif message_type in {"health", "monitor.stop", "watchtower.register",
+                              "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -304,6 +397,7 @@ class MonitorServer:
         try:
             while True:
                 frame = b""
+                request_shutdown = False
                 try:
                     read = await self._read_frame(reader)
                     if read is None:
@@ -313,7 +407,14 @@ class MonitorServer:
                     if message["type"] == "health":
                         assert self._store is not None
                         reply = {"v": 1, "type": "health.result", "request_id": message["request_id"],
-                                 "schema_version": self._store.schema_version, "clients": self._clients}
+                                 "running": True, "socket": str(self.socket_path),
+                                 "clients": self._clients, **self._store.health_snapshot(),
+                                 "spool_backlog": self._spool_backlog,
+                                 "spool_errors": self._spool_errors, "pid": os.getpid(),
+                                 "last_spool_error": self._last_spool_error}
+                    elif message["type"] == "monitor.stop":
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                        request_shutdown = True
                     elif "event_id" in message and protocol.requires_producer_seq(message["type"]):
                         assert self._store is not None
                         try:
@@ -334,6 +435,9 @@ class MonitorServer:
                 except (MemoryError, RecursionError):
                     reply = self._frame_error("internal-error")
                 await self._send(writer, reply)
+                if request_shutdown:
+                    self.shutdown_requested.set()
+                    return
                 if reply.get("code") == "read-timeout":
                     return
         except (BrokenPipeError, ConnectionResetError, ConnectionError, TimeoutError):
@@ -349,6 +453,10 @@ class MonitorServer:
                 pass
 
     async def close(self) -> None:
+        if self._spool_task is not None:
+            self._spool_task.cancel()
+            await asyncio.gather(self._spool_task, return_exceptions=True)
+            self._spool_task = None
         if self._accept_task is not None:
             self._accept_task.cancel()
         if self._listener is not None:

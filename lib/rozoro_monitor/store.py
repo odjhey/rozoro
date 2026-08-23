@@ -500,6 +500,39 @@ class EventStore:
             generation = tx.bump_actionable(change) if change is not None else None
             return AcceptedEvent(durable_seq, False, generation)
 
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return a consistent, read-only diagnostic snapshot."""
+        with self._lock:
+            event = self._connection.execute(
+                "SELECT durable_seq,received_at FROM events ORDER BY durable_seq DESC LIMIT 1"
+            ).fetchone()
+            delivery = self._connection.execute(
+                """SELECT COALESCE(MAX(latest_generation),0),
+                          COALESCE(MAX(delivered_generation),0),
+                          COALESCE(MAX(acked_generation),0)
+                   FROM watchtower_deliveries"""
+            ).fetchone()
+            generation = int(self._connection.execute(
+                "SELECT value FROM daemon_metadata WHERE key='latest_generation'"
+            ).fetchone()[0])
+            return {
+                "schema_version": self.schema_version,
+                "last_durable_seq": 0 if event is None else int(event[0]),
+                "last_durable_time": None if event is None else event[1],
+                "task_count": int(self._connection.execute(
+                    "SELECT COUNT(DISTINCT task_id) FROM sessions WHERE task_id IS NOT NULL"
+                ).fetchone()[0]),
+                "driver_count": int(self._connection.execute(
+                    "SELECT COUNT(DISTINCT driver_id) FROM sessions WHERE driver_id IS NOT NULL"
+                ).fetchone()[0]),
+                "generation": generation,
+                "delivered_generation": int(delivery[1]),
+                "acked_generation": int(delivery[2]),
+                "pending_count": int(self._connection.execute(
+                    "SELECT COUNT(DISTINCT task_id) FROM pending_generation_tasks"
+                ).fetchone()[0]),
+            }
+
     def projection_snapshots_through(self, through: int) -> list[sqlite3.Row]:
         """Return immutable actionable projection history through a generation."""
         with self._lock:

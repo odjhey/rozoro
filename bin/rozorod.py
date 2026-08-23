@@ -23,7 +23,14 @@ async def run(home: str | None) -> int:
         loop.add_signal_handler(signum, stop.set)
     try:
         await server.start()
-        await stop.wait()
+        signal_wait = asyncio.create_task(stop.wait())
+        request_wait = asyncio.create_task(server.shutdown_requested.wait())
+        done, pending = await asyncio.wait(
+            {signal_wait, request_wait}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         return 0
     finally:
         await server.close()
