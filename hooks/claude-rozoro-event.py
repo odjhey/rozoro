@@ -59,8 +59,11 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
         job_id = payload.get("agent_id")
         return [_event(base, "background.start", job_id=job_id, job_kind="subagent")] if isinstance(job_id, str) and job_id else []
     if name == "SubagentStop":
-        job_id = payload.get("agent_id")
-        return [_event(base, "background.stop", job_id=job_id, result="unknown")] if isinstance(job_id, str) and job_id else []
+        # A stop edge cannot certify that Claude has no other owned work. The
+        # frozen reducer may match this opaque ID against an authoritative
+        # count-only snapshot and incorrectly derive clear, so retain the last
+        # positive evidence until the next authoritative Stop snapshot.
+        return []
     if name == "SessionEnd":
         return [_event(base, "session.end")]
 
@@ -95,7 +98,7 @@ def main() -> int:
         events = map_payload(payload)
         if not events:
             return 0
-        budget = max(0.0, min(float(os.environ.get("ROZORO_HOOK_TIMEOUT", "0.75")), 1.0))
+        budget = max(0.0, min(float(os.environ.get("ROZORO_HOOK_TIMEOUT", "0.75")), 0.75))
         deadline = time.monotonic() + budget
         # Reserve every envelope before attempting transport. Thus the second
         # Stop event cannot be lost or wait for another full socket timeout if

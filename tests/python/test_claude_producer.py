@@ -40,7 +40,7 @@ def identity(session=FIXTURE["redactions"]["session_id"]):
 
 class ClaudeProducerTests(unittest.TestCase):
     def test_fixture_maps_only_frozen_lifecycle_fields(self):
-        expected = ["session.register", "turn.start", "background.start", "background.stop",
+        expected = ["session.register", "turn.start", "background.start",
                     "turn.stop", "turn.stop", "turn.stop", "session.end"]
         mapped = []
         with identity():
@@ -75,6 +75,29 @@ class ClaudeProducerTests(unittest.TestCase):
         self.assertTrue(state.background_certified)
         self.assertEqual(state.active_count, 1)
         self.assertEqual(state.availability, "waiting-background")
+
+    def test_subagent_stop_cannot_clear_authoritative_active_until_empty_stop(self):
+        from rozoro_monitor.reducer import LifecycleState, reduce_event
+        active, empty = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"][::2]
+        subagent_stop = next(item for item in FIXTURE["payloads"] if item["hook_event_name"] == "SubagentStop")
+        with identity():
+            batches = [HOOK.map_payload(active), HOOK.map_payload(subagent_stop), HOOK.map_payload(empty)]
+        self.assertEqual(batches[1], [])
+        state = LifecycleState(); seq = 0
+        for event in batches[0]:
+            seq += 1; state = reduce_event(state, dict(event, producer_seq=seq)).state
+        self.assertEqual(state.background, "active")
+        self.assertTrue(state.background_certified)
+        self.assertEqual(state.active_count, 1)
+        # The uncertifying incremental stop emits no claim; positive evidence
+        # remains and global clear/quiescence is impossible.
+        self.assertNotEqual(state.background, "clear")
+        self.assertNotEqual(state.availability, "quiescent")
+        for event in batches[2]:
+            seq += 1; state = reduce_event(state, dict(event, producer_seq=seq)).state
+        self.assertEqual(state.background, "clear")
+        self.assertTrue(state.background_certified)
+        self.assertEqual(state.availability, "quiescent")
 
     def test_unrelated_or_wrong_session_is_noop(self):
         payload = FIXTURE["payloads"][0]
@@ -127,19 +150,19 @@ class ClaudeProducerTests(unittest.TestCase):
                     connection, _ = server.accept()
                     with connection:
                         connection.recv(65536)
-                        time.sleep(1)
+                        time.sleep(2)
 
             thread = threading.Thread(target=delayed_ack, daemon=True); thread.start(); ready.wait(1)
             env = os.environ.copy()
             env.update({"ROZORO_HOME": str(home), "ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "crew",
                         "ROZORO_TASK_ID": "task-1", "ROZORO_SESSION_ID": payload["session_id"],
-                        "ROZORO_CLAUDE_CAPABILITY": "2.1.240", "ROZORO_HOOK_TIMEOUT": "0.2"})
+                        "ROZORO_CLAUDE_CAPABILITY": "2.1.240", "ROZORO_HOOK_TIMEOUT": "9"})
             started = time.monotonic()
             result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py")], input=json.dumps(payload),
                                     text=True, env=env, capture_output=True, timeout=2)
             elapsed = time.monotonic() - started
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertLess(elapsed, 0.65)
+            self.assertLess(elapsed, 1.1)
             events = [json.loads(path.read_text()) for path in (home / "spool").glob("*.json")]
             self.assertEqual(len(events), 2)
             self.assertEqual(sorted(event["producer_seq"] for event in events), [1, 2])
