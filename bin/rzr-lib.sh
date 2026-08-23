@@ -546,11 +546,14 @@ PY
 # idempotent while legacy callers without an edge ID retain per-call bumps.
 rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   local dir="$1"
-  mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
+  mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" RZR_LEDGER_EDGE="${4:-}" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(authority_fd, fcntl.LOCK_SH)
+os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -572,6 +575,7 @@ os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
 os.close(lock_fd)
+os.close(authority_fd)
 PY
 }
 
@@ -588,6 +592,8 @@ rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(authority_fd, fcntl.LOCK_SH)
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -611,6 +617,7 @@ os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
 os.close(lock_fd)
+os.close(authority_fd)
 PY
 }
 
@@ -623,8 +630,17 @@ rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
 
 # Advance the driver's ack to the given generation (single-writer file, atomic).
 rzr_ledger_ack() {  # <driver-dir> <generation>
-  local dir="$1"; mkdir -p "$dir"
-  printf '%s\n' "$2" | rzr_write_private "$dir/ack"
+  local dir="$1"; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
+  RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
+import fcntl, os
+p=os.environ["RZR_LEDGER_ACK"]
+authority_fd=os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"),os.O_CREAT|os.O_RDWR,0o600)
+fcntl.flock(authority_fd,fcntl.LOCK_SH)
+os.makedirs(os.path.dirname(p),mode=0o700,exist_ok=True)
+tmp=p+f".tmp.{os.getpid()}"; os.umask(0o077)
+with open(tmp,"w") as stream: stream.write(os.environ["RZR_LEDGER_VALUE"]+"\n"); stream.flush(); os.fsync(stream.fileno())
+os.replace(tmp,p); os.close(authority_fd)
+PY
 }
 
 rzr_target_field() {  # <driver-dir> <field>

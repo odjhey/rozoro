@@ -68,6 +68,11 @@ def _boolean(value: Any, field: str) -> None:
         _fail("invalid-field", f"{field} must be a boolean", field)
 
 
+def _object(value: Any, field: str) -> None:
+    if not isinstance(value, dict):
+        _fail("invalid-field", f"{field} must be an object", field)
+
+
 def _known_or_unknown_boolean(value: Any, field: str) -> None:
     if value is not None and not isinstance(value, bool):
         _fail("invalid-field", f"{field} must be true, false, or null (unknown)", field)
@@ -149,6 +154,10 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "driver.snapshot.result": ({"request_id": _ID, "driver_id": _ID,
                                 "generation": _NONNEGATIVE, "delivered_generation": _NONNEGATIVE,
                                 "acked_generation": _NONNEGATIVE}, {}),
+    "reconcile.pending": ({"request_id": _ID, "driver_id": _ID}, {}),
+    "reconcile.pending.result": ({"request_id": _ID, "through": _NONNEGATIVE,
+                                  "reports": lambda value, field: _reports(value, field)}, {}),
+    "reconcile.ack": ({"request_id": _ID, "driver_id": _ID, "through": _POSITIVE}, {}),
     "health.result": ({"request_id": _ID, "running": _BOOL, "socket": _STRING,
                        "schema_version": _POSITIVE, "last_durable_seq": _NONNEGATIVE,
                        "clients": _NONNEGATIVE, "task_count": _NONNEGATIVE,
@@ -189,6 +198,7 @@ _REPORT_SCHEMA: dict[str, Callable[[Any, str], None]] = {
     "verdict": _nullable(_VERDICT),
     "actionable_reason": _ACTIONABLE_REASON,
 }
+_REPORT_OPTIONAL_SCHEMA: dict[str, Callable[[Any, str], None]] = {"projection": _object}
 
 
 def _reports(value: Any, field: str) -> None:
@@ -199,13 +209,16 @@ def _reports(value: Any, field: str) -> None:
         if not isinstance(report, dict):
             _fail("invalid-field", f"{item_field} must be an object", item_field)
         missing = sorted(set(_REPORT_SCHEMA) - set(report))
-        unknown = sorted(set(report) - set(_REPORT_SCHEMA))
+        unknown = sorted(set(report) - set(_REPORT_SCHEMA) - set(_REPORT_OPTIONAL_SCHEMA))
         if missing:
             _fail("invalid-field", f"{item_field} missing field(s): {', '.join(missing)}", item_field)
         if unknown:
             _fail("invalid-field", f"{item_field} has unknown field(s): {', '.join(unknown)}", item_field)
         for name, check in _REPORT_SCHEMA.items():
             check(report[name], f"{item_field}.{name}")
+        for name, check in _REPORT_OPTIONAL_SCHEMA.items():
+            if name in report:
+                check(report[name], f"{item_field}.{name}")
         report_tuple = (report["report_state"], report["verdict"], report["actionable_reason"])
         if report_tuple not in _REPORT_TUPLES:
             _fail(
@@ -246,7 +259,7 @@ def validate(message: Any) -> dict[str, Any]:
         other = "driver_id" if identity == "task_id" else "task_id"
         if identity not in message or other in message:
             _fail("invalid-event", f"role {message['role']!r} requires {identity} and forbids {other}", identity)
-    if message_type == "reconcile.result":
+    if message_type in {"reconcile.result", "reconcile.pending.result"}:
         seen_tasks: set[str] = set()
         for index, report in enumerate(message["reports"]):
             if report["generation"] > message["through"]:
