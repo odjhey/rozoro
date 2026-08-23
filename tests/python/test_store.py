@@ -167,7 +167,7 @@ class StoreTests(unittest.TestCase):
         connection.close()
 
         with EventStore(self.db) as store:
-            self.assertEqual(store.schema_version, 3)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
             self.assertIsNotNone(store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE name='generation_task_snapshots'"
             ).fetchone())

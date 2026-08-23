@@ -22,9 +22,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from .handoff import parse_task_report
 from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class ActionableChange:
 
 ReducerHook = Callable[["StoreTransaction", Mapping[str, Any], int], Any]
 ActionableHook = Callable[["StoreTransaction", Mapping[str, Any], int, Any], ActionableChange | None]
+_DEFAULT_REDUCER = object()
 
 
 _MIGRATIONS = {
@@ -153,6 +155,9 @@ _MIGRATIONS = {
             SELECT RAISE(ABORT, 'session role identity is invalid');
         END;
     """,
+    4: """
+        ALTER TABLE sessions ADD COLUMN registered INTEGER NOT NULL DEFAULT 1 CHECK(registered IN (0,1));
+    """,
 }
 
 
@@ -189,7 +194,9 @@ class StoreTransaction:
         ).fetchone()
         return None if row is None else _state_from_json(row[0])
 
-    def persist_session(self, event: Mapping[str, Any], durable_seq: int, state: LifecycleState) -> None:
+    def persist_session(
+        self, event: Mapping[str, Any], durable_seq: int, state: LifecycleState, *, registered: bool
+    ) -> None:
         identity = self._connection.execute(
             "SELECT harness,role,task_id,driver_id FROM sessions WHERE session_id=?",
             (event["session_id"],),
@@ -200,20 +207,21 @@ class StoreTransaction:
         self._connection.execute(
             """INSERT INTO sessions(
                    session_id,task_id,driver_id,harness,role,foreground,background,
-                   background_count,availability,producer_seq,reducer_state_json,latest_durable_seq
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                   background_count,availability,producer_seq,reducer_state_json,latest_durable_seq,registered
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(session_id) DO UPDATE SET
                    foreground=excluded.foreground, background=excluded.background,
                    background_count=excluded.background_count,
                    availability=excluded.availability, producer_seq=excluded.producer_seq,
                    reducer_state_json=excluded.reducer_state_json,
                    latest_durable_seq=excluded.latest_durable_seq,
+                   registered=MAX(sessions.registered,excluded.registered),
                    last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
             (
                 event["session_id"], event.get("task_id"), event.get("driver_id"),
                 event["harness"], event["role"], state.foreground, state.background,
                 state.active_count, state.availability, state.producer_seq,
-                _state_to_json(state), durable_seq,
+                _state_to_json(state), durable_seq, int(registered),
             ),
         )
 
@@ -271,10 +279,69 @@ class StoreTransaction:
         return generation
 
 
-def _default_reducer(tx: StoreTransaction, event: Mapping[str, Any], durable_seq: int) -> LifecycleState:
+def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]:
+    report = parse_task_report(task_dir)
+    latest = report["latest"]
+    verdict = None if latest is None else latest["fields"].get("verdict", "").casefold() or None
+    state = "missing" if report["blocks"] == 0 else ("invalid" if report["protocol_errors"] else "valid")
+    summary = {
+        "state": state,
+        "verdict": verdict,
+        "blocks": report["blocks"],
+        "acked_through": report["acked_through"],
+        "unresolved": report["unresolved"],
+        "protocol_errors": report["protocol_errors"],
+        "external_action": bool(report["open_items"]),
+    }
+    return state, verdict, summary
+
+
+def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
+    verdict = report.get("verdict")
+    if state.availability == "gone":
+        return "gone"
+    if state.availability == "blocked" or verdict == "blocked":
+        return "blocked"
+    if verdict == "failed":
+        return "failed"
+    if report.get("external_action"):
+        return "external-action"
+    if state.availability != "quiescent":
+        return "none"
+    if report.get("state") == "missing":
+        return "missing-report"
+    if report.get("state") == "invalid":
+        return "invalid-report"
+    return "quiescent-turn"
+
+
+def _reduce_projection(
+    tx: StoreTransaction, event: Mapping[str, Any], durable_seq: int, tasks_dir: Path
+) -> LifecycleState:
     state = tx.get_session_state(event["session_id"]) or LifecycleState()
     result = reduce_event(state, event)
-    tx.persist_session(event, durable_seq, result.state)
+    existing = tx._connection.execute(
+        "SELECT registered FROM sessions WHERE session_id=?", (event["session_id"],)
+    ).fetchone()
+    registered = event["type"] == "session.register" or bool(existing and existing[0])
+    tx.persist_session(event, durable_seq, result.state, registered=registered)
+    task_id = event.get("task_id")
+    if registered and event["role"] == "crew" and task_id:
+        report_state, verdict, report = _report_projection(tasks_dir / task_id)
+        projection = {
+            "task_id": task_id,
+            "session_id": event["session_id"],
+            "foreground": result.state.foreground,
+            "background": result.state.background,
+            "background_count": result.state.active_count,
+            "availability": result.state.availability,
+            "report": report,
+        }
+        tx.upsert_task_projection(
+            task_id, durable_seq, availability=result.state.availability,
+            report_state=report_state, verdict=verdict,
+            actionable_reason=_actionable_reason(result.state, report), projection=projection,
+        )
     return result.state
 
 
@@ -297,8 +364,9 @@ class EventStore:
         finally:
             os.close(fd)
 
-    def __init__(self, path: str | os.PathLike[str]):
+    def __init__(self, path: str | os.PathLike[str], *, tasks_dir: str | os.PathLike[str] | None = None):
         self.path = Path(path).absolute()
+        self.tasks_dir = Path(tasks_dir).absolute() if tasks_dir is not None else self.path.parent / "tasks"
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory_fd = os.open(
             self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -474,7 +542,7 @@ class EventStore:
             return int(self._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def accept_event(
-        self, event: Mapping[str, Any], *, reducer: ReducerHook | None = _default_reducer,
+        self, event: Mapping[str, Any], *, reducer: ReducerHook | None | object = _DEFAULT_REDUCER,
         actionable: ActionableHook | None = None,
     ) -> AcceptedEvent:
         """Durably accept once; duplicates never invoke either hook."""
@@ -495,10 +563,37 @@ class EventStore:
             )
             durable_seq = int(cursor.lastrowid)
             tx = StoreTransaction(connection)
-            reduced = reducer(tx, event, durable_seq) if reducer is not None else None
+            if reducer is _DEFAULT_REDUCER:
+                reduced = _reduce_projection(tx, event, durable_seq, self.tasks_dir)
+            else:
+                reduced = reducer(tx, event, durable_seq) if reducer is not None else None
             change = actionable(tx, event, durable_seq, reduced) if actionable is not None else None
             generation = tx.bump_actionable(change) if change is not None else None
             return AcceptedEvent(durable_seq, False, generation)
+
+    def rebuild_projections(self) -> None:
+        """Deterministically reconstruct mutable projections from the accepted event log."""
+        with self._lock, self._immediate() as connection:
+            generated = connection.execute(
+                "SELECT COUNT(*) FROM generation_task_snapshots"
+            ).fetchone()[0]
+            if generated:
+                raise RuntimeError("projection rebuild requires delivery-ledger replay support")
+            connection.execute("DELETE FROM task_projections")
+            connection.execute("DELETE FROM sessions")
+            tx = StoreTransaction(connection)
+            for row in connection.execute(
+                "SELECT durable_seq,payload_json FROM events ORDER BY durable_seq"
+            ).fetchall():
+                _reduce_projection(tx, json.loads(row["payload_json"]), int(row["durable_seq"]), self.tasks_dir)
+
+    def task_projection(self, task_id: str) -> dict[str, Any] | None:
+        """Return a normalized projection without exposing SQLite row mechanics."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM task_projections WHERE task_id=?", (task_id,)
+            ).fetchone()
+            return None if row is None else dict(row)
 
     def health_snapshot(self) -> dict[str, Any]:
         """Return a consistent, read-only diagnostic snapshot."""
