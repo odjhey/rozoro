@@ -180,17 +180,21 @@ class MembershipMonitor:
                 return
             await self.reconcile(task_id,level)
     async def _levels(self,members):
-        ok=True
+        ok=True; current_rpc_error=None
         for member in members.values():
             frontier=self._pane_epoch.get(member.pane_id,0)
             try: level=await self.level_reader(member.pane_id)
             except Exception as exc:
-                self.last_error=str(exc)[:128]; self.connected=False
+                current_rpc_error=str(exc)[:128]; self.connected=False
                 level=PaneLevel(member.pane_id,"unknown",None)
             if level.exists is None:
-                ok=False; self.connected=False; self.last_error=self.last_error or "Herdr level RPC unavailable"
+                ok=False; self.connected=False
             await self._apply(member.task_id,level,expected_epoch=frontier,
                               expected_route=self._route_generation.get(member.task_id,0))
+        if not ok:
+            # Replace stale scan/zero-membership text with this scan's RPC
+            # truth. Preserve only a specific exception observed right now.
+            self.last_error=current_rpc_error or "Herdr level RPC unavailable"
         return ok
     async def _consume(self,sub,token,routing):
         try:

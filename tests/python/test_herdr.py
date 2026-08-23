@@ -54,7 +54,8 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
         await self.monitor.start()
         self.assertFalse(self.monitor.connected); self.assertIn('untested',self.monitor.last_error)
         (self.state/'a.meta').write_text('pane=p1\n'); self.levels['p1']=PaneLevel('p1','unknown',None)
-        await self.monitor.scan(); self.assertFalse(self.monitor.connected); self.assertTrue(self.monitor.last_error)
+        await self.monitor.scan(); self.assertFalse(self.monitor.connected)
+        self.assertEqual(self.monitor.last_error,'Herdr level RPC unavailable')
         self.levels['p1']=PaneLevel('p1','idle',True)
         await self.monitor.scan(); self.assertTrue(self.monitor.connected); self.assertIsNone(self.monitor.last_error)
 
