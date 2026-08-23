@@ -1032,7 +1032,7 @@ class EventStore:
                ORDER BY s.generation,s.task_id""", (through,)
         ).fetchall()
         if any(not int(row["compat_complete"]) for row in rows):
-            raise RuntimeError("generation snapshot lacks immutable compatibility fields")
+            raise ValueError("generation snapshot lacks immutable compatibility fields")
         return [{"task_id": row["task_id"], "generation": int(row["generation"]),
                  "availability": row["availability"], "report_state": row["report_state"],
                  "verdict": row["verdict"], "actionable_reason": row["actionable_reason"],
