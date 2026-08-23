@@ -30,7 +30,9 @@ def down(home: Path, error: str | None = None) -> dict:
             "task_count": 0, "driver_count": 0, "generation": 0,
             "delivered_generation": 0, "acked_generation": 0, "pending_count": 0,
             "spool_backlog": spool_count(home), "spool_errors": 0,
-            "last_spool_error": error}
+            "last_spool_error": error, "herdr_connected": False,
+            "herdr_last_error": "monitor down", "herdr_inventory_errors": 0,
+            "herdr_task_count": 0, "drivers": [], "health_state": "down"}
 
 
 def spool_count(home: Path) -> int:
@@ -93,6 +95,7 @@ def health(home: Path, timeout: float = 1.0) -> dict:
         if result.get("socket") != str(home / "monitor.sock"):
             raise RuntimeError("health response names a different monitor socket")
         result.pop("v", None); result.pop("type", None); result.pop("request_id", None)
+        result["health_state"] = "healthy" if result.get("herdr_connected") else "disconnected"
         return result
     except Exception as exc:
         return down(home, str(exc)[:128])
@@ -109,6 +112,8 @@ def print_status(value: dict, as_json: bool) -> None:
     print(f"clients: {value['clients']}  tasks: {value['task_count']}  drivers: {value['driver_count']}")
     print(f"generation: {value['generation']}  delivered: {value['delivered_generation']}  ack: {value['acked_generation']}")
     print(f"pending: {value['pending_count']}  spool: {value['spool_backlog']}  spool errors: {value['spool_errors']}")
+    for driver in value.get("drivers", []):
+        print(f"driver {driver['driver_id']}: adapter={driver['adapter_state']} delivery={driver['delivery_state']} pending={driver['pending']} delivered-unacked={driver['delivered_unacked']} retrying={driver['retrying']} error={driver.get('last_error') or 'none'}")
     if value.get("last_spool_error"):
         print(f"diagnostic: {value['last_spool_error']}")
 

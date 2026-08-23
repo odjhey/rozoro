@@ -29,9 +29,9 @@ Concretely, rozoro aims to be:
 
 - **The smallest useful spawn/watch/message/reap layer over herdr** — four verbs,
   not a framework. If herdr already does it, rozoro doesn't wrap it.
-- **Crash-safe by being stateless in-process.** All state is files under
-  `$ROZORO_HOME`; there is no daemon. Kill the driver and the next command
-  reconciles from disk — nothing in flight is lost.
+- **Crash-safe through durable local ownership.** The resident `rozorod` daemon
+  commits lifecycle events, projections, and wake generations to owner-private
+  SQLite before acknowledgement; adapters spool across restarts.
 - **A leverage multiplier for the driver.** The driver dispatches *eagerly* and
   delegates *discovery* (reading issues, reproducing bugs, weighing approaches) to
   the crew, rather than pre-solving work itself. rozoro is the hands; the crew is

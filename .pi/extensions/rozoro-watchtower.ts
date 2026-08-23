@@ -19,10 +19,22 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
-		const requested = process.env.ROZORO_WATCHTOWER === "1" || ctx.getSystemPrompt().includes(WATCHTOWER_MARKER);
-		if (!requested) return;
+		const prompt = ctx.getSystemPrompt();
+		const requested = process.env.ROZORO_WATCHTOWER === "1" || prompt.includes(WATCHTOWER_MARKER);
+		const taskId = /^rozoro-task:\s*([^\s]+)$/m.exec(prompt)?.[1];
+		if (!requested && !taskId) return;
 		{
+			const monitor = await pi.exec(join(repoRoot, "bin", "rozoro"), ["monitor", "start"]);
+			if (monitor.code !== 0) throw new Error(`Rozoro monitor failed readiness: ${monitor.stderr.trim()}`);
 			const sessionId = ctx.sessionManager.getSessionId();
+			if (!requested && taskId) {
+				busClient = new RozoroEventBusClient({
+					socketPath: join(rozoroHome, "monitor.sock"), sessionId, role: "crew", taskId,
+					onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
+				});
+				busClient.start();
+				return;
+			}
 			const paneId = process.env.HERDR_PANE_ID;
 			if (!paneId) throw new Error("Rozoro event-bus Pi watchtower requires HERDR_PANE_ID");
 			const expectedDriverId = herdrDriverId(paneId);
@@ -33,6 +45,10 @@ export default function (pi: ExtensionAPI) {
 			busClient = new RozoroEventBusClient({
 				socketPath: join(rozoroHome, "monitor.sock"), sessionId, driverId,
 				onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
+				onRegistered: async () => {
+					const activated = await pi.exec(join(repoRoot, "bin", "rzr-event-bus-client.py"), ["authority-activate", "--driver", driverId]);
+					if (activated.code !== 0) throw new Error(`Rozoro authority activation failed: ${activated.stderr.trim()}`);
+				},
 				onNotification: () => pi.sendMessage(
 					{ customType: "rozoro-event", content: WAKE_CONTENT, display: true },
 					{ triggerTurn: true, deliverAs: "followUp" },

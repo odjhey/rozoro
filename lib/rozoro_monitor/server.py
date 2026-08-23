@@ -63,6 +63,7 @@ class MonitorServer:
         self._capacity.set()
         self._socket_identity: tuple[int, int] | None = None
         self._clients = 0
+        self._active_drivers: dict[str, int] = {}
         self.shutdown_requested = asyncio.Event()
         self._spool_backlog = 0
         self._spool_errors = 0
@@ -461,9 +462,12 @@ class MonitorServer:
                     message = protocol.decode(frame)
                     if message["type"] == "health":
                         assert self._store is not None
+                        snapshot = self._store.health_snapshot()
+                        for driver in snapshot.get("drivers", []):
+                            driver["adapter_state"] = "connected" if driver["driver_id"] in self._active_drivers else "disconnected"
                         reply = {"v": 1, "type": "health.result", "request_id": message["request_id"],
                                  "running": True, "socket": str(self.socket_path),
-                                 "clients": self._clients, **self._store.health_snapshot(),
+                                 "clients": self._clients, **snapshot,
                                  "spool_backlog": self._spool_backlog,
                                  "spool_errors": self._spool_errors, "pid": os.getpid(),
                                  "last_spool_error": self._last_spool_error,
@@ -516,6 +520,7 @@ class MonitorServer:
                         registration = self._store.register_driver(
                             message["driver_id"], message["session_id"], message["harness"])
                         registered_driver = (message["driver_id"], message["session_id"], registration["epoch"])
+                        self._active_drivers[message["driver_id"]] = self._active_drivers.get(message["driver_id"], 0) + 1
                         pending_coalescer = Coalescer(
                             self._store, *registered_driver,
                             actuator=lambda _notification: DeliveryResult(DeliveryStatus.DEFERRED),
@@ -583,6 +588,11 @@ class MonitorServer:
         except (BrokenPipeError, ConnectionResetError, ConnectionError, TimeoutError):
             pass
         finally:
+            if registered_driver is not None:
+                driver = registered_driver[0]
+                remaining = self._active_drivers.get(driver, 1) - 1
+                if remaining > 0: self._active_drivers[driver] = remaining
+                else: self._active_drivers.pop(driver, None)
             self._clients -= 1
             self._writers.discard(writer)
             self._capacity.set()

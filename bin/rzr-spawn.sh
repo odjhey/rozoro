@@ -113,6 +113,9 @@ SYSFILE=""
 SESSION_ID=""
 EVENT_BUS=false
 [ "$HARNESS" = claude ] && EVENT_BUS=true
+if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
+  "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
+fi
 [ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 case "$HARNESS" in
   pi|copilot)

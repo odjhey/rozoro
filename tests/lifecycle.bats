@@ -75,7 +75,8 @@ JSON
   [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
   assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'never push'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
   assert_file_contains "$FAKE_HERDR_LOG" $'\t--session-id\t'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
 }

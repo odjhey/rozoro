@@ -918,6 +918,20 @@ class EventStore:
             generation = int(self._connection.execute(
                 "SELECT value FROM daemon_metadata WHERE key='latest_generation'"
             ).fetchone()[0])
+            drivers = [dict(row) for row in self._connection.execute(
+                """SELECT d.driver_id,r.harness,r.session_id,d.latest_generation AS generation,
+                          d.delivered_generation,d.acked_generation,d.delivery_state,
+                          d.last_error,
+                          CASE WHEN d.latest_generation>d.acked_generation THEN 1 ELSE 0 END AS pending,
+                          CASE WHEN d.delivered_generation>d.acked_generation THEN 1 ELSE 0 END AS delivered_unacked
+                   FROM watchtower_deliveries d LEFT JOIN watchtower_registrations r USING(driver_id)
+                   ORDER BY d.driver_id"""
+            ).fetchall()]
+            for driver in drivers:
+                driver["pending"] = bool(driver["pending"])
+                driver["delivered_unacked"] = bool(driver["delivered_unacked"])
+                driver["adapter_state"] = "disconnected" if driver["session_id"] is None else "registered"
+                driver["retrying"] = driver["delivery_state"] in {"deferred", "error"}
             return {
                 "schema_version": self.schema_version,
                 "last_durable_seq": 0 if event is None else int(event[0]),
@@ -932,8 +946,11 @@ class EventStore:
                 "delivered_generation": int(delivery[1]),
                 "acked_generation": int(delivery[2]),
                 "pending_count": int(self._connection.execute(
-                    "SELECT COUNT(DISTINCT task_id) FROM pending_generation_tasks"
+                    """SELECT COUNT(DISTINCT p.task_id) FROM pending_generation_tasks p
+                       WHERE EXISTS (SELECT 1 FROM watchtower_deliveries d
+                                     WHERE p.generation>d.acked_generation)"""
                 ).fetchone()[0]),
+                "drivers": drivers,
             }
 
     def register_driver(self, driver_id: str, session_id: str, harness: str) -> dict[str, Any]:

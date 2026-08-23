@@ -122,6 +122,12 @@ class AuthorityBoundary:
                 marker=self._read(dfd,".event-bus-authority",True)
                 if marker!=b"event-bus-v1\n": raise BridgeError(f"malformed event-bus authority marker for {name}")
             finally: os.close(dfd)
+    def disable(self,driver:str):
+        dfd=os.open(driver,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=self.root_fd)
+        try:
+            try: os.unlink(".event-bus-authority",dir_fd=dfd); os.fsync(dfd)
+            except FileNotFoundError: pass
+        finally: os.close(dfd)
     def __exit__(self,*_):
         if self.lock_fd>=0: os.close(self.lock_fd)
         if self.root_fd>=0: os.close(self.root_fd)
@@ -178,7 +184,7 @@ def compat(report):
       "snapshot_folder_present":p.get("folder_present")}
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true")
+    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true")
     a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME",str(Path.home()/".rozoro"))
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
@@ -191,6 +197,11 @@ def main():
             authority=flow.request(req("driver.authority",driver_id=a.driver))["authority"]
             if authority!="active": raise BridgeError(f"driver {a.driver} has {authority} daemon authority")
             boundary.require_clean(a.driver); boundary.activate(a.driver); print(a.driver)
+          elif a.operation=="authority-disable":
+            if not a.driver: ap.error("--driver is required")
+            flow.request(req("driver.disable",driver_id=a.driver))
+            boundary.disable(a.driver)
+            print(a.driver)
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
             active_drivers=[]

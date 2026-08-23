@@ -9,9 +9,12 @@ export const MAX_FRAME_BYTES = 1_048_576;
 export type AdapterOptions = {
 	socketPath: string;
 	sessionId: string;
-	driverId: string;
-	onNotification: (generation: number) => void | Promise<void>;
+	driverId?: string;
+	taskId?: string;
+	role?: "watchtower" | "crew";
+	onNotification?: (generation: number) => void | Promise<void>;
 	onStatus?: (status: string) => void;
+	onRegistered?: () => void | Promise<void>;
 	reconnectMs?: number;
 	pollMs?: number;
 };
@@ -55,12 +58,18 @@ export class RozoroEventBusClient {
 	private readonly sessionRegistration: Pending;
 	readonly sessionId: string;
 	readonly driverId: string;
+	readonly taskId: string;
+	readonly role: "watchtower" | "crew";
 	private readonly options: AdapterOptions;
 
 	constructor(options: AdapterOptions) {
 		this.options = options;
 		this.sessionId = safeId(options.sessionId, "Pi session id");
-		this.driverId = safeId(options.driverId, "Pi driver id");
+		this.role = options.role ?? "watchtower";
+		this.driverId = options.driverId ? safeId(options.driverId, "Pi driver id") : "";
+		this.taskId = options.taskId ? safeId(options.taskId, "Pi task id") : "";
+		if (this.role === "watchtower" && !this.driverId) throw new Error("Pi watchtower requires driver id");
+		if (this.role === "crew" && !this.taskId) throw new Error("Pi crew requires task id");
 		this.sessionRegistration = { frame: this.event("session.register"), kind: "event" };
 	}
 
@@ -105,9 +114,15 @@ export class RozoroEventBusClient {
 		try {
 			const after = await this.socketIdentity();
 			if (this.socket !== socket || before.dev !== after.dev || before.ino !== after.ino) throw new Error("socket identity changed");
-			this.registrationRequest = `pi-register-${randomUUID()}`;
-			this.write({ v: 1, type: "watchtower.register", request_id: this.registrationRequest,
-				session_id: this.sessionId, harness: "pi", driver_id: this.driverId });
+			if (this.role === "crew") {
+				this.registered = true; this.epoch++;
+				this.options.onStatus?.("event bus: connected / crew producer");
+				this.queue.unshift(this.sessionRegistration); this.flush();
+			} else {
+				this.registrationRequest = `pi-register-${randomUUID()}`;
+				this.write({ v: 1, type: "watchtower.register", request_id: this.registrationRequest,
+					session_id: this.sessionId, harness: "pi", driver_id: this.driverId });
+			}
 		} catch { socket.destroy(); }
 	}
 
@@ -157,7 +172,8 @@ export class RozoroEventBusClient {
 	private event(type: "session.register" | "turn.start" | "turn.stop"): Frame {
 		const seq = ++this.producerSeq;
 		const frame: Frame = { v: 1, type, event_id: `${this.sessionId}-${seq}-${randomUUID()}`, producer_seq: seq,
-			session_id: this.sessionId, harness: "pi", role: "watchtower", driver_id: this.driverId };
+			session_id: this.sessionId, harness: "pi", role: this.role };
+		if (this.role === "watchtower") frame.driver_id = this.driverId; else frame.task_id = this.taskId;
 		if (type === "turn.start") frame.turn_id = `${this.sessionId}-turn-${++this.turn}`;
 		if (type === "turn.stop") { frame.turn_id = `${this.sessionId}-turn-${this.turn}`; frame.background_active = null; }
 		return frame;
@@ -192,11 +208,7 @@ export class RozoroEventBusClient {
 			if (!exact(frame, ["v", "type", "request_id"]) || frame.v !== 1 || frame.type !== "ok" || frame.request_id !== this.registrationRequest) return false;
 			this.registered = true;
 			this.epoch++;
-			this.options.onStatus?.("event bus: connected");
-			if (!this.queue.some((item) => item.frame.event_id === this.sessionRegistration.frame.event_id)) this.queue.unshift(this.sessionRegistration);
-			this.pollTimer = setInterval(() => this.poll(), this.options.pollMs ?? 500);
-			this.pollTimer.unref();
-			this.flush();
+			void this.finishRegistration(this.epoch);
 			return true;
 		}
 		if (frame.type === "notification") {
@@ -215,12 +227,25 @@ export class RozoroEventBusClient {
 		this.pending = undefined; this.flush(); return true;
 	}
 
+	private async finishRegistration(epoch: number): Promise<void> {
+		try {
+			await this.options.onRegistered?.();
+			if (!this.registered || this.epoch !== epoch || this.stopped) return;
+			this.options.onStatus?.("event bus: connected / authority active");
+			if (!this.queue.some((item) => item.frame.event_id === this.sessionRegistration.frame.event_id)) this.queue.unshift(this.sessionRegistration);
+			this.pollTimer = setInterval(() => this.poll(), this.options.pollMs ?? 500);
+			this.pollTimer.unref();
+			this.flush();
+		} catch { this.socket?.destroy(); }
+	}
+
 	private async deliver(generation: number): Promise<void> {
 		if (this.stopped || this.deliveredThisEpoch.has(generation) || this.delivering === generation || this.notifications.includes(generation)) return;
 		if (this.delivering !== undefined) { this.notifications.push(generation); return; }
 		const epoch = this.epoch;
 		this.delivering = generation;
 		try {
+			if (!this.options.onNotification) throw new Error("notification delivered to non-watchtower adapter");
 			await this.options.onNotification(generation);
 			if (this.stopped || !this.registered || this.epoch !== epoch) return;
 			this.deliveredThisEpoch.add(generation);

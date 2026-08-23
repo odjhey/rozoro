@@ -457,6 +457,9 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
       ;;
     pi)
+      # Managed Pi crews explicitly load the checkout-owned event-bus producer,
+      # even when their cwd is an arbitrary target repository.
+      printf '%s\0%s\0' --extension "$RZR_BIN/../.pi/extensions/rozoro-watchtower.ts"
       [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]     && printf '%s\0%s\0' --thinking "$effort"
       [ -n "$permmode" ]   && printf '%s\0' --approve

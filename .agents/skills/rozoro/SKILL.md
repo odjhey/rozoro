@@ -191,20 +191,15 @@ answer itself, but whether the answer already exists.
    nudge. On that nudge run `./bin/rozoro reconcile` to read verdicts and ack the
    generation, then `./bin/rozoro status <id>`. `/rozoro-monitor status` reports Pi
    adapter health; `./bin/rozoro monitor status --json` reports daemon health.
-   A resident Codex (or any legacy/unsupported-Claude) watchtower still registers
-   the validated target once (`./bin/rozoro register --harness <h>`), then runs
-   `./bin/rozoro watch --once --wake <ids>` from a genuinely external background
-   task: it delivers a fixed, content-free nudge on settled `idle`, `done`, or
-   `blocked` edges through the registered backend, backed by a durable
-   at-least-once ledger. `./bin/rozoro list` polling is
-   only a fallback. `state/<id>.status` is produced by the active watcher. Either
-   way, `done`/`idle` means the agent ended a turn — not that the task is correct
-   or landed.
+   `rzr-watch` wake options are disabled in normal operation. They require the
+   unmistakable `ROZORO_LEGACY_DIAGNOSTIC=1` marker and exist only for explicit
+   old-release diagnosis, never alongside a daemon-managed driver. `done`/`idle`
+   means the agent ended a turn — not that the task is correct or landed.
 4. On each edge, run `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
    answer via `./bin/rozoro send`; `waiting` → leave the crew alone unless status also
-   reports `action_required` (Stage 1 can't certify Herdr background activity, so
-   an uncertified `waiting` is actionable — see the README's status v2 section);
+   reports `action_required` (unknown or disconnected background state fails
+   closed and cannot certify `waiting`);
    a `[same]`/no-new-block on an idle edge means the crew
    ended a turn without reporting (e.g. backgrounded work) — nudge it. Status also
    prints any **unresolved OPEN items** (an earlier `needs-action`/`blocked`/`failed`

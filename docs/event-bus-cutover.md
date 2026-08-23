@@ -37,10 +37,11 @@ cursors, task identities, and `.meta` membership are not migrated or rewritten.
 
 ## Fresh install and health
 
-Run `./bin/rozoro monitor start`; managed Claude spawn/resume generates the
-version-pinned hook settings automatically, and a Pi watchtower extension
-registers with `monitor.sock` automatically. No `ROZORO_EVENT_BUS*` variable is
-required or supported.
+Managed Pi and supported-Claude launch/spawn/resume safely start the monitor
+concurrently and wait for its health endpoint before starting the adapter. A
+failed readiness check aborts launch. Pi is passed the checkout-owned extension
+explicitly even when its task cwd is another repository. No `ROZORO_EVENT_BUS*`
+variable is required or supported.
 
 Use `monitor status --json` to diagnose: daemon down (`running=false`), Herdr
 `connected`/`disconnected`, adapter-derived `unknown`, delivery `deferred`,
@@ -49,10 +50,20 @@ A live pane with a disconnected adapter remains `unknown`, never quiescent.
 
 ## Rollback
 
-Stop the daemon and restore the prior release. Task folders and handoffs are
-unchanged. Before starting an old watcher, ensure the daemon has no unacknowledged
-generation; otherwise reconcile on this release first. The prior release then
-resumes its JSON ledger. Do not run old and new owners concurrently.
+First reconcile until the selected driver's generation, delivered, and ACK
+cursors are equal. While the daemon is still running, transactionally tombstone
+its authority and remove the persistent marker, then stop it and restore the
+prior release:
+
+```sh
+./bin/rozoro rollback --driver <driver>
+./bin/rozoro monitor stop
+# restore prior release only now
+```
+
+The rollback command refuses unequal cursors and removes the marker only after
+the daemon commits the tombstone. Task folders and handoffs are unchanged. Do
+not run old and new owners concurrently.
 
 For a pre-v5/pre-v6 monitor schema downgrade, see
 [`docs/event-bus-rollback.md`](event-bus-rollback.md).

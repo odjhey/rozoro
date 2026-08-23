@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pure composition of durable handoff and watcher-owned runtime projection.
+# Compose the durable handoff contract with daemon-owned runtime projection.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 [ $# -ge 1 ] || rzr_die "usage: rzr-status.sh <id> [--json] [--peek]"

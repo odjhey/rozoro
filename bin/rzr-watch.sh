@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # rzr-watch.sh - event-driven fleet monitor.
 #
+# Diagnostics/legacy compatibility only. Wake/management options are disabled
+# unless ROZORO_LEGACY_DIAGNOSTIC=1 is explicitly set.
 # Usage:
-#   rzr-watch.sh [--once] [--wake|--wake-codex|--wake-herdr] [--driver <id>] [id ...]
+#   ROZORO_LEGACY_DIAGNOSTIC=1 rzr-watch.sh [--once] [--wake|--wake-codex|--wake-herdr] [--driver <id>] [id ...]
 #     (no ids) watch every known task; otherwise just the listed ids
 #     --once   exit after the first real edge (or first DELIVERED settled nudge
 #              when combined with a wake option)
@@ -49,6 +51,10 @@ while [ $# -gt 0 ]; do
     *)  WANT+=("$1"); shift ;;
   esac
 done
+
+if [ -n "$WAKE_REQUEST" ] && [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
+  rzr_die "legacy wake management is disabled; use ROZORO_LEGACY_DIAGNOSTIC=1 only for explicit diagnostics/old-release compatibility"
+fi
 
 # Resolve the wake backend + immutable identity + durable ledger dir up front so a
 # misconfigured watchtower fails before it subscribes. The nudge is a FIXED,

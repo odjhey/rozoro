@@ -76,6 +76,9 @@ case "$HARNESS" in
 esac
 EVENT_BUS=false
 [ "$HARNESS" = claude ] && EVENT_BUS=true
+if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
+  "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
+fi
 [ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
 if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then
