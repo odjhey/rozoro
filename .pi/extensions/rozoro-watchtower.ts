@@ -92,6 +92,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		startup?.abort();
+		busClient?.close();
+		busClient = undefined;
 		const controller = new AbortController();
 		startup = controller;
 		// Do not await Herdr readiness from session_start: Herdr cannot mark Pi
