@@ -193,6 +193,37 @@ def proven_owner(home: Path) -> tuple[int, dict]:
         raise
 
 
+def reset(home: Path, force: bool) -> int:
+    """Remove only daemon-owned event-bus state for an explicit schema rollback."""
+    if not force:
+        print("monitor reset requires --force; task folders are preserved", file=sys.stderr)
+        return 1
+    if health(home)["running"]:
+        print("monitor reset refused while daemon is running", file=sys.stderr)
+        return 1
+    try:
+        _, home_fd = _open_home(home, create=False)
+    except FileNotFoundError:
+        print("monitor state already absent")
+        return 0
+    try:
+        for name in ("monitor.db", "monitor.db-wal", "monitor.db-shm"):
+            try:
+                info = os.stat(name, dir_fd=home_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise RuntimeError(f"refusing unsafe state entry: {name}")
+            os.unlink(name, dir_fd=home_fd)
+    except Exception as exc:
+        print(f"monitor reset refused: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        os.close(home_fd)
+    print("event-bus database reset; task folders preserved")
+    return 0
+
+
 def stop(home: Path) -> int:
     lock_fd = None
     try:
@@ -223,12 +254,15 @@ def main() -> int:
     sub.add_parser("start")
     status_parser = sub.add_parser("status"); status_parser.add_argument("--json", action="store_true")
     sub.add_parser("stop")
+    reset_parser = sub.add_parser("reset")
+    reset_parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     home = home_path()
     if args.command == "run":
         os.execv(sys.executable, [sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)])
     if args.command == "start": return start(home)
     if args.command == "stop": return stop(home)
+    if args.command == "reset": return reset(home, args.force)
     result = health(home); print_status(result, args.json)
     return 0 if result["running"] else 1
 

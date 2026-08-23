@@ -50,6 +50,18 @@ class StoreTests(unittest.TestCase):
         connection.commit()
         return connection
 
+    def create_v3_database(self, items):
+        self.home.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.db)
+        connection.executescript(_MIGRATIONS[1])
+        connection.executescript(_MIGRATIONS[2])
+        connection.executescript(_MIGRATIONS[3])
+        connection.execute("PRAGMA user_version=3")
+        for item in items:
+            self.insert_v2_event(connection, item)
+        connection.commit()
+        connection.close()
+
     def assert_database_remains_v2(self):
         connection = sqlite3.connect(self.db, timeout=0)
         try:
@@ -91,6 +103,64 @@ class StoreTests(unittest.TestCase):
             ).fetchone())
         with EventStore(self.db) as reopened:
             self.assertEqual(reopened.schema_version, SCHEMA_VERSION)
+
+    def test_v3_upgrade_replays_registered_stop_into_projection(self):
+        register = event("register", 1, "session.register")
+        stopped = event("stop", 2, "turn.stop", background_active=False)
+        self.create_v3_database([register, stopped])
+        with EventStore(self.db) as store:
+            session = store._connection.execute(
+                "SELECT registered,foreground,background,availability FROM sessions"
+            ).fetchone()
+            self.assertEqual(tuple(session), (1, "stopped", "clear", "quiescent"))
+            projection = store.task_projection("task-1")
+            self.assertEqual((projection["availability"], projection["actionable_reason"]),
+                             ("quiescent", "missing-report"))
+        with EventStore(self.db) as reopened:
+            self.assertEqual(reopened._connection.execute(
+                "SELECT registered FROM sessions"
+            ).fetchone()[0], 1)
+            self.assertEqual(reopened.task_projection("task-1")["availability"], "quiescent")
+
+    def test_v3_upgrade_retains_unregistered_turn_without_task_projection(self):
+        self.create_v3_database([event("start", 1, "turn.start")])
+        with EventStore(self.db) as store:
+            session = store._connection.execute(
+                "SELECT registered,foreground,availability FROM sessions"
+            ).fetchone()
+            self.assertEqual(tuple(session), (0, "running", "busy"))
+            self.assertIsNone(store.task_projection("task-1"))
+        with EventStore(self.db) as reopened:
+            self.assertEqual(reopened.schema_version, SCHEMA_VERSION)
+            self.assertEqual(reopened._connection.execute(
+                "SELECT registered FROM sessions"
+            ).fetchone()[0], 0)
+
+    def test_v3_upgrade_replay_failure_rolls_back_schema_and_old_projections(self):
+        self.create_v3_database([event("register", 1, "session.register")])
+        connection = sqlite3.connect(self.db)
+        connection.execute(
+            "INSERT INTO task_projections(task_id,last_event_seq,projection_json) VALUES('legacy',7,'{\"old\":true}')"
+        )
+        connection.commit(); connection.close()
+
+        class FailingUpgrade(EventStore):
+            def _replay_v3_projections(self, connection):
+                super()._replay_v3_projections(connection)
+                raise RuntimeError("injected replay failure")
+
+        with self.assertRaisesRegex(RuntimeError, "injected replay failure"):
+            FailingUpgrade(self.db)
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute(
+                "SELECT projection_json FROM task_projections WHERE task_id='legacy'"
+            ).fetchone()[0], '{"old":true}')
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)")}
+            self.assertNotIn("registered", columns)
+        finally:
+            connection.close()
 
     def test_populated_v2_generation_state_is_rejected_without_version_bump(self):
         connection = self.create_v2_database()

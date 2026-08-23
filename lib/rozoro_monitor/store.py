@@ -156,7 +156,7 @@ _MIGRATIONS = {
         END;
     """,
     4: """
-        ALTER TABLE sessions ADD COLUMN registered INTEGER NOT NULL DEFAULT 1 CHECK(registered IN (0,1));
+        ALTER TABLE sessions ADD COLUMN registered INTEGER NOT NULL DEFAULT 0 CHECK(registered IN (0,1));
     """,
 }
 
@@ -280,10 +280,18 @@ class StoreTransaction:
 
 
 def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]:
-    report = parse_task_report(task_dir)
+    try:
+        report = parse_task_report(task_dir)
+    except (OSError, UnicodeError) as exc:
+        report = {
+            "blocks": 0, "acked_through": 0, "unresolved": 0, "open_items": [],
+            "latest": None, "protocol_errors": [f"unreadable handoff: {type(exc).__name__}"],
+        }
     latest = report["latest"]
-    verdict = None if latest is None else latest["fields"].get("verdict", "").casefold() or None
-    state = "missing" if report["blocks"] == 0 else ("invalid" if report["protocol_errors"] else "valid")
+    state = "malformed" if report["protocol_errors"] else ("missing" if report["blocks"] == 0 else "valid")
+    verdict = (None if latest is None else latest["fields"].get("verdict", "").casefold() or None)
+    if state != "valid":
+        verdict = None
     summary = {
         "state": state,
         "verdict": verdict,
@@ -297,22 +305,26 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
 
 
 def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
+    """Map projections exactly onto protocol v1's frozen report tuple matrix."""
+    report_state = report.get("state")
+    if report_state == "missing":
+        return "missing-report"
+    if report_state == "malformed":
+        return "malformed-report"
     verdict = report.get("verdict")
     if state.availability == "gone":
         return "gone"
-    if state.availability == "blocked" or verdict == "blocked":
-        return "blocked"
+    if verdict == "done":
+        return "quiescent" if state.availability == "quiescent" else "none"
+    if verdict == "waiting":
+        return "waiting-background" if state.availability == "waiting-background" else "unknown"
+    if verdict == "needs-action":
+        return "needs-action"
     if verdict == "failed":
         return "failed"
-    if report.get("external_action"):
-        return "external-action"
-    if state.availability != "quiescent":
-        return "none"
-    if report.get("state") == "missing":
-        return "missing-report"
-    if report.get("state") == "invalid":
-        return "invalid-report"
-    return "quiescent-turn"
+    if verdict == "blocked":
+        return "blocked"
+    raise ValueError("valid report has no protocol verdict")
 
 
 def _reduce_projection(
@@ -534,7 +546,27 @@ class EventStore:
                         statement = ""
                 if statement.strip():  # a migration constant is programmer-owned
                     raise RuntimeError(f"incomplete SQL in migration {version}")
+                if version == 4:
+                    self._replay_v3_projections(connection)
                 connection.execute(f"PRAGMA user_version={version}")
+
+    def _replay_v3_projections(self, connection: sqlite3.Connection) -> None:
+        """Derive registration and projections from v3's immutable event history."""
+        if connection.execute("SELECT COUNT(*) FROM generation_task_snapshots").fetchone()[0]:
+            raise RuntimeError("cannot upgrade schema 3 with generated projection snapshots")
+        connection.execute("DELETE FROM task_projections")
+        connection.execute("DELETE FROM sessions")
+        tx = StoreTransaction(connection)
+        for row in connection.execute(
+            "SELECT durable_seq,payload_json FROM events ORDER BY durable_seq"
+        ).fetchall():
+            try:
+                event = json.loads(row["payload_json"])
+                if not isinstance(event, dict):
+                    raise TypeError
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise RuntimeError("cannot upgrade schema 3: malformed event history") from exc
+            _reduce_projection(tx, event, int(row["durable_seq"]), self.tasks_dir)
 
     @property
     def schema_version(self) -> int:

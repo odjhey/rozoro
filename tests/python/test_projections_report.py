@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from lib.rozoro_monitor import protocol
 from lib.rozoro_monitor.handoff import parse, parse_task_report
 from lib.rozoro_monitor.store import EventStore
 
@@ -71,7 +72,7 @@ artifacts: none
             store.accept_event(event("start", 2, "turn.start", turn_id="turn-1"))
             before = self.projection(store)
             self.assertEqual(before["availability"], "busy")
-            self.assertEqual(before["actionable_reason"], "external-action")
+            self.assertEqual(before["actionable_reason"], "needs-action")
             self.assertEqual(before["projection_json"]["report"]["unresolved"], 1)
             (self.task / ".acked-blocks-v2").write_text("1\n")
             # ACK is filesystem/report authority and never changes SQLite by itself.
@@ -79,15 +80,15 @@ artifacts: none
             store.accept_event(event("stop", 3, "turn.stop", background_active=False))
             after = self.projection(store)
             self.assertEqual(after["availability"], "quiescent")
-            self.assertEqual(after["actionable_reason"], "quiescent-turn")
+            self.assertEqual(after["actionable_reason"], "needs-action")
             self.assertEqual(after["projection_json"]["report"]["acked_through"], 1)
 
     def test_structured_reasons_cover_invalid_failed_blocked_and_gone(self):
         cases = [
-            ("## turn 2 — bad\nverdict: done\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "turn.stop", {"background_active": False}, "invalid-report"),
+            ("## turn 2 — bad\nverdict: done\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "turn.stop", {"background_active": False}, "malformed-report"),
             ("## turn 1 — failed\nverdict: failed\nreason: broke\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "turn.start", {"turn_id": "t"}, "failed"),
             ("## turn 1 — blocked\nverdict: blocked\nreason: dependency\ndid: x\npending: wait\ninputs-needed: none\nartifacts: none\n", "turn.start", {"turn_id": "t"}, "blocked"),
-            ("", "session.end", {}, "gone"),
+            ("## turn 1 — done\nverdict: done\nreason:\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "session.end", {}, "gone"),
         ]
         for number, (handoff, kind, fields, expected) in enumerate(cases):
             with self.subTest(expected=expected):
@@ -136,6 +137,41 @@ artifacts: none
         malformed = parse(self.task / "handoff.md")
         self.assertTrue(malformed["protocol_errors"])
         self.assertEqual(malformed, parse_task_report(self.task))
+
+    def test_noncanonical_only_and_invalid_utf8_are_malformed_without_rejecting_event(self):
+        for number, content in enumerate((b"## notes\nprose\n", b"\xff\xfe")):
+            with self.subTest(number=number):
+                case = self.home / f"malformed-{number}"
+                task = case / "tasks" / "task-1"
+                task.mkdir(parents=True)
+                (task / "handoff.md").write_bytes(content)
+                with EventStore(case / "monitor.db") as store:
+                    accepted = store.accept_event(event(f"register-{number}", 1, "session.register"))
+                    self.assertFalse(accepted.duplicate)
+                    row = store.task_projection("task-1")
+                    self.assertEqual((row["report_state"], row["verdict"], row["actionable_reason"]),
+                                     ("malformed", None, "malformed-report"))
+                    self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
+
+    def test_every_persisted_report_tuple_validates_against_frozen_reconcile_protocol(self):
+        handoffs = (
+            "",
+            "## notes\nnoncanonical\n",
+            "## turn 1 — done\nverdict: done\nreason:\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n",
+            "## turn 1 — action\nverdict: needs-action\nreason: choose\ndid: x\npending: choice\ninputs-needed: choose\nartifacts: none\n",
+        )
+        for number, handoff in enumerate(handoffs):
+            case = self.home / f"tuple-{number}"
+            task = case / "tasks" / "task-1"
+            task.mkdir(parents=True)
+            (task / "handoff.md").write_text(handoff)
+            with EventStore(case / "monitor.db") as store:
+                store.accept_event(event(f"tuple-register-{number}", 1, "session.register"))
+                row = store.task_projection("task-1")
+                protocol.validate({"v": 1, "type": "reconcile.result", "request_id": "request-1",
+                    "through": 1, "reports": [{"task_id": "task-1", "generation": 1,
+                    "availability": row["availability"], "report_state": row["report_state"],
+                    "verdict": row["verdict"], "actionable_reason": row["actionable_reason"]}]})
 
 
 if __name__ == "__main__":
