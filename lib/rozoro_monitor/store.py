@@ -947,8 +947,8 @@ class EventStore:
                 "acked_generation": int(delivery[2]),
                 "pending_count": int(self._connection.execute(
                     """SELECT COUNT(DISTINCT p.task_id) FROM pending_generation_tasks p
-                       WHERE EXISTS (SELECT 1 FROM watchtower_deliveries d
-                                     WHERE p.generation>d.acked_generation)"""
+                       WHERE p.generation>(SELECT COALESCE(MIN(d.acked_generation),0)
+                                            FROM watchtower_deliveries d)"""
                 ).fetchone()[0]),
                 "drivers": drivers,
             }
