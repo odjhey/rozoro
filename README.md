@@ -473,6 +473,32 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps
   once before re-reading the handoff when a foreground settle event races its
   append; `0` disables the retry.
+- `ROZORO_EVENT_BUS` — opt-in, default `0`. `1` routes `status`/`reconcile`
+  through the resident daemon's API instead of the legacy JSON/v2 files,
+  adding normalized `availability`/`availability_source` fields on top of the
+  existing v2 output. Refuses to run while an active event-bus target
+  driver's legacy ledger still has `generation > ack`, naming
+  `ROZORO_EVENT_BUS_FALLBACK=1 ./bin/rozoro reconcile` to drain it first, and
+  fails loudly (rather than silently falling back) if the daemon socket is
+  unreachable. Disabled or unknown legacy drivers may carry independent
+  pending work of their own without blocking `status`/`reconcile` for
+  unrelated active drivers.
+- `ROZORO_EVENT_BUS_FALLBACK` — with `ROZORO_EVENT_BUS=1`, set to `1` to use
+  the legacy JSON/v2 read/reconcile path instead of the daemon. Once a clean
+  driver opts into the event bus, a private per-driver marker persistently
+  excludes legacy generation/delivery writers so both authorities cannot run.
+- `ROZORO_EVENT_BUS_DISABLE` — only with both flags above, set to `1` on an
+  explicit fallback `reconcile` to disable that driver's event-bus authority.
+  Disable is refused unless daemon generation, delivered, and ACK cursors are
+  equal, then atomically tombstones the driver and unregisters its adapter
+  before the local marker is removed; retrying after a lost response or a
+  crash between the tombstone and marker removal is safe and just finishes
+  removing the marker. Once tombstoned, `status` and `reconcile` query
+  durable daemon authority before touching the marker and never reactivate a
+  disabled driver — `reconcile` fails instead of falling back silently, and
+  legacy writers may resume. For the schema migration reset required by
+  pre-v6 generation snapshots, see
+  [`docs/event-bus-rollback.md`](docs/event-bus-rollback.md).
 
 ## Try it
 

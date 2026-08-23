@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterator, Mapping
 from .handoff import parse_task_report
 from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -182,6 +182,13 @@ _MIGRATIONS = {
             PRIMARY KEY(generation, task_id)
         );
     """,
+    6: """
+        ALTER TABLE generation_task_snapshots ADD COLUMN compat_complete INTEGER NOT NULL DEFAULT 0 CHECK(compat_complete IN (0,1));
+        CREATE TABLE disabled_drivers (
+            driver_id TEXT PRIMARY KEY,
+            disabled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+    """,
 }
 
 
@@ -295,9 +302,9 @@ class StoreTransaction:
         self._connection.execute(
             """INSERT INTO generation_task_snapshots(
                    generation,task_id,availability,report_state,verdict,actionable_reason,
-                   projection_generation,last_event_seq,projection_json)
+                   projection_generation,last_event_seq,projection_json,compat_complete)
                SELECT ?,task_id,availability,report_state,verdict,actionable_reason,
-                      projection_generation,last_event_seq,projection_json
+                      projection_generation,last_event_seq,projection_json,1
                FROM task_projections""",
             (generation,),
         )
@@ -326,15 +333,23 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
         # survives a later done block, encoded using protocol v1's frozen tuple.
         open_verdict = report["open_items"][0].get("verdict", "").casefold()
         verdict = open_verdict if open_verdict in {"needs-action", "failed", "blocked"} else "needs-action"
+    fields = {} if latest is None else latest.get("fields", {})
     summary = {
         "state": state,
         "verdict": verdict,
         "latest_verdict": latest_verdict,
         "blocks": report["blocks"],
         "acked_through": report["acked_through"],
+        "acked_source": report.get("acked_source", "none"),
         "unresolved": report["unresolved"],
+        "open_items": report["open_items"],
         "protocol_errors": report["protocol_errors"],
         "external_action": bool(report["open_items"]),
+        "heading": "" if latest is None else latest.get("heading", ""),
+        "reason": fields.get("reason", ""),
+        "pending": fields.get("pending", ""),
+        "inputs_needed": fields.get("inputs-needed", ""),
+        "artifacts": fields.get("artifacts", ""),
     }
     return state, verdict, summary
 
@@ -377,6 +392,7 @@ def _reduce_projection(
         report_state, verdict, report = _report_projection(tasks_dir / task_id)
         projection = {
             "task_id": task_id,
+            "folder_present": (tasks_dir / task_id).is_dir(),
             "session_id": event["session_id"],
             "foreground": result.state.foreground,
             "background": result.state.background,
@@ -565,6 +581,7 @@ class EventStore:
     def _migrate(self) -> None:
         with self._lock, self._immediate() as connection:
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            original_version = current
             if current > SCHEMA_VERSION:
                 raise RuntimeError(f"database schema {current} is newer than supported {SCHEMA_VERSION}")
             for version in range(current + 1, SCHEMA_VERSION + 1):
@@ -585,6 +602,9 @@ class EventStore:
                     self._replay_v3_projections(connection)
                 if version == 5:
                     self._validate_v4_delivery_upgrade(connection)
+                if version == 6:
+                    self._validate_v5_compat_upgrade(connection, reject_task_projections=original_version >= 4)
+                    connection.execute("UPDATE generation_task_snapshots SET compat_complete=1")
                 connection.execute(f"PRAGMA user_version={version}")
 
     @staticmethod
@@ -604,6 +624,26 @@ class EventStore:
         if generated:
             raise RuntimeError(
                 "cannot upgrade schema 4 with generation history: run `rozoro monitor reset --force`; task folders are preserved"
+            )
+
+    @staticmethod
+    def _validate_v5_compat_upgrade(connection: sqlite3.Connection, *, reject_task_projections: bool) -> None:
+        """v5 snapshots omitted immutable compatibility details and cannot be backfilled losslessly."""
+        task_rows = int(connection.execute("SELECT COUNT(*) FROM task_projections").fetchone()[0]) if reject_task_projections else 0
+        generated = task_rows + int(connection.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM generation_task_snapshots) +
+                 (SELECT COUNT(*) FROM pending_generations) +
+                 (SELECT COUNT(*) FROM pending_generation_tasks) +
+                 (SELECT COUNT(*) FROM watchtower_deliveries
+                    WHERE latest_generation<>0 OR delivered_generation<>0 OR acked_generation<>0) +
+                 (SELECT CASE WHEN CAST(value AS INTEGER)<>0 THEN 1 ELSE 0 END
+                    FROM daemon_metadata WHERE key='latest_generation')"""
+        ).fetchone()[0])
+        if generated:
+            raise RuntimeError(
+                "cannot upgrade schema 5 with generation snapshots lacking immutable report fields: "
+                "run `rozoro monitor reset --force`; task folders are preserved"
             )
 
     def _replay_v3_projections(self, connection: sqlite3.Connection) -> None:
@@ -731,6 +771,54 @@ class EventStore:
             ).fetchone()
             return None if row is None else dict(row)
 
+    def driver_authority(self, driver_id: str) -> str:
+        """Return durable authority without changing registration epochs or cursors."""
+        with self._lock:
+            if self._connection.execute("SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)).fetchone():
+                return "disabled"
+            if self._connection.execute("SELECT 1 FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)).fetchone():
+                return "active"
+            return "unknown"
+
+    def disable_driver_authority(self, driver_id: str) -> None:
+        """Atomically tombstone a clean driver; retry succeeds after uncertain response loss."""
+        with self._lock, self._immediate() as connection:
+            disabled = connection.execute(
+                "SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)
+            ).fetchone()
+            if disabled is not None:
+                registration = connection.execute(
+                    "SELECT 1 FROM watchtower_registrations WHERE driver_id=?", (driver_id,)
+                ).fetchone()
+                delivery = connection.execute(
+                    "SELECT 1 FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)
+                ).fetchone()
+                if registration is not None or delivery is not None:
+                    raise ValueError("disabled driver retains inconsistent active authority")
+                return
+            row = connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("unknown driver")
+            if not int(row[0]) == int(row[1]) == int(row[2]):
+                raise ValueError("cannot disable driver authority with pending generations")
+            connection.execute("INSERT OR IGNORE INTO disabled_drivers(driver_id) VALUES(?)", (driver_id,))
+            connection.execute("DELETE FROM watchtower_registrations WHERE driver_id=?", (driver_id,))
+            connection.execute("DELETE FROM watchtower_deliveries WHERE driver_id=?", (driver_id,))
+
+    def driver_snapshot(self, driver_id: str) -> dict[str, int]:
+        """Return one driver's exact generation cursors for CLI reconciliation."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if row is None:
+                return {"generation": 0, "delivered_generation": 0, "acked_generation": 0}
+            return {"generation": int(row[0]), "delivered_generation": int(row[1]), "acked_generation": int(row[2])}
+
     def health_snapshot(self) -> dict[str, Any]:
         """Return a consistent, read-only diagnostic snapshot."""
         with self._lock:
@@ -767,6 +855,8 @@ class EventStore:
     def register_driver(self, driver_id: str, session_id: str, harness: str) -> dict[str, Any]:
         """Bind a new connection epoch, including for same-session reconnects."""
         with self._lock, self._immediate() as connection:
+            if connection.execute("SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)).fetchone():
+                raise ValueError("driver authority is disabled for legacy fallback")
             current = connection.execute(
                 "SELECT harness,registration_epoch FROM watchtower_registrations WHERE driver_id=?",
                 (driver_id,),
@@ -978,9 +1068,24 @@ class EventStore:
             )
             return True
 
+    def _snapshot_rows(self, connection: sqlite3.Connection, through: int) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """SELECT s.* FROM generation_task_snapshots s
+               JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
+                     WHERE generation<=? GROUP BY task_id) latest
+                 ON latest.task_id=s.task_id AND latest.generation=s.generation
+               ORDER BY s.generation,s.task_id""", (through,)
+        ).fetchall()
+        if any(not int(row["compat_complete"]) for row in rows):
+            raise ValueError("generation snapshot lacks immutable compatibility fields")
+        return [{"task_id": row["task_id"], "generation": int(row["generation"]),
+                 "availability": row["availability"], "report_state": row["report_state"],
+                 "verdict": row["verdict"], "actionable_reason": row["actionable_reason"],
+                 "projection": json.loads(row["projection_json"])} for row in rows]
+
     def reconcile(self, driver_id: str, session_id: str, epoch: int,
                   through: int) -> list[dict[str, Any]]:
-        """Return the authoritative immutable per-task snapshot through N; never ACK."""
+        """Return the authoritative immutable per-task snapshot through N; never deliver or ACK."""
         with self._lock:
             self._require_registration(self._connection, driver_id, session_id, epoch)
             ledger = self._connection.execute(
@@ -988,17 +1093,71 @@ class EventStore:
             ).fetchone()
             if ledger is None or through > ledger[0]:
                 raise ValueError("unavailable generation")
-            rows = self._connection.execute(
-                """SELECT s.* FROM generation_task_snapshots s
-                   JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
-                         WHERE generation<=? GROUP BY task_id) latest
-                     ON latest.task_id=s.task_id AND latest.generation=s.generation
-                   ORDER BY s.generation,s.task_id""", (through,)
-            ).fetchall()
-            return [{"task_id": row["task_id"], "generation": int(row["generation"]),
-                     "availability": row["availability"], "report_state": row["report_state"],
-                     "verdict": row["verdict"], "actionable_reason": row["actionable_reason"]}
-                    for row in rows]
+            return self._snapshot_rows(self._connection, through)
+
+    def reconcile_delivered(self, driver_id: str) -> tuple[int, list[dict[str, Any]]]:
+        """Consume only the exact confirmed delivered-but-unacked offer, without changing cursors."""
+        with self._lock, self._immediate() as connection:
+            ledger = connection.execute(
+                "SELECT delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            registration = connection.execute(
+                "SELECT registration_epoch FROM watchtower_registrations WHERE driver_id=?", (driver_id,)
+            ).fetchone()
+            if ledger is None or registration is None:
+                raise ValueError("unknown driver")
+            delivered, acked = map(int, ledger)
+            if delivered <= acked:
+                return acked, []
+            confirmed = connection.execute(
+                "SELECT 1 FROM delivery_offers WHERE driver_id=? AND generation=? AND confirmed=1",
+                (driver_id, delivered),
+            ).fetchone()
+            if confirmed is None:
+                raise ValueError("delivered cursor has no exact confirmed offer")
+            # Prior registration epochs are invalidated by definition. An
+            # unconfirmed redelivery of the already-confirmed exact d is also a
+            # duplicate, not an older semantic delivery. Retire only those rows.
+            connection.execute(
+                """UPDATE delivery_offers SET confirmed=1
+                   WHERE driver_id=? AND confirmed=0
+                     AND (registration_epoch<? OR generation=?)""",
+                (driver_id, int(registration[0]), delivered),
+            )
+            older = connection.execute(
+                "SELECT 1 FROM delivery_offers WHERE driver_id=? AND generation<? AND confirmed=0 LIMIT 1",
+                (driver_id, delivered),
+            ).fetchone()
+            if older is not None:
+                raise ValueError("an older valid delivery offer remains unconfirmed")
+            return delivered, self._snapshot_rows(connection, delivered)
+
+    def ack_delivered(self, driver_id: str, through: int) -> bool:
+        """ACK an exact confirmed delivered cursor without registering or retiring offers."""
+        with self._lock, self._immediate() as connection:
+            ledger = connection.execute(
+                "SELECT delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if ledger is None:
+                raise ValueError("unknown driver")
+            delivered, acked = map(int, ledger)
+            if through == acked:
+                return False
+            if through != delivered or through < acked:
+                raise ValueError("ack must equal the exact delivered cursor")
+            unconfirmed = connection.execute(
+                "SELECT 1 FROM delivery_offers WHERE driver_id=? AND generation<=? AND confirmed=0 LIMIT 1",
+                (driver_id, through),
+            ).fetchone()
+            if unconfirmed is not None:
+                raise ValueError("cannot retire an unconfirmed delivery offer")
+            connection.execute(
+                "UPDATE watchtower_deliveries SET acked_generation=?,delivery_state='pending',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                (through, driver_id),
+            )
+            return True
 
     def ack_generation(self, driver_id: str, session_id: str, epoch: int, through: int) -> bool:
         """Advance ACK to exactly a delivered, consumed generation; never consume N+1."""
@@ -1019,9 +1178,9 @@ class EventStore:
                 "UPDATE watchtower_deliveries SET acked_generation=?,delivery_state='pending',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
                 (through, driver_id),
             )
-            # ACK is authoritative consumption. Retire stale unconfirmed
-            # redeliveries through that cursor so selection can expose N+1.
-            # Offers above a partial ACK remain available when d>a.
+            # Adapter ACKs may race a reconnect redelivery; preserve the phase-2
+            # registration contract here. The CLI uses ack_delivered(), which
+            # rejects rather than retires any unconfirmed offer.
             connection.execute(
                 "UPDATE delivery_offers SET confirmed=1 WHERE driver_id=? AND generation<=?",
                 (driver_id, through),

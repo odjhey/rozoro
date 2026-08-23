@@ -353,8 +353,8 @@ class MonitorServer:
             if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif message_type in {"health", "monitor.stop", "watchtower.register",
-                              "notification.delivered", "reconcile", "ack-generation"}:
+        elif message_type in {"health", "task.status", "driver.snapshot", "driver.disable", "driver.authority", "reconcile.pending", "reconcile.ack",
+                              "monitor.stop", "watchtower.register", "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -414,6 +414,42 @@ class MonitorServer:
                                  "spool_backlog": self._spool_backlog,
                                  "spool_errors": self._spool_errors, "pid": os.getpid(),
                                  "last_spool_error": self._last_spool_error}
+                    elif message["type"] == "task.status":
+                        assert self._store is not None
+                        projection = self._store.task_projection(message["task_id"])
+                        reply = {"v": 1, "type": "task.status.result", "request_id": message["request_id"],
+                                 "task_id": message["task_id"], "found": projection is not None}
+                        if projection is not None:
+                            detail = json.loads(projection["projection_json"])
+                            reply.update({"availability": projection["availability"],
+                                          "foreground": detail.get("foreground", "unknown"),
+                                          "background": detail.get("background", "unknown"),
+                                          "background_count": detail.get("background_count"),
+                                          "report_state": projection["report_state"],
+                                          "verdict": projection["verdict"],
+                                          "actionable_reason": projection["actionable_reason"]})
+                    elif message["type"] == "driver.snapshot":
+                        assert self._store is not None
+                        reply = {"v": 1, "type": "driver.snapshot.result", "request_id": message["request_id"],
+                                 "driver_id": message["driver_id"], **self._store.driver_snapshot(message["driver_id"])}
+                    elif message["type"] == "driver.disable":
+                        assert self._store is not None
+                        self._store.disable_driver_authority(message["driver_id"])
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                    elif message["type"] == "driver.authority":
+                        assert self._store is not None
+                        reply = {"v": 1, "type": "driver.authority.result", "request_id": message["request_id"],
+                                 "driver_id": message["driver_id"],
+                                 "authority": self._store.driver_authority(message["driver_id"])}
+                    elif message["type"] == "reconcile.pending":
+                        assert self._store is not None
+                        through, reports = self._store.reconcile_delivered(message["driver_id"])
+                        reply = {"v": 1, "type": "reconcile.pending.result",
+                                 "request_id": message["request_id"], "through": through, "reports": reports}
+                    elif message["type"] == "reconcile.ack":
+                        assert self._store is not None
+                        self._store.ack_delivered(message["driver_id"], message["through"])
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                     elif message["type"] == "monitor.stop":
                         reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                         request_shutdown = True

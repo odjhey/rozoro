@@ -29,7 +29,7 @@ load test_helper/common
   [ "$(cat "$ROZORO_HOME/tasks/task-1/handoff.md")" = authoritative ]
   run "$REPO_ROOT/bin/rozoro" monitor start; assert_success
   run "$REPO_ROOT/bin/rozoro" monitor status --json; assert_success
-  assert_output_contains '"schema_version":5'
+  assert_output_contains '"schema_version":6'
   run "$REPO_ROOT/bin/rozoro" monitor stop; assert_success
 }
 

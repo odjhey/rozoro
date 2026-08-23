@@ -69,6 +69,21 @@ drive() { run bash -c ". \"$REPO_ROOT/bin/rzr-lib.sh\"; dir=\"$ROZORO_HOME/watch
   assert_output_contains 'gen=24 tasks=24'
 }
 
+@test "legacy generation writers serialize behind the event-bus authority boundary" {
+  root="$ROZORO_HOME/watchtowers"; mkdir -p "$root"; chmod 700 "$root"
+  python3 - "$root/.authority.lock" "$BATS_TEST_TMPDIR/locked" <<'PY' &
+import fcntl,os,sys,time
+fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600); fcntl.flock(fd,fcntl.LOCK_EX)
+open(sys.argv[2],"w").close(); time.sleep(1); os.close(fd)
+PY
+  register_pid "$!"
+  for _ in $(seq 1 20); do [ -e "$BATS_TEST_TMPDIR/locked" ] && break; sleep .02; done
+  bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$root/d' task done" & writer=$!; register_pid "$writer"
+  sleep .1; kill -0 "$writer"
+  wait "$writer"; TEST_PIDS=""
+  [ "$(jq -r .generation "$root/d/pending.json")" = 1 ]
+}
+
 @test "action edge ID is idempotent across concurrent watchers" {
   dir="$ROZORO_HOME/watchtowers/d"; mkdir -p "$dir"
   for _ in 1 2 3 4 5 6 7 8; do bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$dir' task done 'task:42:turn-settled'" & register_pid "$!"; done

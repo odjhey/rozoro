@@ -25,6 +25,17 @@ while [ $# -gt 0 ]; do
 done
 
 DIR="$(rzr_resolve_driver_dir "$DRIVER")"
+
+if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_DISABLE:-0}" = 1 ]; then
+  python3 "$RZR_BIN/rzr-event-bus-client.py" authority-disable --driver "$(basename "$DIR")" >/dev/null
+fi
+
+if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" != 1 ]; then
+  args=(reconcile --driver "$(basename "$DIR")")
+  [ "$JSON" -eq 1 ] && args+=(--json)
+  exec python3 "$RZR_BIN/rzr-event-bus-client.py" "${args[@]}"
+fi
+
 GEN="$(rzr_ledger_int "$DIR" generation)"
 
 # Gather the affected tasks recorded in the ledger, newest snapshot wins. For each
