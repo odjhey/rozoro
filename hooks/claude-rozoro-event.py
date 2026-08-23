@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -106,11 +107,11 @@ def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: 
     """
     driver = base["driver_id"]
     path = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser() / "monitor.sock"
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + min(timeout, 0.65)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
         client.connect(str(path))
-        stream = client.makefile("rb")
+        stream = client.makefile("rb", buffering=0)
 
         def send(message: dict[str, Any]) -> None:
             frame = dict(message, v=1, request_id=uuid.uuid4().hex)
@@ -120,7 +121,9 @@ def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: 
             remaining = min(bound, deadline - time.monotonic())
             if remaining <= 0:
                 return None
-            client.settimeout(remaining)
+            readable, _, _ = select.select([client], [], [], remaining)
+            if not readable:
+                return None
             line = stream.readline()
             return json.loads(line) if line else None
 
@@ -134,15 +137,20 @@ def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: 
             return
         if not isinstance(snapshot, list) or snapshot:  # missing/malformed/nonempty fails closed
             return
-        send({"type": "notification.pending", "driver_id": driver})
-        reply = receive(timeout)
-        if not isinstance(reply, dict) or reply.get("type") != "ok":
-            return
-        try:
+        notification = None
+        # A normal generation first opens the daemon's 350ms collection window.
+        # Keep the same registered connection/coalescer and poll within this
+        # hook's single deadline; reconnecting would restart the window forever.
+        while deadline - time.monotonic() > NOTIFICATION_READ_BUDGET:
+            send({"type": "notification.pending", "driver_id": driver})
+            reply = receive(timeout)
+            if not isinstance(reply, dict) or reply.get("type") != "ok":
+                return
             notification = receive(NOTIFICATION_READ_BUDGET)
-        except TimeoutError:
-            return
-        if not isinstance(notification, dict) or notification.get("type") != "notification":
+            if isinstance(notification, dict) and notification.get("type") == "notification":
+                break
+            notification = None
+        if notification is None:
             return
         generation = notification.get("generation")
         if not isinstance(generation, int):
@@ -193,9 +201,10 @@ def main() -> int:
             if remaining > 0:
                 try:
                     _watchtower_actuate(events[0], payload, remaining)
-                except (OSError, ValueError, TimeoutError, json.JSONDecodeError):
+                except (OSError, ValueError, TimeoutError, subprocess.SubprocessError,
+                        json.JSONDecodeError):
                     pass
-    except (ClientError, ValueError, OSError, json.JSONDecodeError):
+    except (ClientError, ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError):
         # Hooks must not alter unrelated Claude behavior. Invalid/uncertified
         # input emits no lifecycle claim rather than guessing.
         return 0
