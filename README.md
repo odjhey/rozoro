@@ -501,8 +501,9 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
 - ✅ Pi with gpt-5.6-sol/low: model/thinking/trust/system-prompt passthrough,
   native session linking, teardown, exact resume, and continued handoff context
-- ✅ Pi watchtower monitor: Herdr push subscription runs outside tool execution,
-  preserving interactive operator input while actionable edges trigger a turn
+- ✅ Pi watchtower monitor: the resident daemon's Herdr push subscription runs
+  outside tool execution, preserving interactive operator input while its
+  reconnecting adapter delivers a fixed reconcile follow-up on actionable edges
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
@@ -511,19 +512,26 @@ Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interr
 ### Status v2 and background-work boundary
 
 `rozoro status` is read-only: it never contacts Herdr and never writes any
-cursor (the old `.seen-blocks` miss-detector it used to advance is gone). The
-watcher owns `state/<id>.runtime.json`, while the append-only handoff and
-`.acked-blocks-v2` own task reporting and FIFO acknowledgement.
+cursor (the old `.seen-blocks` miss-detector it used to advance is gone). For
+managed Pi and supported Claude, the resident daemon owns the runtime
+projection; `state/<id>.runtime.json` and its watcher remain only as the
+explicit legacy-diagnostic fallback (see
+[`docs/event-bus-cutover.md`](docs/event-bus-cutover.md)). The append-only
+handoff and `.acked-blocks-v2` own task reporting and FIFO acknowledgement.
 `runtime_status`, `foreground_status`, `background_activity`, `task_status`, and
 `turn_report_status` are independent axes; `done` is a runtime/crew assertion,
 not user acceptance.
 
 A crew may report `verdict: waiting` only with useful reason/pending text and no
-requested input. **Herdr 0.8.2 does not expose normalized background jobs**, so
-this Stage 1 release reports background support/count as unknown and treats every
-waiting report as `inconsistent-wait` (actionable). It does not inspect terminal
-text or Claude footers. Certified wait suppression and final-job wake are Stage
-2, gated on a Herdr release providing harness-neutral capability discovery,
-synchronized active counts/opaque job IDs, ordered revisions and final-zero
-success/failure/cancellation events. Acceptance and timeouts remain driver/user
-policy.
+requested input. Supported Claude hooks publish certified
+`background.start`/`background.stop`/`background.snapshot` events through the
+daemon, so a genuine background job reports `waiting-background` instead of
+`inconsistent-wait`. **Herdr 0.8.2 does not expose normalized background jobs**,
+so managed Pi and Herdr-only harnesses (Copilot, Codex, legacy `rzr-watch`)
+still report background support/count as unknown and treat every waiting
+report as `inconsistent-wait` (actionable); status does not inspect terminal
+text or Claude footers as a substitute. Certified wait suppression and
+final-job wake for those harnesses are gated on a Herdr release providing
+harness-neutral capability discovery, synchronized active counts/opaque job
+IDs, ordered revisions and final-zero success/failure/cancellation events.
+Acceptance and timeouts remain driver/user policy.
