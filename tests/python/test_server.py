@@ -382,6 +382,17 @@ class ServerProcessTests(unittest.TestCase):
                     "harness": "pi", "driver_id": "driver-1"}).encode())
                 correlated = protocol.decode(stream.readline())
                 self.assertEqual(correlated, {"v": 1, "type": "ok", "request_id": request_id})
+                poll_id = f"poll-open-{request_id}"
+                stream.write(protocol.encode({"v": 1, "type": "notification.pending",
+                    "request_id": poll_id, "driver_id": "driver-1"}).encode())
+                self.assertEqual(protocol.decode(stream.readline()),
+                                 {"v": 1, "type": "ok", "request_id": poll_id})
+                time.sleep(0.36)
+                poll_id = f"poll-due-{request_id}"
+                stream.write(protocol.encode({"v": 1, "type": "notification.pending",
+                    "request_id": poll_id, "driver_id": "driver-1"}).encode())
+                self.assertEqual(protocol.decode(stream.readline()),
+                                 {"v": 1, "type": "ok", "request_id": poll_id})
                 self.assertEqual(protocol.decode(stream.readline())["type"], "notification")
 
             streams[0].write(protocol.encode({"v": 1, "type": "reconcile", "request_id": "stale",
