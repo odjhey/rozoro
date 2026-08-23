@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import os
+import resource
 import signal
 import socket
 import sqlite3
@@ -46,10 +47,14 @@ class ServerProcessTests(unittest.TestCase):
     def socket_path(self):
         return self.home / "monitor.sock"
 
-    def start(self, wait=True):
+    def start(self, wait=True, env=None, nofile=None):
+        def limit_files():
+            if nofile is not None:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
         process = subprocess.Popen(
             [sys.executable, str(DAEMON), "--home", str(self.home)],
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, **(env or {})}, preexec_fn=limit_files if nofile else None,
         )
         self.processes.append(process)
         if wait:
@@ -97,6 +102,9 @@ class ServerProcessTests(unittest.TestCase):
         duplicate = self.exchange(event(1))
         self.assertEqual(duplicate["durable_seq"], next(r["durable_seq"] for r in replies
                                                         if r["event_id"] == "event-1"))
+        conflict = self.exchange({**event(1), "task_id": "task-conflict"})
+        self.assertEqual(conflict, {"v": 1, "type": "event.error",
+                                    "event_id": "event-1", "code": "invalid-event"})
         # Receipt of ACK proves the transaction is visible to an independent connection.
         db = sqlite3.connect(self.home / "monitor.db")
         try:
@@ -119,6 +127,64 @@ class ServerProcessTests(unittest.TestCase):
         healthy = self.exchange({"v": 1, "type": "health", "request_id": "after-errors"}, connection)
         self.assertEqual(healthy["type"], "health.result")
         connection.close()
+        self.assertEqual(self.health()["type"], "health.result")
+
+    def test_validation_errors_preserve_only_safe_correlation_and_deep_json_recovers(self):
+        self.start()
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(3)
+        connection.connect(str(self.socket_path))
+        invalid_event = {**event(1)}
+        del invalid_event["task_id"]
+        connection.sendall((json.dumps(invalid_event) + "\n").encode())
+        self.assertEqual(protocol.decode(connection.recv(4096)),
+                         {"v": 1, "type": "event.error", "event_id": "event-1",
+                          "code": "invalid-event"})
+        connection.sendall(b'{"v":1,"type":"health","request_id":"req-safe","extra":1}\n')
+        self.assertEqual(protocol.decode(connection.recv(4096)),
+                         {"v": 1, "type": "request.error", "request_id": "req-safe",
+                          "code": "invalid-field"})
+        connection.sendall((b"[" * 2000) + b"0" + (b"]" * 2000) + b"\n")
+        self.assertIn(protocol.decode(connection.recv(4096))["code"],
+                      {"invalid-json", "invalid-message"})
+        self.assertEqual(self.exchange(
+            {"v": 1, "type": "health", "request_id": "after-deep"}, connection
+        )["type"], "health.result")
+        connection.close()
+
+    def test_idle_deadline_and_client_cap_refuse_deterministically(self):
+        self.start(env={"ROZORO_MONITOR_MAX_CLIENTS": "3",
+                        "ROZORO_MONITOR_READ_TIMEOUT": "0.25"})
+        idle = []
+        for _ in range(3):
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(2)
+            client.connect(str(self.socket_path))
+            idle.append(client)
+        refused = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        refused.settimeout(2)
+        refused.connect(str(self.socket_path))
+        self.assertEqual(protocol.decode(refused.recv(4096))["code"], "server-busy")
+        refused.close()
+        for client in idle:
+            self.assertEqual(protocol.decode(client.recv(4096))["code"], "read-timeout")
+            client.close()
+        self.assertEqual(self.health()["type"], "health.result")
+
+    def test_low_fd_limit_reserves_capacity_and_refuses_before_emfile(self):
+        self.start(env={"ROZORO_MONITOR_READ_TIMEOUT": "0.2"}, nofile=24)
+        clients = []
+        try:
+            for _ in range(8):
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(2)
+                client.connect(str(self.socket_path))
+                clients.append(client)
+            replies = [protocol.decode(client.recv(4096)) for client in clients]
+            self.assertIn("server-busy", {reply["code"] for reply in replies})
+        finally:
+            for client in clients:
+                client.close()
         self.assertEqual(self.health()["type"], "health.result")
 
     def test_sigterm_cleans_socket_and_sigkill_restart_recovers_stale_socket(self):
@@ -158,6 +224,61 @@ class ServerProcessTests(unittest.TestCase):
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=5)
 
+    def test_symlink_and_non_socket_entries_never_touch_external_targets(self):
+        for entry in ("monitor.lock", "monitor.db", "monitor.sock"):
+            with self.subTest(entry=entry):
+                case_home = Path(self.temp.name) / f"home-{entry}"
+                case_home.mkdir(mode=0o700)
+                external = Path(self.temp.name) / f"external-{entry}"
+                external.write_text("sentinel")
+                os.chmod(external, 0o644)
+                (case_home / entry).symlink_to(external)
+                process = subprocess.Popen(
+                    [sys.executable, str(DAEMON), "--home", str(case_home)], cwd=ROOT,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.processes.append(process)
+                self.assertNotEqual(process.wait(timeout=5), 0)
+                self.assertEqual(external.read_text(), "sentinel")
+                self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
+                self.assertTrue((case_home / entry).is_symlink())
+
+        case_home = Path(self.temp.name) / "home-regular-socket"
+        case_home.mkdir(mode=0o700)
+        regular = case_home / "monitor.sock"
+        regular.write_text("do-not-unlink")
+        process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(case_home)],
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.processes.append(process)
+        self.assertNotEqual(process.wait(timeout=5), 0)
+        self.assertEqual(regular.read_text(), "do-not-unlink")
+
+    def test_backlog_full_or_timeout_probe_is_treated_as_live(self):
+        self.home.mkdir(mode=0o700)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(self.socket_path))
+        listener.listen(0)
+        fillers = []
+        try:
+            # Fill the tiny accept queue; whether the next connect times out or
+            # succeeds, the daemon must conservatively preserve this live socket.
+            for _ in range(4):
+                filler = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                filler.settimeout(0.05)
+                try:
+                    filler.connect(str(self.socket_path))
+                    fillers.append(filler)
+                except OSError:
+                    filler.close()
+                    break
+            process = self.start(wait=False)
+            self.assertEqual(process.wait(timeout=5), 2)
+            self.assertTrue(self.socket_path.exists())
+        finally:
+            for filler in fillers:
+                filler.close()
+            listener.close()
+
     def test_connectable_socket_is_never_unlinked_when_lock_is_available(self):
         self.home.mkdir(mode=0o700)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -166,7 +287,7 @@ class ServerProcessTests(unittest.TestCase):
         try:
             process = self.start(wait=False)
             self.assertEqual(process.wait(timeout=5), 2)
-            self.assertIn("refusing connectable", process.stderr.read().decode())
+            self.assertIn("refusing live or indeterminate", process.stderr.read().decode())
             probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             probe.connect(str(self.socket_path))
             probe.close()

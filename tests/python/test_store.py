@@ -216,6 +216,16 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(calls, [first.durable_seq])
             self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
 
+    def test_duplicate_event_id_with_different_envelope_is_rejected(self):
+        with EventStore(self.db) as store:
+            first = store.accept_event(event())
+            with self.assertRaisesRegex(ValueError, "conflicts with its durable envelope"):
+                store.accept_event(event(task_id="task-other"))
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
+            self.assertEqual(store._connection.execute(
+                "SELECT task_id FROM events WHERE durable_seq=?", (first.durable_seq,)
+            ).fetchone()[0], "task-1")
+
     def test_concurrent_duplicate_ingestion_is_serialized(self):
         calls = []
         with EventStore(self.db) as store:

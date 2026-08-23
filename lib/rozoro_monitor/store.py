@@ -441,10 +441,12 @@ class EventStore:
         payload = json.dumps(dict(event), sort_keys=True, separators=(",", ":"))
         with self._lock, self._immediate() as connection:
             duplicate = connection.execute(
-                "SELECT durable_seq FROM events WHERE event_id=?", (event["event_id"],)
+                "SELECT durable_seq,payload_json FROM events WHERE event_id=?", (event["event_id"],)
             ).fetchone()
             if duplicate is not None:
-                return AcceptedEvent(int(duplicate[0]), True)
+                if duplicate["payload_json"] != payload:
+                    raise ValueError(f"event_id {event['event_id']!r} conflicts with its durable envelope")
+                return AcceptedEvent(int(duplicate["durable_seq"]), True)
             cursor = connection.execute(
                 """INSERT INTO events(event_id,session_id,task_id,driver_id,event_type,payload_json)
                    VALUES(?,?,?,?,?,?)""",
