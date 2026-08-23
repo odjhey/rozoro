@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isTaskKey, observeProjection, type WatchProjection } from "./rozoro-watchtower-observer.ts";
-import { RozoroEventBusClient, WAKE_CONTENT } from "./rozoro-event-bus-client.ts";
+import { herdrDriverId, RozoroEventBusClient, WAKE_CONTENT } from "./rozoro-event-bus-client.ts";
 
 const WATCHTOWER_MARKER = "rozoro **watchtower**";
 const STATUS_KEY = "rozoro-monitor";
@@ -164,8 +164,10 @@ export default function (pi: ExtensionAPI) {
 		const requested = process.env.ROZORO_WATCHTOWER === "1" || ctx.getSystemPrompt().includes(WATCHTOWER_MARKER);
 		if (!requested) return;
 		if (process.env.ROZORO_EVENT_BUS === "1" && process.env.ROZORO_EVENT_BUS_FALLBACK !== "1") {
-			const sessionId = process.env.PI_SESSION_ID || ctx.sessionManager.getSessionId();
-			const driverId = process.env.ROZORO_DRIVER_ID || `pi:${sessionId}`;
+			const sessionId = ctx.sessionManager.getSessionId();
+			const paneId = process.env.HERDR_PANE_ID;
+			if (!paneId) throw new Error("Rozoro event-bus Pi watchtower requires HERDR_PANE_ID");
+			const driverId = herdrDriverId(paneId);
 			busClient = new RozoroEventBusClient({
 				socketPath: join(rozoroHome, "monitor.sock"), sessionId, driverId,
 				onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
