@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,34 @@ class Actuator:
         if isinstance(result, BaseException):
             raise result
         return DeliveryResult(result)
+
+
+class ReentrantActuator:
+    def __init__(self, result):
+        self.coalescer = None
+        self.result = result
+        self.calls = 0
+        self.nested_result = "unset"
+
+    def deliver(self, notification):
+        self.calls += 1
+        self.nested_result = self.coalescer.poll()
+        return DeliveryResult(self.result)
+
+
+class BlockingActuator:
+    def __init__(self, result):
+        self.result = result
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def deliver(self, notification):
+        self.calls += 1
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("test release was not signalled")
+        return DeliveryResult(self.result)
 
 
 class CoalescerTests(unittest.TestCase):
@@ -116,6 +145,51 @@ class CoalescerTests(unittest.TestCase):
             store.ack_generation("driver", "watch", coalescer.epoch, 1)
             coalescer.poll(); self.clock.advance(.350); coalescer.poll()
             self.assertEqual([n.generation for n in actuator.notifications], [1, 2])
+
+    def test_reentrant_poll_is_suppressed_and_deferred_offer_retries_after_release(self):
+        with EventStore(self.db) as store:
+            actuator = ReentrantActuator(DeliveryStatus.DEFERRED)
+            coalescer = self.ready(store, actuator)
+            actuator.coalescer = coalescer
+            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DEFERRED)
+            self.assertIsNone(actuator.nested_result)
+            self.assertEqual(actuator.calls, 1)
+            actuator.result = DeliveryStatus.DELIVERED
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual(actuator.calls, 2)
+
+    def test_simultaneous_poll_invokes_once_and_mixed_result_releases_guard(self):
+        with EventStore(self.db) as store:
+            actuator = BlockingActuator(DeliveryStatus.DELIVERED)
+            coalescer = self.ready(store, actuator)
+            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            first = []
+            worker = threading.Thread(target=lambda: first.append(coalescer.poll()))
+            worker.start()
+            self.assertTrue(actuator.entered.wait(timeout=5))
+            # The loser is a deterministic no-op while delivery is in flight.
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(actuator.calls, 1)
+            actuator.release.set(); worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(first[0].status, DeliveryStatus.DELIVERED)
+            self.assertIsNone(coalescer.poll())
+            # ACK and a new generation prove the claim was released normally.
+            store.ack_generation("driver", "watch", coalescer.epoch, 1)
+            store.accept_event(event(2)); coalescer.poll(); self.clock.advance(.350)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual(actuator.calls, 2)
+
+    def test_invalid_result_and_exception_release_guard_for_exact_retry(self):
+        with EventStore(self.db) as store:
+            actuator = Actuator("invalid", RuntimeError("disconnect"), DeliveryStatus.DELIVERED)
+            coalescer = self.ready(store, actuator)
+            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.ERROR)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.ERROR)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual([n.generation for n in actuator.notifications], [1, 1, 1])
 
     def test_restart_and_reconnect_create_no_facts_or_synthetic_generations(self):
         with EventStore(self.db) as store:

@@ -9,6 +9,7 @@ offer; every other outcome leaves that offer pending for an identical retry.
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol
@@ -79,6 +80,9 @@ class Coalescer:
         self.clock = clock
         self.collection_window = collection_window
         self._collection: _Collection | None = None
+        # A non-reentrant claim suppresses both recursive actuator callbacks and
+        # simultaneous event-loop/thread polls without blocking either caller.
+        self._delivery_claim = threading.Lock()
 
     @property
     def deadline(self) -> float | None:
@@ -102,31 +106,38 @@ class Coalescer:
         if not immediate and priority != "urgent" and now < self._collection.deadline:
             return None
 
-        offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
-        if offer is None:
-            self._collection = None
+        if not self._delivery_claim.acquire(blocking=False):
+            # Another poll owns the exact offer. Suppression is a normal no-op,
+            # not an actuator error and not permission to duplicate delivery.
             return None
-        notification = Notification(**offer)
         try:
-            result = self.actuator.deliver(notification)
-        except Exception as exc:
-            # Timeout, disconnect, and uncertainty are errors, never implicit delivery.
-            result = DeliveryResult(DeliveryStatus.ERROR, type(exc).__name__)
-        if not isinstance(result, DeliveryResult):
-            result = DeliveryResult(DeliveryStatus.ERROR, "invalid actuator result")
-        if result.status is DeliveryStatus.DELIVERED:
-            self.store.confirm_delivery(
-                self.driver_id, self.session_id, self.epoch, notification.generation
-            )
-            self._collection = None
-        else:
-            state = (result.status.value if result.status in {
-                DeliveryStatus.DEFERRED, DeliveryStatus.ERROR
-            } else DeliveryStatus.ERROR.value)
-            self.store.record_delivery_outcome(
-                self.driver_id, self.session_id, self.epoch, notification.generation,
-                state, result.error,
-            )
-        # The unconfirmed delivery_offers row preserves the exact generation,
-        # priority, and count for deferred/error retries.
-        return result
+            offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
+            if offer is None:
+                self._collection = None
+                return None
+            notification = Notification(**offer)
+            try:
+                result = self.actuator.deliver(notification)
+            except Exception as exc:
+                # Timeout, disconnect, and uncertainty are errors, never implicit delivery.
+                result = DeliveryResult(DeliveryStatus.ERROR, type(exc).__name__)
+            if (not isinstance(result, DeliveryResult)
+                    or not isinstance(result.status, DeliveryStatus)):
+                result = DeliveryResult(DeliveryStatus.ERROR, "invalid actuator result")
+            if result.status is DeliveryStatus.DELIVERED:
+                self.store.confirm_delivery(
+                    self.driver_id, self.session_id, self.epoch, notification.generation
+                )
+                self._collection = None
+            else:
+                self.store.record_delivery_outcome(
+                    self.driver_id, self.session_id, self.epoch, notification.generation,
+                    result.status.value, result.error,
+                )
+            # The unconfirmed delivery_offers row preserves the exact generation,
+            # priority, and count for deferred/error retries.
+            return result
+        finally:
+            # Includes delivered, deferred, error, invalid result, timeout,
+            # disconnect, actuator exception, and durable-store exception paths.
+            self._delivery_claim.release()
