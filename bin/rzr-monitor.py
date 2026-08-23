@@ -41,19 +41,31 @@ def spool_count(home: Path) -> int:
 
 
 def exchange(home: Path, request: dict, timeout: float = 1.0) -> dict:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(timeout)
-        connection.connect(str(home / "monitor.sock"))
-        connection.sendall(protocol.encode(request).encode())
-        data = bytearray()
-        while not data.endswith(b"\n"):
-            chunk = connection.recv(65536)
-            if not chunk:
-                raise RuntimeError("socket closed before response")
-            data.extend(chunk)
-            if len(data) > protocol.MAX_FRAME_BYTES:
-                raise RuntimeError("response is oversized")
-    return protocol.decode(bytes(data))
+    _, home_fd = _open_home(home, create=False)
+    try:
+        before = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
+        if (not stat.S_ISSOCK(before.st_mode) or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) & 0o077):
+            raise RuntimeError("monitor.sock must be an owner-private socket")
+        identity = (before.st_dev, before.st_ino)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout)
+            connection.connect(str(home / "monitor.sock"))
+            connection.sendall(protocol.encode(request).encode())
+            data = bytearray()
+            while not data.endswith(b"\n"):
+                chunk = connection.recv(65536)
+                if not chunk:
+                    raise RuntimeError("socket closed before response")
+                data.extend(chunk)
+                if len(data) > protocol.MAX_FRAME_BYTES:
+                    raise RuntimeError("response is oversized")
+        after = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
+        if (after.st_dev, after.st_ino) != identity:
+            raise RuntimeError("monitor.sock identity changed during exchange")
+        return protocol.decode(bytes(data))
+    finally:
+        os.close(home_fd)
 
 
 def health(home: Path, timeout: float = 1.0) -> dict:
@@ -62,6 +74,8 @@ def health(home: Path, timeout: float = 1.0) -> dict:
         result = exchange(home, request, timeout)
         if result.get("type") != "health.result" or result.get("request_id") != request["request_id"]:
             raise RuntimeError("invalid health response")
+        if result.get("socket") != str(home / "monitor.sock"):
+            raise RuntimeError("health response names a different monitor socket")
         result.pop("v", None); result.pop("type", None); result.pop("request_id", None)
         return result
     except Exception as exc:
@@ -129,8 +143,8 @@ def start(home: Path) -> int:
 def proven_owner(home: Path) -> tuple[int, dict]:
     _, home_fd = _open_home(home, create=False)
     try:
-        lock_fd = os.open("monitor.lock", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                          dir_fd=home_fd)
+        lock_fd = os.open("monitor.lock", os.O_RDONLY | os.O_NONBLOCK
+                          | getattr(os, "O_NOFOLLOW", 0), dir_fd=home_fd)
         info = os.fstat(lock_fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                 or stat.S_IMODE(info.st_mode) & 0o077):
@@ -144,8 +158,9 @@ def proven_owner(home: Path) -> tuple[int, dict]:
         raw = os.read(lock_fd, 512)
         lock = json.loads(raw)
         socket_info = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
-        if not stat.S_ISSOCK(socket_info.st_mode) or socket_info.st_uid != os.geteuid():
-            raise RuntimeError("monitor.sock is not the owned socket")
+        if (not stat.S_ISSOCK(socket_info.st_mode) or socket_info.st_uid != os.geteuid()
+                or stat.S_IMODE(socket_info.st_mode) & 0o077):
+            raise RuntimeError("monitor.sock is not the owner-private socket")
         before = health(home)
         expected = (socket_info.st_dev, socket_info.st_ino)
         if (not before["running"] or int(lock["pid"]) != before["pid"]

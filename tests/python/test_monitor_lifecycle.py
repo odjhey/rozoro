@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -164,10 +165,59 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.5)
         self.assertEqual(external.read_text(), "sentinel")
 
+    def test_health_rejects_endpoint_claiming_a_different_socket_path(self):
+        self.home.mkdir(mode=0o700)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(self.home / "monitor.sock")); os.chmod(self.home / "monitor.sock", 0o600)
+        listener.listen()
+        def serve():
+            connection, _ = listener.accept()
+            try:
+                data = b""
+                while not data.endswith(b"\n"): data += connection.recv(4096)
+                request = protocol.decode(data)
+                reply = {"v": 1, "type": "health.result", "request_id": request["request_id"],
+                         "running": True, "socket": "/tmp/different-monitor.sock", "pid": os.getpid(),
+                         "schema_version": 3, "last_durable_seq": 0, "last_durable_time": None,
+                         "clients": 1, "task_count": 0, "driver_count": 0, "generation": 0,
+                         "delivered_generation": 0, "acked_generation": 0, "pending_count": 0,
+                         "spool_backlog": 0, "spool_errors": 0, "last_spool_error": None}
+                connection.sendall(protocol.encode(reply).encode())
+            finally: connection.close(); listener.close()
+        thread = threading.Thread(target=serve); thread.start()
+        result = self.cli("status", "--json")
+        thread.join(timeout=2)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(json.loads(result.stdout)["running"])
+
+    def test_cross_home_socket_symlink_never_adopts_or_stops_foreign_daemon(self):
+        foreign_home = self.home
+        self.start_daemon()
+        other = Path(self.temp.name) / "other"; other.mkdir(mode=0o700)
+        (other / "monitor.sock").symlink_to(foreign_home / "monitor.sock")
+        env = {**os.environ, "ROZORO_HOME": str(other)}
+        def other_cli(*args):
+            return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=env,
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  timeout=12)
+        status_result = other_cli("status", "--json")
+        self.assertNotEqual(status_result.returncode, 0)
+        self.assertFalse(json.loads(status_result.stdout)["running"])
+        self.assertNotEqual(other_cli("stop").returncode, 0)
+        self.assertNotEqual(other_cli("start").returncode, 0)
+        self.assertTrue(json.loads(self.cli("status", "--json").stdout)["running"])
+
     def test_stop_refuses_unlocked_corrupt_and_reused_pid_records_without_signal(self):
+        # FIFO stale locks must not block before their non-regular type is rejected.
+        self.home.mkdir(mode=0o700)
+        os.mkfifo(self.home / "monitor.lock", 0o600)
+        started = time.monotonic()
+        self.assertNotEqual(self.cli("stop").returncode, 0)
+        self.assertLess(time.monotonic() - started, 1.0)
+        (self.home / "monitor.lock").unlink()
+
         # A protocol-compatible foreign socket plus matching mutable JSON is not
         # enough: the lock must be actively held.
-        self.home.mkdir(mode=0o700)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(self.home / "monitor.sock")); listener.listen()
         socket_info = (self.home / "monitor.sock").lstat()
