@@ -216,6 +216,16 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(calls, [first.durable_seq])
             self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
 
+    def test_duplicate_event_id_with_different_envelope_is_rejected(self):
+        with EventStore(self.db) as store:
+            first = store.accept_event(event())
+            with self.assertRaisesRegex(ValueError, "conflicts with its durable envelope"):
+                store.accept_event(event(task_id="task-other"))
+            self.assertEqual(store._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
+            self.assertEqual(store._connection.execute(
+                "SELECT task_id FROM events WHERE durable_seq=?", (first.durable_seq,)
+            ).fetchone()[0], "task-1")
+
     def test_concurrent_duplicate_ingestion_is_serialized(self):
         calls = []
         with EventStore(self.db) as store:
@@ -375,6 +385,34 @@ class StoreTests(unittest.TestCase):
                 "SELECT foreground,background,availability,producer_seq FROM sessions"
             ).fetchone()
             self.assertEqual(tuple(state), ("stopped", "clear", "quiescent", 2))
+
+    def test_direct_db_symlink_is_rejected_without_target_mutation(self):
+        self.home.mkdir(parents=True, mode=0o700)
+        external = Path(self.temp.name) / "external.db"
+        external.write_bytes(b"sentinel")
+        os.chmod(external, 0o644)
+        self.db.symlink_to(external)
+        with self.assertRaises(OSError):
+            EventStore(self.db)
+        self.assertEqual(external.read_bytes(), b"sentinel")
+        self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
+        self.assertTrue(self.db.is_symlink())
+
+    def test_two_store_connections_serialize_writers_and_unique_sequences(self):
+        first = EventStore(self.db)
+        second = EventStore(self.db)
+        try:
+            def ingest(number):
+                store = first if number % 2 else second
+                return store.accept_event(event(f"event-{number}", number))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(ingest, range(1, 21)))
+            self.assertEqual({result.durable_seq for result in results}, set(range(1, 21)))
+            self.assertEqual(first._connection.execute("SELECT count(*) FROM events").fetchone()[0], 20)
+            self.assertEqual(first._connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        finally:
+            first.close()
+            second.close()
 
     def test_permissions_are_repaired_to_user_only(self):
         self.home.mkdir(parents=True, mode=0o777)

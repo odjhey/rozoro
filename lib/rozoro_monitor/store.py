@@ -2,7 +2,12 @@
 
 The store has one serialized connection and one transaction boundary for event
 insertion, lifecycle reduction, projection persistence, and actionable
-membership.  Socket/client code deliberately does not live here.
+membership. Socket/client code deliberately does not live here.
+
+Threat model: the owning effective UID is trusted. We reject other owners,
+unsafe pre-existing entries, direct symlinks/non-files, and insecure modes, but
+do not claim race-free protection against malicious concurrent mutation by the
+same UID. SQLite remains file-backed in WAL mode.
 """
 
 from __future__ import annotations
@@ -274,32 +279,67 @@ def _default_reducer(tx: StoreTransaction, event: Mapping[str, Any], durable_seq
 
 
 class EventStore:
-    """One connection and lock: the daemon's only SQLite write path."""
+    """File-backed SQLite store under an owning-effective-UID trust boundary."""
+
+    @staticmethod
+    def _validate_entry(directory_fd: int, name: str, *, create: bool = False) -> None:
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        if create:
+            flags |= os.O_CREAT
+        fd = os.open(name, flags, 0o600, dir_fd=directory_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise RuntimeError(f"unsafe SQLite state entry: {name}")
+            os.fchmod(fd, 0o600)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+                raise RuntimeError(f"could not make SQLite state private: {name}")
+        finally:
+            os.close(fd)
 
     def __init__(self, path: str | os.PathLike[str]):
-        self.path = Path(path)
+        self.path = Path(path).absolute()
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.path.parent, 0o700)
-        existed = self.path.exists()
-        if not existed:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
-            os.close(fd)
-        os.chmod(self.path, 0o600)
-        self._lock = threading.RLock()
-        self._connection = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys=ON")
-        self._connection.execute("PRAGMA journal_mode=WAL")
+        directory_fd = os.open(
+            self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
         try:
-            self._migrate()
-        except BaseException:
-            self._connection.close()
-            raise
-        # WAL sidecars inherit process umask; tighten any that already exist.
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(self.path) + suffix)
-            if sidecar.exists():
-                os.chmod(sidecar, 0o600)
+            directory_info = os.fstat(directory_fd)
+            if directory_info.st_uid != os.geteuid():
+                raise RuntimeError("SQLite directory must be owner-controlled")
+            os.fchmod(directory_fd, 0o700)
+            if stat.S_IMODE(os.fstat(directory_fd).st_mode) != 0o700:
+                raise RuntimeError("could not make SQLite directory private")
+            self._validate_entry(directory_fd, self.path.name, create=True)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    self._validate_entry(directory_fd, self.path.name + suffix)
+                except FileNotFoundError:
+                    pass
+
+            self._lock = threading.RLock()
+            self._connection = sqlite3.connect(
+                self.path, isolation_level=None, check_same_thread=False
+            )
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys=ON")
+            self._connection.execute("PRAGMA journal_mode=WAL")
+            try:
+                self._migrate()
+                # SQLite may create sidecars while enabling WAL/migrating. Under
+                # the accepted threat model the owning effective UID is trusted;
+                # directly reject unsafe resulting entries and chmod only fds.
+                for suffix in ("-wal", "-shm"):
+                    try:
+                        self._validate_entry(directory_fd, self.path.name + suffix)
+                    except FileNotFoundError:
+                        pass
+            except BaseException:
+                self._connection.close()
+                raise
+        finally:
+            os.close(directory_fd)
 
     def _commit(self) -> None:
         """Commit seam kept explicit for fault-injection durability tests."""
@@ -441,10 +481,12 @@ class EventStore:
         payload = json.dumps(dict(event), sort_keys=True, separators=(",", ":"))
         with self._lock, self._immediate() as connection:
             duplicate = connection.execute(
-                "SELECT durable_seq FROM events WHERE event_id=?", (event["event_id"],)
+                "SELECT durable_seq,payload_json FROM events WHERE event_id=?", (event["event_id"],)
             ).fetchone()
             if duplicate is not None:
-                return AcceptedEvent(int(duplicate[0]), True)
+                if duplicate["payload_json"] != payload:
+                    raise ValueError(f"event_id {event['event_id']!r} conflicts with its durable envelope")
+                return AcceptedEvent(int(duplicate["durable_seq"]), True)
             cursor = connection.execute(
                 """INSERT INTO events(event_id,session_id,task_id,driver_id,event_type,payload_json)
                    VALUES(?,?,?,?,?,?)""",

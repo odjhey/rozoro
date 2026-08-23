@@ -136,6 +136,8 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "background.snapshot": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "active_count": _NONNEGATIVE}, {"task_id": _ID, "driver_id": _ID}),
     "turn.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "background_active": _known_or_unknown_boolean}, {"task_id": _ID, "driver_id": _ID, "turn_id": _ID}),
     "session.end": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE}, {"task_id": _ID, "driver_id": _ID}),
+    "health": ({"request_id": _ID}, {}),
+    "health.result": ({"request_id": _ID, "schema_version": _POSITIVE, "clients": _NONNEGATIVE}, {}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
     "notification": ({"generation": _POSITIVE, "priority": _PRIORITY, "task_count": _NONNEGATIVE}, {}),
     "notification.delivered": ({"request_id": _ID, "driver_id": _ID, "generation": _POSITIVE}, {}),
@@ -146,7 +148,7 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "ack": ({"event_id": _ID, "durable_seq": _POSITIVE}, {}),
     # frame.error is the complete no-safe-correlation path.  It intentionally
     # supports every validation/framing code and carries no invented ID.
-    "frame.error": ({"code": _enum("invalid-json", "frame-too-large", "invalid-message", "invalid-version", "invalid-event", "invalid-field", "unsupported-type")}, {}),
+    "frame.error": ({"code": _enum("invalid-json", "frame-too-large", "invalid-message", "invalid-version", "invalid-event", "invalid-field", "unsupported-type", "read-timeout", "server-busy", "internal-error")}, {}),
     "event.error": ({"event_id": _ID, "code": _enum("invalid-event", "invalid-field", "unsupported-type")}, {}),
     "request.error": ({"request_id": _ID, "code": _enum("invalid-message", "invalid-field", "unsupported-type")}, {}),
 }
@@ -270,7 +272,7 @@ def decode(line: str | bytes) -> dict[str, Any]:
             parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
             object_pairs_hook=_unique_object,
         )
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise ProtocolError("invalid-json", "frame is not valid finite JSON") from exc
     return validate(message)
 
