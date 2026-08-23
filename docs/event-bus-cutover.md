@@ -54,6 +54,9 @@ unchanged. Before starting an old watcher, ensure the daemon has no unacknowledg
 generation; otherwise reconcile on this release first. The prior release then
 resumes its JSON ledger. Do not run old and new owners concurrently.
 
+For a pre-v5/pre-v6 monitor schema downgrade, see
+[`docs/event-bus-rollback.md`](event-bus-rollback.md).
+
 ## Release evidence
 
 G3 is the merged, reviewed exact-Claude-2.1.240 evidence in

@@ -185,19 +185,18 @@ answer itself, but whether the answer already exists.
    issue comments or repro steps into the brief, you're doing the crew's job.
 3. **Do not sit in a poll loop or occupy a foreground tool call with a watcher.**
    A foreground `./bin/rozoro watch` blocks the watchtower's model turn, so operator
-   messages queue behind it. In Pi, the project-local `rozoro-watchtower`
-   extension owns a long-lived Herdr push subscriber and injects
-   `[rozoro event]` messages on actionable edges; each names the validated task
-   for `./bin/rozoro status <id>`. This direct Pi path needs neither registration
-   nor `reconcile`; `/rozoro-monitor status` reports it and `/rozoro-monitor on`
-   repairs it. In a resident Codex or Claude
-   watchtower, register the validated target once (`./bin/rozoro register --harness
-   <h>`), then run `./bin/rozoro watch --once --wake <ids>` from a genuinely external
-   background task: it delivers a fixed, content-free nudge on settled `idle`,
-   `done`, or `blocked` edges through the registered backend (Codex queue, or the
-   Herdr pane for Claude — deferred while the driver is working/blocked), backed by
-   a durable at-least-once ledger. On the nudge run `./bin/rozoro reconcile` to read
-   verdicts and ack the generation. `./bin/rozoro list` polling is
+   messages queue behind it. Managed Pi and supported-Claude watchtowers instead
+   use the resident `rozorod` event bus: Pi's extension and the Claude watchtower
+   poller register with it automatically and deliver only a fixed reconciliation
+   nudge. On that nudge run `./bin/rozoro reconcile` to read verdicts and ack the
+   generation, then `./bin/rozoro status <id>`. `/rozoro-monitor status` reports Pi
+   adapter health; `./bin/rozoro monitor status --json` reports daemon health.
+   A resident Codex (or any legacy/unsupported-Claude) watchtower still registers
+   the validated target once (`./bin/rozoro register --harness <h>`), then runs
+   `./bin/rozoro watch --once --wake <ids>` from a genuinely external background
+   task: it delivers a fixed, content-free nudge on settled `idle`, `done`, or
+   `blocked` edges through the registered backend, backed by a durable
+   at-least-once ledger. `./bin/rozoro list` polling is
    only a fallback. `state/<id>.status` is produced by the active watcher. Either
    way, `done`/`idle` means the agent ended a turn — not that the task is correct
    or landed.
