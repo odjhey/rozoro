@@ -116,15 +116,19 @@ class Coalescer:
                     self._collection.generation = generation
             deadline = self._collection.deadline
 
-        # Urgent facts flush an existing normal window immediately.  A durable
-        # delivered-but-unacked wake still suppresses N+1 in Store.offer_notification.
-        if not immediate and priority != "urgent" and now < deadline:
-            return None
+            # Urgent facts flush an existing normal window immediately. A
+            # durable delivered-but-unacked wake still suppresses N+1.
+            if not immediate and priority != "urgent" and now < deadline:
+                return None
+            if not self._delivery_claim.acquire(blocking=False):
+                # Another poll owns the exact offer. Suppression is a normal
+                # no-op, not permission to duplicate delivery.
+                return None
+            # Publish the claimed frontier under the same bookkeeping lock as
+            # collection mutation. ACK cannot expose N+1 in the gap between
+            # claim acquisition and offer_notification returning.
+            self._in_flight_generation = generation
 
-        if not self._delivery_claim.acquire(blocking=False):
-            # Another poll owns the exact offer. Suppression is a normal no-op,
-            # not an actuator error and not permission to duplicate delivery.
-            return None
         try:
             offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
             if offer is None:
@@ -136,8 +140,6 @@ class Coalescer:
                         self._collection = None
                 return None
             notification = Notification(**offer)
-            with self._collection_lock:
-                self._in_flight_generation = notification.generation
             try:
                 result = self.actuator.deliver(notification)
             except Exception as exc:

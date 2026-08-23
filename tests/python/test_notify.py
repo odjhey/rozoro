@@ -232,6 +232,57 @@ class CoalescerTests(unittest.TestCase):
             self.assertEqual(actuator.calls, 2)
             self.assertEqual([item.generation for item in actuator.notifications], [1, 3])
 
+    def test_claim_publishes_frontier_before_paused_retry_offer_returns(self):
+        with EventStore(self.db) as store:
+            old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
+            store.accept_event(event(1))
+            store.offer_notification("driver", "old-watch", old_epoch)
+            store.confirm_delivery("driver", "old-watch", old_epoch, 1)
+            store.accept_event(event(2))
+
+            actuator = Actuator(DeliveryStatus.DEFERRED, DeliveryStatus.DEFERRED,
+                                DeliveryStatus.DELIVERED)
+            coalescer = self.ready(store, actuator, "watch")
+            # First reconnect redelivery is deferred, leaving exact offer N and
+            # an old collection deadline that will expire before retry.
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DEFERRED)
+            self.clock.advance(1.0)
+
+            returned = threading.Event()
+            release = threading.Event()
+            original_offer = store.offer_notification
+
+            def paused_offer(*args, **kwargs):
+                offer = original_offer(*args, **kwargs)
+                returned.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("paused offer was not released")
+                return offer
+
+            store.offer_notification = paused_offer
+            retry = []
+            worker = threading.Thread(target=lambda: retry.append(coalescer.poll()))
+            worker.start()
+            self.assertTrue(returned.wait(timeout=5))
+
+            # ACK after offer return exposes N+1. The concurrent poll must see
+            # the already-published N claim and open a fresh t=11.350 window,
+            # rather than reuse N's expired t=10.350 deadline.
+            store.ack_generation("driver", "watch", coalescer.epoch, 1)
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(coalescer.deadline, 11.350)
+            self.assertEqual(len(actuator.notifications), 1)
+
+            release.set(); worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(retry[0].status, DeliveryStatus.DEFERRED)
+            store.offer_notification = original_offer
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(len(actuator.notifications), 2)
+            self.clock.advance(.350)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual([item.generation for item in actuator.notifications], [1, 1, 2])
+
     def test_invalid_result_and_exception_release_guard_for_exact_retry(self):
         with EventStore(self.db) as store:
             actuator = Actuator("invalid", RuntimeError("disconnect"), DeliveryStatus.DELIVERED)

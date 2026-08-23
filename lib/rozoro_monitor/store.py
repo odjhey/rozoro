@@ -919,6 +919,17 @@ class EventStore:
                 (driver_id, epoch, session_id, generation),
             ).fetchone()
             if offer is None:
+                # Concurrent reconciliation may ACK and retire this exact
+                # in-flight offer before a deferred/error actuator returns.
+                consumed = connection.execute(
+                    """SELECT 1 FROM delivery_offers o JOIN watchtower_deliveries w
+                         ON w.driver_id=o.driver_id
+                       WHERE o.driver_id=? AND o.registration_epoch=? AND o.session_id=?
+                         AND o.generation=? AND o.confirmed=1 AND w.acked_generation>=?""",
+                    (driver_id, epoch, session_id, generation, generation),
+                ).fetchone()
+                if consumed is not None:
+                    return
                 raise ValueError("generation does not match the exact outstanding offer")
             connection.execute(
                 """UPDATE watchtower_deliveries SET delivery_state=?,last_error=?,
