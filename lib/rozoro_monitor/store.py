@@ -45,6 +45,9 @@ class ActionableChange:
     task_id: str
     reason: str
     priority: str = "normal"
+    # Infrastructure edges can be actionable while the frozen report tuple
+    # must retain its protocol-valid reason (for example valid/done/none).
+    preserve_projection_reason: bool = False
 
 
 ReducerHook = Callable[["StoreTransaction", Mapping[str, Any], int], Any]
@@ -285,11 +288,17 @@ class StoreTransaction:
             "INSERT INTO pending_generations(generation,priority) VALUES(?,?)",
             (generation, change.priority),
         )
-        updated = self._connection.execute(
-            """UPDATE task_projections SET projection_generation=?, actionable_reason=?
-               WHERE task_id=?""",
-            (generation, change.reason, change.task_id),
-        )
+        if change.preserve_projection_reason:
+            updated = self._connection.execute(
+                "UPDATE task_projections SET projection_generation=? WHERE task_id=?",
+                (generation, change.task_id),
+            )
+        else:
+            updated = self._connection.execute(
+                """UPDATE task_projections SET projection_generation=?, actionable_reason=?
+                   WHERE task_id=?""",
+                (generation, change.reason, change.task_id),
+            )
         if updated.rowcount != 1:
             raise ValueError(f"actionable task {change.task_id!r} has no projection")
         self._connection.execute(
@@ -792,6 +801,7 @@ class EventStore:
             ).fetchall()
             for row in rows:
                 state = _state_from_json(row["reducer_state_json"])
+                was_adapter_connected = state.adapter_connected
                 before = connection.execute(
                     "SELECT actionable_reason,projection_json FROM task_projections WHERE task_id=?", (task_id,)
                 ).fetchone()
@@ -825,10 +835,15 @@ class EventStore:
                     # Host/silence transitions are durable actionable edges,
                     # deduped by the prior projection reason and availability.
                     old_detail = {} if before is None else json.loads(before["projection_json"])
-                    if reason != "none" and (before is None or before["actionable_reason"] != reason
-                            or old_detail.get("availability") != state.availability):
+                    projection_changed = (before is None or before["actionable_reason"] != reason
+                                          or old_detail.get("availability") != state.availability)
+                    disconnected_edge = adapter_connected is False and was_adapter_connected
+                    if (reason != "none" and projection_changed) or disconnected_edge:
+                        edge_reason = "unknown" if disconnected_edge and reason == "none" else reason
                         StoreTransaction(connection).bump_actionable(ActionableChange(
-                            task_id, reason, "urgent" if reason in {"gone", "blocked", "failed", "needs-action"} else "normal"))
+                            task_id, edge_reason,
+                            "urgent" if edge_reason in {"gone", "blocked", "failed", "needs-action"} else "normal",
+                            preserve_projection_reason=(edge_reason != reason)))
 
     def driver_authority(self, driver_id: str) -> str:
         """Return durable authority without changing registration epochs or cursors."""

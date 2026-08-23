@@ -96,6 +96,7 @@ class MembershipMonitor:
         self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
         self._force_rebuild=False; self._dir_signature=None
         self._active_token=None; self._pane_epoch: dict[str,int]={}; self._apply_lock=asyncio.Lock()
+        self._route_generation: dict[str,int]={}
     def hint(self): self._wake.set()
     async def start(self):
         try: await self.scan(force=True)
@@ -134,24 +135,35 @@ class MembershipMonitor:
         changed=set(found) != set(self.members) or any(found[k].pane_id != self.members[k].pane_id for k in set(found)&set(self.members))
         if force or self._force_rebuild or changed:
             await self._replace(found); self._force_rebuild=False; return True
-        await self._levels(self.members); return False
+        levels_ok=await self._levels(self.members)
+        self.connected=bool(self.members) and levels_ok and self._consumer is not None and not self._consumer.done()
+        if self.connected and not self.last_scan_errors: self.last_error=None
+        elif not self.members: self.last_error="no resident members; configured Herdr socket untested"
+        return False
     async def _replace(self, found):
         panes=tuple(sorted({m.pane_id for m in found.values()})); new=self.subscriber(panes); consumer=None; previous=self.members
-        previous_token=self._active_token; token=object()
+        previous_token=self._active_token; previous_routes=dict(self._route_generation); token=object()
+        changed_tasks={task for task in set(previous)|set(found)
+                       if previous.get(task) != found.get(task)}
+        for task in changed_tasks:
+            self._route_generation[task]=self._route_generation.get(task,0)+1
+        routing={task:(member,self._route_generation.get(task,0)) for task,member in found.items()}
         try:
             await new.start(); self.members=dict(found); self._active_token=token
-            consumer=asyncio.create_task(self._consume(new,token,dict(found)))
+            consumer=asyncio.create_task(self._consume(new,token,routing))
             levels_ok=await self._levels(found)
             if consumer.done():
                 await consumer
                 raise ConnectionError("new Herdr stream died during level reconciliation")
         except Exception:
-            self.members=previous; self._active_token=previous_token
+            self.members=previous; self._active_token=previous_token; self._route_generation=previous_routes
             if consumer: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             await new.close(); raise
         old,old_consumer=self._subscription,self._consumer
-        self._subscription,self._consumer=new,consumer; self.connected=levels_ok
-        if not self.last_scan_errors: self.last_error=None
+        self._subscription,self._consumer=new,consumer
+        self.connected=bool(found) and levels_ok and not consumer.done()
+        if self.connected and not self.last_scan_errors: self.last_error=None
+        elif not found: self.last_error="no resident members; configured Herdr socket untested"
         # Both streams stay routed during the bounded drain. Old queued edges
         # are consumed before its transport is closed and task is cancelled.
         if old:
@@ -160,9 +172,11 @@ class MembershipMonitor:
             try: await asyncio.wait_for(old_consumer,self.drain_interval)
             except TimeoutError: old_consumer.cancel(); await asyncio.gather(old_consumer,return_exceptions=True)
             except Exception: pass  # the replacement was commonly caused by this stream failure
-    async def _apply(self,task_id,level,*,expected_epoch=None):
+    async def _apply(self,task_id,level,*,expected_epoch=None,expected_route=None):
         async with self._apply_lock:
             if expected_epoch is not None and self._pane_epoch.get(level.pane_id,0) != expected_epoch:
+                return
+            if expected_route is not None and self._route_generation.get(task_id,0) != expected_route:
                 return
             await self.reconcile(task_id,level)
     async def _levels(self,members):
@@ -175,14 +189,16 @@ class MembershipMonitor:
                 level=PaneLevel(member.pane_id,"unknown",None)
             if level.exists is None:
                 ok=False; self.connected=False; self.last_error=self.last_error or "Herdr level RPC unavailable"
-            await self._apply(member.task_id,level,expected_epoch=frontier)
+            await self._apply(member.task_id,level,expected_epoch=frontier,
+                              expected_route=self._route_generation.get(member.task_id,0))
         return ok
     async def _consume(self,sub,token,routing):
         try:
             async for level in sub.events():
                 self._pane_epoch[level.pane_id]=self._pane_epoch.get(level.pane_id,0)+1
-                for member in tuple(routing.values()):
-                    if member.pane_id==level.pane_id: await self._apply(member.task_id,level)
+                for member,route in tuple(routing.values()):
+                    if member.pane_id==level.pane_id:
+                        await self._apply(member.task_id,level,expected_route=route)
             raise ConnectionError("Herdr subscription ended")
         except asyncio.CancelledError: pass
         except Exception as exc:

@@ -50,6 +50,14 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
         (self.state/'a.meta').unlink(); await self.monitor.scan()
         self.assertEqual(self.subs[-1].panes,('p2',))
 
+    async def test_health_requires_members_and_rpc_truth_then_recovers(self):
+        await self.monitor.start()
+        self.assertFalse(self.monitor.connected); self.assertIn('untested',self.monitor.last_error)
+        (self.state/'a.meta').write_text('pane=p1\n'); self.levels['p1']=PaneLevel('p1','unknown',None)
+        await self.monitor.scan(); self.assertFalse(self.monitor.connected); self.assertTrue(self.monitor.last_error)
+        self.levels['p1']=PaneLevel('p1','idle',True)
+        await self.monitor.scan(); self.assertTrue(self.monitor.connected); self.assertIsNone(self.monitor.last_error)
+
     async def test_periodic_style_scan_repairs_missed_gone_and_reappear(self):
         (self.state/'a.meta').write_text('pane=p1\n'); self.levels['p1']=PaneLevel('p1','unknown',False)
         await self.monitor.start(); self.assertIn(('a',False,'unknown'),self.seen)
@@ -85,6 +93,22 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.01)
         self.assertIsNot(first, self.subs[-1]); self.assertTrue(self.monitor.connected)
 
+    async def test_old_replaced_route_cannot_resurrect_but_unrelated_old_route_drains(self):
+        (self.state/'a.meta').write_text('pane=p1\n'); (self.state/'b.meta').write_text('pane=pb\n')
+        self.levels['p1']=PaneLevel('p1','idle',True); self.levels['pb']=PaneLevel('pb','idle',True)
+        await self.monitor.start(); old=self.subs[-1]
+        (self.state/'a.meta').write_text('pane=p2\n'); self.levels['p2']=PaneLevel('p2','unknown',False)
+        replacing=asyncio.create_task(self.monitor.scan())
+        for _ in range(20):
+            if len(self.subs)>1: break
+            await asyncio.sleep(.005)
+        await old.queue.put(PaneLevel('p1','done',True))
+        await old.queue.put(PaneLevel('pb','done',True))
+        await replacing
+        self.assertNotIn(('a',True,'done'),self.seen)
+        self.assertIn(('a',False,'unknown'),self.seen)
+        self.assertIn(('b',True,'done'),self.seen)
+
     async def test_same_task_pane_replacement_rebuilds_but_field_rewrite_does_not(self):
         (self.state/'a.meta').write_text('pane=p1\n'); await self.monitor.start(); first=self.subs[-1]
         (self.state/'a.meta').write_text('pane=p2\n'); self.assertTrue(await self.monitor.scan())
@@ -119,6 +143,23 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[1]['params'],{"pane_id":"p1"})
         unknown=await read_pane_level(str(self.state/'missing.sock'),'p1',timeout=.05)
         self.assertIsNone(unknown.exists)
+
+    def test_certified_disconnect_from_quiescent_bumps_once_with_valid_frozen_tuple(self):
+        db=self.state/'disconnect.db'; task=self.state/'tasks'/'task-d'; task.mkdir(parents=True)
+        (task/'handoff.md').write_text('## turn 1 — done\nverdict: done\nreason: none\ndid: work\npending: none\ninputs-needed: none\nartifacts: none\n')
+        base={"v":1,"session_id":"session-d","harness":"claude","role":"crew","task_id":"task-d"}
+        with EventStore(db) as store:
+            store.accept_event({**base,"type":"session.register","event_id":"rd","producer_seq":1})
+            store.accept_event({**base,"type":"turn.stop","event_id":"sd","producer_seq":2,"background_active":False})
+            before=store.health_snapshot()['generation']
+            store.reconcile_herdr_liveness('task-d',pane_exists=True,adapter_connected=False)
+            after=store.health_snapshot()['generation']; self.assertEqual(after,before+1)
+            row=store.task_projection('task-d')
+            self.assertEqual((row['report_state'],row['verdict'],row['actionable_reason']),('valid','done','none'))
+            pending=store._connection.execute('SELECT actionable_reason FROM pending_generation_tasks WHERE generation=?',(after,)).fetchone()[0]
+            self.assertEqual(pending,'unknown')
+            store.reconcile_herdr_liveness('task-d',pane_exists=True,adapter_connected=False)
+            self.assertEqual(store.health_snapshot()['generation'],after)
 
     def test_store_gone_reappear_is_unknown_and_never_clears_native_active(self):
         db = self.state / 'monitor.db'; task = self.state / 'tasks' / 'task-1'; task.mkdir(parents=True)
