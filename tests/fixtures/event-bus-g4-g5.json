@@ -16,5 +16,5 @@
     {"case": "rollback", "interface": "rozoro rollback --driver", "result": "unequal cursors refuse; equal cursors tombstone daemon authority before marker removal; daemon is stopped only afterward"},
     {"case": "upgrade preservation", "interface": "schema migration and cutover refusal", "result": "dirty old ledger refuses; task, brief, append-only handoff, session link, and ACK cursors remain unchanged"}
   ],
-  "executable_sources": ["tests/cutover.bats", "tests/pi-cutover-additional.test.ts", "tests/pi-event-bus-adapter.test.ts", "tests/cli-event-bus.bats", "tests/python/test_herdr.py", "tests/python/test_server.py", "tests/python/test_store.py"]
+  "executable_sources": ["tests/cutover.bats", "tests/pi-extension-process.ts", "tests/rollback-process.py", "tests/pi-cutover-additional.test.ts", "tests/pi-event-bus-adapter.test.ts", "tests/cli-event-bus.bats", "tests/python/test_herdr.py", "tests/python/test_server.py", "tests/python/test_store.py"]
 }

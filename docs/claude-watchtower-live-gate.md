@@ -37,5 +37,5 @@ ready, retains a session-stable driver identity, and activates the existing lega
 poller proves registration readiness. Exact native resume creates a fresh
 adapter incarnation under the same native session/driver: SessionEnd remains a
 terminal fact for the old incarnation, while its `gone` state cannot poison the
-new registration. Owner death closes the poller socket promptly. No Pi/default
-cutover is included.
+new registration. Owner death closes the poller socket promptly. Production Pi
+and supported-Claude default cutover is completed by PR #63 after this G3 gate.

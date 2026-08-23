@@ -120,6 +120,18 @@ fi
 # for Claude because `claude --resume` does not re-apply its original system
 # prompt, and keeps the contract explicit for Codex and Pi resumes too. The follow-up
 # itself remains verbatim after the delimiter.
+if [ "$HARNESS" = pi ]; then
+  SYSFILE="$(rzr_task_dir "$ID")/sysprompt.md"
+  if [ ! -s "$SYSFILE" ]; then
+    rzr_render_handoff_protocol "$ID"
+    { printf 'rozoro-task: %s\n\n' "$ID"; cat "$(rzr_handoff_protocol_path "$ID")"; } > "$SYSFILE"
+    chmod 600 "$SYSFILE"
+  elif ! grep -Fxq "rozoro-task: $ID" "$SYSFILE"; then
+    TMP="$SYSFILE.task-marker.$$"
+    { printf 'rozoro-task: %s\n\n' "$ID"; cat "$SYSFILE"; } > "$TMP"
+    chmod 600 "$TMP"; mv "$TMP" "$SYSFILE"
+  fi
+fi
 if [ -n "$PROMPT" ]; then
   rzr_render_handoff_protocol "$ID"
   HANDOFF="$(rzr_handoff_protocol_path "$ID")"
@@ -190,7 +202,7 @@ do_resume() {
       [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
       ;;
     pi)
-      pass=(--session "$UUID")
+      pass=(--extension "$RZR_BIN/../.pi/extensions/rozoro-watchtower.ts" --session "$UUID")
       [ -n "$PERMMODE" ] && pass+=(--approve)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--thinking "$EFFORT")

@@ -50,8 +50,9 @@ These are deliberate. rozoro stays small by refusing to grow into them:
   — a dumb spawner, not a manager. Task prompts pass through verbatim; it never
   rewrites, filters, or approves what you tell the crew. The only injection is a
   preset's standing `rules`, and only as a separate appended system prompt.
-- **Not a daemon or always-on service.** No background process maintains state;
-  `state/<id>.status` exists only after a watcher has run.
+- **Not a remote workflow service.** The owner-private local `rozorod` daemon
+  maintains durable lifecycle/projection state; it does not schedule or judge
+  repository work and exposes no network service.
 - **Not a replacement for repo rules.** The crew loads the target repo's own
   `AGENTS.md` / `CLAUDE.md` / skills from its `--cwd`; rozoro never re-encodes them.
 - **Not a doer of domain work.** rozoro spawns "Resolve issue #NNN" and stays out

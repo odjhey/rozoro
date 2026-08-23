@@ -8,7 +8,8 @@ remain in [`../../../event-bus-cutover.md`](../../../event-bus-cutover.md).
 
 Planning task `rozorod-event-bus-planning--01M0MX7HZN0TNQ2D3WSAEMNRR3`
 converted the accepted design into eighteen bounded PRs and gates G0-G5. The
-implementation then landed on `master` in this order:
+implementation PRs 1-15 then landed on `master` in this order; PR 16 remains
+open on its release branch:
 
 | PR | Landed SHA | Slice | Coding task | Review task(s) |
 |---|---|---|---|---|
@@ -29,10 +30,10 @@ implementation then landed on `master` in this order:
 | [#62](https://github.com/odjhey/rozoro/pull/62) | `20e9cb0` | 15 Claude watchtower/G3 | `eventbus-15-claude-watchtower-live--01M0Q5XHHEA7BK6P1KVAPSH3EM` | `eventbus-15-g3-review--01M0Q98KC643AFMA5W9YB47YK9` |
 | [#63](https://github.com/odjhey/rozoro/pull/63) | current branch head | 16 production cutover/G4/G5 | `eventbus-16-cutover-docs--01M0QEYE3390YGWTN713R3SB4Y` | `eventbus-16-release-review--01M0QH6N3Q3X4C7FHJNTDMT09B` |
 
-PR #63 remains open and unmerged. Pi Sol high release review found G4/G5
-blockers at its first reviewed head; the cutover task is addressing those
-findings and must request re-review at the new exact head. Issue #25 remains open
-until the corrected cutover merges.
+PR #63 remains open and unmerged. Pi Sol high release review was requested at
+successive corrected heads and found additional G4/G5 blockers; the cutover task
+is addressing the latest findings before requesting final re-review. Issue #25
+remains open until the corrected cutover merges.
 
 After a stable Pi+Claude soak, the accepted sequence continues with PR 17
 (`eventbus/17-codex-adapter`) and PR 18 (`eventbus/18-copilot-adapter`). They are

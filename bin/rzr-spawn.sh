@@ -131,7 +131,8 @@ if [ "$EVENT_BUS" = true ]; then
 fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
-  { cat "$HANDOFF"
+  { printf 'rozoro-task: %s\n\n' "$ID"
+    cat "$HANDOFF"
     [ -n "$RULES" ] && printf '\n\n---\n## Crew rules\n\n%s\n' "$RULES"
   } > "$SYSFILE"
 elif [ -n "$PROMPT" ]; then

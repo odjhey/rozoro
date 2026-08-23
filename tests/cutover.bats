@@ -20,6 +20,40 @@ load test_helper/common
   rzr-monitor.sh stop >/dev/null
 }
 
+@test "production Pi spawn and resume extension publish exact task lifecycle" {
+  run rzr-spawn.sh task --cwd "$TEST_ROOT" --harness pi
+  assert_success
+  session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
+  sys="$ROZORO_HOME/tasks/task/sysprompt.md"
+  grep -Fxq 'rozoro-task: task' "$sys"
+  run node --experimental-strip-types "$REPO_ROOT/tests/pi-extension-process.ts" "$sys" "$session"
+  assert_success
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf '{"session_id":"%s","harness":"pi","cwd":"%s"}\n' "$session" "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run rzr-teardown.sh task --force; assert_success
+  run rzr-resume.sh task; assert_success
+  grep -F -- '--extension' "$FAKE_HERDR_LOG" >/dev/null
+  grep -Fxq 'rozoro-task: task' "$sys"
+  run node --experimental-strip-types "$REPO_ROOT/tests/pi-extension-process.ts" "$sys" "$session"
+  assert_success
+  run python3 - "$ROZORO_HOME/monitor.db" <<'PY'
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+rows=c.execute("select event_type,session_id,task_id from events where json_extract(payload_json,'$.harness')='pi' order by durable_seq").fetchall()
+assert [r[0] for r in rows]==['session.register','turn.start','turn.stop']*2, rows
+assert all(r[1] and r[2]=='task' for r in rows)
+assert len({r[1] for r in rows})==1
+PY
+  assert_success
+}
+
+@test "dirty refusal then clean rollback tombstones before marker removal" {
+  run rzr-monitor.sh start; assert_success
+  run python3 "$REPO_ROOT/tests/rollback-process.py" "$REPO_ROOT" "$ROZORO_HOME"
+  assert_success
+  run rzr-monitor.sh stop; assert_success
+}
+
 @test "monitor down health is explicit and per-driver diagnostics are empty" {
   run rzr-monitor.sh status --json; assert_failure
   assert_output_contains '"health_state":"down"'

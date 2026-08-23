@@ -388,7 +388,9 @@ JSON
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-pi'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'rozoro-task: task'
   assert_file_contains "$FAKE_HERDR_LOG" "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
