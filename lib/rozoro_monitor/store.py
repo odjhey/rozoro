@@ -992,20 +992,24 @@ class EventStore:
     def reconcile(self, driver_id: str, session_id: str, epoch: int,
                   through: int) -> list[dict[str, Any]]:
         """Return the authoritative immutable per-task snapshot through N; never ACK."""
-        with self._lock:
-            self._require_registration(self._connection, driver_id, session_id, epoch)
-            ledger = self._connection.execute(
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            ledger = connection.execute(
                 "SELECT latest_generation FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)
             ).fetchone()
             if ledger is None or through > ledger[0]:
                 raise ValueError("unavailable generation")
-            rows = self._connection.execute(
+            rows = connection.execute(
                 """SELECT s.* FROM generation_task_snapshots s
                    JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
                          WHERE generation<=? GROUP BY task_id) latest
                      ON latest.task_id=s.task_id AND latest.generation=s.generation
                    ORDER BY s.generation,s.task_id""", (through,)
             ).fetchall()
+            connection.execute(
+                "UPDATE watchtower_deliveries SET delivered_generation=MAX(delivered_generation,?),delivery_state='delivered',last_error=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                (through, driver_id),
+            )
             return [{"task_id": row["task_id"], "generation": int(row["generation"]),
                      "availability": row["availability"], "report_state": row["report_state"],
                      "verdict": row["verdict"], "actionable_reason": row["actionable_reason"]}

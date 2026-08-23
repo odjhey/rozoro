@@ -12,8 +12,7 @@ s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
 base={'v':1,'session_id':'crew-1','harness':'pi','role':'crew','task_id':'task-1'}
 s.accept_event({**base,'type':'session.register','event_id':'evt-register','producer_seq':1})
 accepted=s.accept_event({**base,'type':'turn.stop','event_id':'evt-stop','producer_seq':2,'background_active':False})
-r=s.register_driver('driver-1','adapter-1','pi'); offered=s.offer_notification('driver-1','adapter-1',r['epoch'])
-s.confirm_delivery('driver-1','adapter-1',r['epoch'],offered['generation'])
+s.register_driver('driver-1','adapter-1','pi')
 s.close()
 PY
   mkdir -p "$ROZORO_HOME/watchtowers/driver-1"
