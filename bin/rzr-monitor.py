@@ -60,10 +60,26 @@ def exchange(home: Path, request: dict, timeout: float = 1.0) -> dict:
                 data.extend(chunk)
                 if len(data) > protocol.MAX_FRAME_BYTES:
                     raise RuntimeError("response is oversized")
-        after = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
-        if (after.st_dev, after.st_ino) != identity:
-            raise RuntimeError("monitor.sock identity changed during exchange")
-        return protocol.decode(bytes(data))
+        result = protocol.decode(bytes(data))
+        stop_completed = (
+            request.get("type") == "monitor.stop"
+            and result == {"v": 1, "type": "ok", "request_id": request.get("request_id")}
+        )
+        if stop_completed:
+            # Deterministic process-test seam: model a client descheduled after
+            # receiving OK while the daemon completes socket cleanup.
+            delay = float(os.environ.get("ROZORO_MONITOR_TEST_STOP_POST_RESPONSE_DELAY", "0"))
+            if delay > 0:
+                time.sleep(delay)
+        try:
+            after = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if not stop_completed:
+                raise RuntimeError("monitor.sock disappeared during exchange")
+        else:
+            if (after.st_dev, after.st_ino) != identity:
+                raise RuntimeError("monitor.sock was replaced during exchange")
+        return result
     finally:
         os.close(home_fd)
 

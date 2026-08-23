@@ -245,6 +245,16 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.assertEqual(self.cli("stop").returncode, 0)
         self.assertIsNone(unrelated.poll())
 
+    def test_stop_succeeds_when_socket_unlinks_after_ok_before_client_postcheck(self):
+        process = self.start_daemon()
+        started = time.monotonic()
+        stopped = self.cli("stop", ROZORO_MONITOR_TEST_STOP_POST_RESPONSE_DELAY="0.3")
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertGreaterEqual(time.monotonic() - started, 0.3)
+        self.assertEqual(process.wait(timeout=2), 0)
+        self.assertFalse((self.home / "monitor.sock").exists())
+        self.assertFalse(json.loads(self.cli("status", "--json").stdout)["running"])
+
     def test_detached_start_status_stop_and_foreign_owner_refusal(self):
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)
