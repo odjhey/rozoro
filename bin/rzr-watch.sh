@@ -247,6 +247,9 @@ while IFS=$'\t' read -r pane _ st _ seq <&3; do
   # nudge a crew that had not started. `blocked` still wakes regardless of the
   # prior state: a stuck crew always needs attention.
   wake_this=$(printf '%s' "$projection" | jq -r 'if .action.required then 1 else 0 end')
+  # An explicitly opted-in Claude crew is shadow-produced by rozorod. The old
+  # watcher may still display it, but must never create a second wake generation.
+  [ "$(rzr_meta_get "$id" event_bus 2>/dev/null || true)" = true ] && wake_this=0
   if [ -n "$WAKE_BACKEND" ] && [ "$wake_this" -eq 1 ]; then
     # Persist the generation BEFORE any delivery attempt, then let the ledger
     # coalesce a burst to one outstanding nudge and defer while the driver is

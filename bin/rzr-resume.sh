@@ -74,6 +74,9 @@ case "$HARNESS" in
   claude|codex|copilot|pi) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
+EVENT_BUS=false
+[ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "$HARNESS" = claude ] && EVENT_BUS=true
+[ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
 if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then
   jq -e '
@@ -151,6 +154,7 @@ do_resume() {
   rzr_meta_set "$ID" fast "$FAST"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   rzr_meta_set "$ID" session "$UUID"
+  rzr_meta_set "$ID" event_bus "$EVENT_BUS"
   rzr_meta_set "$ID" resumed "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
   echo "rzr: resuming '$ID' (session $UUID) -> tab ${tab:-?} pane $pane (cwd $CWD)"
@@ -164,6 +168,9 @@ do_resume() {
       [ -n "$PERMMODE" ] && pass+=(--permission-mode "$PERMMODE")
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
+      if [ "$EVENT_BUS" = true ]; then
+        pass+=(--settings "$(rzr_claude_event_settings "$ID" "$UUID")")
+      fi
       ;;
     codex)
       pass=(resume "$UUID")

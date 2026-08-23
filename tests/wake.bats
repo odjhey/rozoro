@@ -35,6 +35,18 @@ register_claude_driver() {
   [ "$(jq -r '.delivery_state' "$ledger")" = delivered ]
 }
 
+@test "event-bus opted-in crew is excluded from legacy wake authority" {
+  register_claude_driver idle
+  write_meta task 'pane=p1' 'tab=t1' 'event_bus=true'
+  fake_status p1 working
+  start_event_server events 'p1,w1,done,claude'
+  run rzr-watch.sh --once --wake task
+  assert_success
+  ! grep -F $'CALL\tagent\tprompt\tdriver-pane' "$FAKE_HERDR_LOG"
+  ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
+  [ ! -e "$ledger" ]
+}
+
 @test "a settle that did not follow working never wakes the driver" {
   # A freshly-spawned crew boots shell -> unknown -> idle before it starts; that
   # first idle is not a finished turn and must not nudge the driver.

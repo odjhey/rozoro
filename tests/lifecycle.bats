@@ -33,6 +33,31 @@ load test_helper/common
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
+@test "Claude event-bus opt-in generates isolated hooks and exact launch identity" {
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
+  [ -n "$session" ]
+  [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = true ]
+  settings="$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  [ "$(stat -c '%a' "$settings")" = 600 ]
+  [ "$(jq '.hooks | keys | length' "$settings")" -eq 6 ]
+  command="$(jq -r '.hooks.Stop[0].hooks[0].command' "$settings")"
+  [[ "$command" == *"ROZORO_TASK_ID=task"* ]]
+  [[ "$command" == *"ROZORO_SESSION_ID=$session"* ]]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--session-id\t'"$session"
+  assert_file_contains "$FAKE_HERDR_LOG" $'--settings\t'"$settings"
+}
+
+@test "Claude default launch has no event hooks or identity behavior change" {
+  run rzr-spawn.sh task --cwd "$TEST_ROOT"
+  assert_success
+  [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = false ]
+  [ ! -e "$ROZORO_HOME/tasks/task/claude-event-settings.json" ]
+  ! grep -F -- '--settings' "$FAKE_HERDR_LOG"
+  ! grep -F -- '--session-id' "$FAKE_HERDR_LOG"
+}
+
 @test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
   mkdir -p "$ROZORO_HOME/crew"
   cat > "$ROZORO_HOME/crew/pi-worker.json" <<'JSON'
@@ -246,6 +271,16 @@ JSON
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-1'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
+}
+
+@test "Claude event-bus resume preserves exact session identity in generated hooks" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf '{"session_id":"uuid-1","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-resume.sh" task
+  assert_success
+  settings="$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  [[ "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")" == *"ROZORO_SESSION_ID=uuid-1"* ]]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--resume\tuuid-1\t--permission-mode\tauto\t--settings\t'"$settings"
 }
 
 @test "Codex resume reapplies durable model effort and fast tier" {
