@@ -136,6 +136,8 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "background.snapshot": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "active_count": _NONNEGATIVE}, {"task_id": _ID, "driver_id": _ID}),
     "turn.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "background_active": _known_or_unknown_boolean}, {"task_id": _ID, "driver_id": _ID, "turn_id": _ID}),
     "session.end": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE}, {"task_id": _ID, "driver_id": _ID}),
+    "health": ({"request_id": _ID}, {}),
+    "health.result": ({"request_id": _ID, "schema_version": _POSITIVE, "clients": _NONNEGATIVE}, {}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
     "notification": ({"generation": _POSITIVE, "priority": _PRIORITY, "task_count": _NONNEGATIVE}, {}),
     "notification.delivered": ({"request_id": _ID, "driver_id": _ID, "generation": _POSITIVE}, {}),
