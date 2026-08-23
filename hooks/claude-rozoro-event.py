@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code 2.1.240 lifecycle hook for opt-in Rozoro crew sessions.
+"""Claude Code 2.1.240 lifecycle hook for opt-in Rozoro crew and watchtower sessions.
 
 The hook deliberately extracts only opaque lifecycle identifiers and never
 publishes prompt, transcript, command, description, or assistant content.
