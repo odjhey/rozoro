@@ -1,4 +1,5 @@
 import concurrent.futures
+import errno
 import json
 import os
 import resource
@@ -140,10 +141,13 @@ class ServerProcessTests(unittest.TestCase):
         self.assertEqual(protocol.decode(connection.recv(4096)),
                          {"v": 1, "type": "event.error", "event_id": "event-1",
                           "code": "invalid-event"})
-        connection.sendall(b'{"v":1,"type":"health","request_id":"req-safe","extra":1}\n')
+        connection.sendall(b'{"v":1,"type":"health","request_id":"req-safe","event_id":"injected","extra":1}\n')
         self.assertEqual(protocol.decode(connection.recv(4096)),
                          {"v": 1, "type": "request.error", "request_id": "req-safe",
                           "code": "invalid-field"})
+        connection.sendall(b'{"v":1,"type":"future","event_id":"evt-injected","request_id":"req-injected"}\n')
+        ambiguous = protocol.decode(connection.recv(4096))
+        self.assertEqual(ambiguous, {"v": 1, "type": "frame.error", "code": "unsupported-type"})
         connection.sendall((b"[" * 2000) + b"0" + (b"]" * 2000) + b"\n")
         self.assertIn(protocol.decode(connection.recv(4096))["code"],
                       {"invalid-json", "invalid-message"})
@@ -163,9 +167,15 @@ class ServerProcessTests(unittest.TestCase):
             idle.append(client)
         refused = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         refused.settimeout(2)
-        refused.connect(str(self.socket_path))
-        self.assertEqual(protocol.decode(refused.recv(4096))["code"], "server-busy")
-        refused.close()
+        try:
+            refused.connect(str(self.socket_path))
+        except ConnectionRefusedError:
+            pass
+        else:
+            self.assertIn(protocol.decode(refused.recv(4096))["code"],
+                          {"server-busy", "read-timeout"})
+        finally:
+            refused.close()
         for client in idle:
             self.assertEqual(protocol.decode(client.recv(4096))["code"], "read-timeout")
             client.close()
@@ -174,18 +184,37 @@ class ServerProcessTests(unittest.TestCase):
     def test_low_fd_limit_reserves_capacity_and_refuses_before_emfile(self):
         self.start(env={"ROZORO_MONITOR_READ_TIMEOUT": "0.2"}, nofile=24)
         clients = []
+        refused = False
         try:
             for _ in range(8):
                 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 client.settimeout(2)
-                client.connect(str(self.socket_path))
+                try:
+                    client.connect(str(self.socket_path))
+                except OSError as exc:
+                    self.assertIn(exc.errno, {errno.EAGAIN, errno.ECONNREFUSED})
+                    refused = True
+                    client.close()
+                    break
                 clients.append(client)
             replies = [protocol.decode(client.recv(4096)) for client in clients]
-            self.assertIn("server-busy", {reply["code"] for reply in replies})
+            refused = refused or any(reply.get("code") == "server-busy" for reply in replies)
+            self.assertTrue(refused)
         finally:
             for client in clients:
                 client.close()
         self.assertEqual(self.health()["type"], "health.result")
+
+    def test_sigterm_closes_idle_transports_without_waiting_for_read_deadline(self):
+        process = self.start(env={"ROZORO_MONITOR_READ_TIMEOUT": "30"})
+        idle = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        idle.connect(str(self.socket_path))
+        time.sleep(0.05)
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        self.assertEqual(process.wait(timeout=2), 0)
+        self.assertLess(time.monotonic() - started, 1.0)
+        idle.close()
 
     def test_sigterm_cleans_socket_and_sigkill_restart_recovers_stale_socket(self):
         process = self.start()
@@ -213,6 +242,8 @@ class ServerProcessTests(unittest.TestCase):
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(str(self.socket_path))
         stale.close()
+        (self.home / "monitor.lock").write_text("99999999\n")
+        os.chmod(self.home / "monitor.lock", 0o600)
         process = self.start()
         self.assertEqual(stat.S_IMODE(self.home.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(self.socket_path.stat().st_mode), 0o600)
@@ -257,8 +288,10 @@ class ServerProcessTests(unittest.TestCase):
         self.home.mkdir(mode=0o700)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(self.socket_path))
-        listener.listen(0)
+        listener.listen(1)
         fillers = []
+        backlog_full = False
+        backlog_refused = False
         try:
             # Fill the tiny accept queue; whether the next connect times out or
             # succeeds, the daemon must conservatively preserve this live socket.
@@ -268,11 +301,20 @@ class ServerProcessTests(unittest.TestCase):
                 try:
                     filler.connect(str(self.socket_path))
                     fillers.append(filler)
-                except OSError:
+                except OSError as exc:
+                    backlog_full = True
+                    backlog_refused = isinstance(exc, ConnectionRefusedError)
                     filler.close()
                     break
+            self.assertTrue(fillers, "backlog test requires a proven queued connection")
+            self.assertTrue(backlog_full, "backlog must be demonstrably full")
+            if sys.platform == "darwin":
+                self.assertTrue(backlog_refused, "Darwin full backlog must produce ECONNREFUSED")
             process = self.start(wait=False)
             self.assertEqual(process.wait(timeout=5), 2)
+            self.assertTrue(self.socket_path.exists())
+            retry = self.start(wait=False)
+            self.assertEqual(retry.wait(timeout=5), 2)
             self.assertTrue(self.socket_path.exists())
         finally:
             for filler in fillers:

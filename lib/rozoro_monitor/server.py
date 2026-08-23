@@ -44,8 +44,14 @@ class MonitorServer:
         self.db_path = self.home / "monitor.db"
         self._home_identity = self._fd_identity(self._home_fd)
         self._lock_fd: int | None = None
+        self._previous_owner_dead = False
         self._store: EventStore | None = None
-        self._server: asyncio.AbstractServer | None = None
+        self._listener: socket.socket | None = None
+        self._accept_task: asyncio.Task[None] | None = None
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._writers: set[asyncio.StreamWriter] = set()
+        self._capacity = asyncio.Event()
+        self._capacity.set()
         self._socket_identity: tuple[int, int] | None = None
         self._clients = 0
         try:
@@ -100,13 +106,27 @@ class MonitorServer:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise AlreadyRunningError("another rozorod owns monitor.lock") from exc
-            os.ftruncate(fd, 0)
-            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
-            os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            previous = os.read(fd, 64).strip()
+            if previous.isdigit():
+                previous_pid = int(previous)
+                try:
+                    os.kill(previous_pid, 0)
+                except ProcessLookupError:
+                    self._previous_owner_dead = True
+                except PermissionError:
+                    pass
             self._lock_fd = fd
         except BaseException:
             os.close(fd)
             raise
+
+    def _record_owner(self) -> None:
+        assert self._lock_fd is not None
+        os.ftruncate(self._lock_fd, 0)
+        os.lseek(self._lock_fd, 0, os.SEEK_SET)
+        os.write(self._lock_fd, f"{os.getpid()}\n".encode("ascii"))
+        os.fsync(self._lock_fd)
 
     def _socket_definitively_stale(self) -> bool:
         """Only ECONNREFUSED is stale; timeout/backlog/other ambiguity is live."""
@@ -125,7 +145,7 @@ class MonitorServer:
         if socket_info is not None:
             if not stat.S_ISSOCK(socket_info.st_mode):
                 raise UnsafeStateError("monitor.sock exists but is not a socket")
-            if not self._socket_definitively_stale():
+            if not self._previous_owner_dead or not self._socket_definitively_stale():
                 raise AlreadyRunningError("refusing live or indeterminate monitor.sock")
             # Lock is held and the exact no-follow entry was proven to be a stale socket.
             os.unlink("monitor.sock", dir_fd=self._home_fd)
@@ -149,11 +169,12 @@ class MonitorServer:
         try:
             self._assert_home_anchor()
             self._prepare_entries()
+            self._record_owner()
             # sqlite3 and AF_UNIX bind expose pathname-only APIs. Anchor both
             # synchronously, restore cwd, and only then yield to asyncio.
             listener: socket.socket | None = None
             with self._anchored_cwd():
-                self._store = EventStore("monitor.db")
+                self._store = EventStore("monitor.db", dir_fd=self._home_fd)
                 db_info = self._entry("monitor.db")
                 if db_info is None or not stat.S_ISREG(db_info.st_mode):
                     raise UnsafeStateError("database creation escaped private home")
@@ -175,16 +196,50 @@ class MonitorServer:
                 raise UnsafeStateError("socket creation escaped private home")
             os.chmod("monitor.sock", 0o600, dir_fd=self._home_fd, follow_symlinks=False)
             self._socket_identity = (info.st_dev, info.st_ino)
-            try:
-                self._server = await asyncio.start_unix_server(
-                    self._handle_client, sock=listener, limit=protocol.MAX_FRAME_BYTES + 1
-                )
-            except BaseException:
-                listener.close()
-                raise
+            self._listener = listener
+            self._accept_task = asyncio.create_task(self._accept_loop())
         except BaseException:
             await self.close()
             raise
+
+    async def _accept_loop(self) -> None:
+        assert self._listener is not None
+        loop = asyncio.get_running_loop()
+        reserve = os.open(os.devnull, os.O_RDONLY)
+        try:
+            while True:
+                if self._clients >= self._client_limit:
+                    self._capacity.clear()
+                    await self._capacity.wait()
+                    continue
+                try:
+                    connection, _ = await loop.sock_accept(self._listener)
+                except OSError as exc:
+                    if exc.errno not in {errno.EMFILE, errno.ENFILE}:
+                        raise
+                    os.close(reserve)
+                    reserve = -1
+                    try:
+                        connection, _ = self._listener.accept()
+                        connection.close()
+                    except (BlockingIOError, OSError):
+                        pass
+                    reserve = os.open(os.devnull, os.O_RDONLY)
+                    await asyncio.sleep(0.05)
+                    continue
+                self._clients += 1
+                reader, writer = await asyncio.open_connection(
+                    sock=connection, limit=protocol.MAX_FRAME_BYTES + 1
+                )
+                self._writers.add(writer)
+                task = asyncio.create_task(self._handle_client(reader, writer))
+                self._client_tasks.add(task)
+                task.add_done_callback(self._client_tasks.discard)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if reserve >= 0:
+                os.close(reserve)
 
     @staticmethod
     def _frame_error(code: str) -> dict[str, Any]:
@@ -200,9 +255,17 @@ class MonitorServer:
         if not isinstance(raw, dict):
             return MonitorServer._frame_error(error.code)
         code = error.code
-        if code in {"invalid-event", "invalid-field", "unsupported-type"} and "event_id" in raw:
+        message_type = raw.get("type")
+        # Direction comes only from a recognized type, never attacker-selected
+        # presence of event_id/request_id on an ambiguous frame.
+        if isinstance(message_type, str) and protocol.requires_producer_seq(message_type):
+            if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
+                return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif code in {"invalid-message", "invalid-field", "unsupported-type"} and "request_id" in raw:
+        elif message_type in {"health", "watchtower.register", "notification.delivered",
+                              "reconcile", "ack-generation"}:
+            if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
+                return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
         else:
             return MonitorServer._frame_error(code)
@@ -240,14 +303,6 @@ class MonitorServer:
             raise protocol.ProtocolError("read-timeout", "client read deadline exceeded") from exc
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        if self._clients >= self._client_limit:
-            try:
-                await self._send(writer, self._frame_error("server-busy"))
-            except Exception:
-                pass
-            writer.close()
-            return
-        self._clients += 1
         try:
             while True:
                 frame = b""
@@ -287,6 +342,8 @@ class MonitorServer:
             pass
         finally:
             self._clients -= 1
+            self._writers.discard(writer)
+            self._capacity.set()
             writer.close()
             try:
                 await writer.wait_closed()
@@ -294,10 +351,22 @@ class MonitorServer:
                 pass
 
     async def close(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        if self._accept_task is not None:
+            self._accept_task.cancel()
+        if self._listener is not None:
+            self._listener.close()
+            self._listener = None
+        if self._accept_task is not None:
+            await asyncio.gather(self._accept_task, return_exceptions=True)
+            self._accept_task = None
+        # Close transports before waiting for handlers, so idle read deadlines
+        # never delay SIGTERM shutdown.
+        for writer in tuple(self._writers):
+            writer.close()
+        if self._client_tasks:
+            await asyncio.gather(*tuple(self._client_tasks), return_exceptions=True)
+        self._client_tasks.clear()
+        self._writers.clear()
         if self._store is not None:
             self._store.close()
             self._store = None

@@ -6,6 +6,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from lib.rozoro_monitor.store import ActionableChange, EventStore, SCHEMA_VERSION, _MIGRATIONS
 
@@ -385,6 +386,38 @@ class StoreTests(unittest.TestCase):
                 "SELECT foreground,background,availability,producer_seq FROM sessions"
             ).fetchone()
             self.assertEqual(tuple(state), ("stopped", "clear", "quiescent", 2))
+
+    def test_dirfd_store_symlink_swap_cannot_redirect_actual_publish(self):
+        self.home.mkdir(parents=True, mode=0o700)
+        directory_fd = os.open(self.home, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        external = Path(self.temp.name) / "external.db"
+        external.write_bytes(b"sentinel")
+        try:
+            with EventStore("monitor.db", dir_fd=directory_fd) as store:
+                real_rename = os.rename
+                swapped = False
+                def swap_then_rename(source, destination, **kwargs):
+                    nonlocal swapped
+                    if not swapped:
+                        swapped = True
+                        try:
+                            os.unlink(destination, dir_fd=directory_fd)
+                        except FileNotFoundError:
+                            pass
+                        os.symlink(external, destination, dir_fd=directory_fd)
+                    return real_rename(source, destination, **kwargs)
+                with mock.patch("lib.rozoro_monitor.store.os.rename", side_effect=swap_then_rename):
+                    store.accept_event(event())
+            self.assertEqual(external.read_bytes(), b"sentinel")
+            info = os.stat("monitor.db", dir_fd=directory_fd, follow_symlinks=False)
+            self.assertTrue(stat.S_ISREG(info.st_mode))
+            reopened = EventStore("monitor.db", dir_fd=directory_fd)
+            try:
+                self.assertEqual(reopened._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
+            finally:
+                reopened.close()
+        finally:
+            os.close(directory_fd)
 
     def test_permissions_are_repaired_to_user_only(self):
         self.home.mkdir(parents=True, mode=0o777)
