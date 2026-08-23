@@ -323,6 +323,31 @@ rzr_claude_event_capability() {
   esac
 }
 
+# Generate a private Claude watchtower settings overlay. The caller supplies the
+# already validated Herdr pane and stable driver identity; this never edits user
+# or project settings and remains opt-in.
+rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <session-id> <herdr-pane>
+  local target="$1" driver="$2" session="$3" pane="$4"
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$pane" <<'PY' || return 1
+import json, os, secrets, shlex, stat, sys
+path, hook, home, driver, session, pane = sys.argv[1:]
+parent, name = os.path.split(path); fd=os.open(parent,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if info.st_uid!=os.geteuid() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)&0o077: raise SystemExit("watchtower settings directory must be owner-private")
+    old=os.stat(name,dir_fd=fd,follow_symlinks=False) if os.path.lexists(path) else None
+    if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid()): raise SystemExit("refusing unsafe watchtower settings destination")
+    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_HERDR_PANE_ID={pane}","ROZORO_CLAUDE_CAPABILITY=2.1.240",f"ROZORO_HOME={home}","python3",hook])
+    entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
+    data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
+    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+    try: os.write(out,data); os.fsync(out)
+    finally: os.close(out)
+    os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
+finally: os.close(fd)
+PY
+}
+
 # Generate a task-local Claude settings overlay. It is passed explicitly with
 # --settings and never mutates user or project Claude configuration.
 rzr_claude_event_settings() {  # <task-id> <exact-session-id>

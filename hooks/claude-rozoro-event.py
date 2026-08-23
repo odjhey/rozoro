@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -27,14 +29,16 @@ EVENTS = {"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "
 def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     if os.environ.get("ROZORO_EVENT_BUS") != "1":
         return None
-    if os.environ.get("ROZORO_ROLE") != "crew" or os.environ.get("ROZORO_CLAUDE_CAPABILITY") != CAPABILITY:
+    role = os.environ.get("ROZORO_ROLE")
+    if role not in {"crew", "watchtower"} or os.environ.get("ROZORO_CLAUDE_CAPABILITY") != CAPABILITY:
         return None
-    task_id = os.environ.get("ROZORO_TASK_ID", "")
     expected_session = os.environ.get("ROZORO_SESSION_ID", "")
     actual_session = payload.get("session_id")
-    if not task_id or not expected_session or actual_session != expected_session:
+    identity_name = "task_id" if role == "crew" else "driver_id"
+    identity = os.environ.get("ROZORO_TASK_ID" if role == "crew" else "ROZORO_DRIVER_ID", "")
+    if not identity or not expected_session or actual_session != expected_session:
         return None
-    return {"v": 1, "session_id": expected_session, "harness": "claude", "role": "crew", "task_id": task_id}
+    return {"v": 1, "session_id": expected_session, "harness": "claude", "role": role, identity_name: identity}
 
 
 def _event(base: dict[str, Any], event_type: str, **fields: Any) -> dict[str, Any]:
@@ -90,6 +94,45 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _request(message: dict[str, Any], timeout: float) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """One bounded daemon request; an optional notification follows its reply."""
+    path = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser() / "monitor.sock"
+    message = dict(message, v=1, request_id=uuid.uuid4().hex)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(str(path))
+        client.sendall((json.dumps(message, separators=(",", ":")) + "\n").encode())
+        stream = client.makefile("rb")
+        reply = json.loads(stream.readline())
+        extra = json.loads(stream.readline()) if message["type"] == "notification.pending" else None
+        return reply, extra
+
+
+def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: float) -> None:
+    """Register durably and claim/deliver only at a certified clear Stop."""
+    driver = base["driver_id"]
+    _request({"type": "watchtower.register", "session_id": base["session_id"],
+              "harness": "claude", "driver_id": driver}, timeout)
+    snapshot = payload.get("background_tasks")
+    if payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active") is not False:
+        return
+    if not isinstance(snapshot, list) or snapshot:  # missing/malformed/nonempty fails closed
+        return
+    reply, notification = _request({"type": "notification.pending", "driver_id": driver}, timeout)
+    if reply.get("type") != "ok" or not notification:
+        return
+    pane = os.environ.get("ROZORO_HERDR_PANE_ID", "")
+    if not pane:
+        return
+    fixed = "Rozoro notification pending; run ./bin/rozoro reconcile."
+    completed = subprocess.run(["herdr", "agent", "prompt", pane, fixed], timeout=timeout,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=False)
+    if completed.returncode == 0:
+        _request({"type": "notification.delivered", "driver_id": driver,
+                  "generation": notification["generation"]}, timeout)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -114,6 +157,13 @@ def main() -> int:
                 client.send(event)
             except ClientError:
                 continue
+        if events and events[0].get("role") == "watchtower":
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                try:
+                    _watchtower_actuate(events[0], payload, remaining)
+                except (OSError, ValueError, TimeoutError, json.JSONDecodeError):
+                    pass
     except (ClientError, ValueError, OSError, json.JSONDecodeError):
         # Hooks must not alter unrelated Claude behavior. Invalid/uncertified
         # input emits no lifecycle claim rather than guessing.

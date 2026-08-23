@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -39,6 +40,40 @@ def identity(session=FIXTURE["redactions"]["session_id"]):
 
 
 class ClaudeProducerTests(unittest.TestCase):
+    def test_watchtower_identity_is_stable_and_never_uses_task_identity(self):
+        payload = {"hook_event_name": "SessionStart", "session_id": "watch-session"}
+        values = {"ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "watchtower",
+                  "ROZORO_DRIVER_ID": "herdr-pane-7", "ROZORO_SESSION_ID": "watch-session",
+                  "ROZORO_CLAUDE_CAPABILITY": "2.1.240"}
+        with mock.patch.dict(os.environ, values, clear=True):
+            event = HOOK.map_payload(payload)[0]
+        self.assertEqual(event["role"], "watchtower")
+        self.assertEqual(event["driver_id"], "herdr-pane-7")
+        self.assertNotIn("task_id", event)
+
+    def test_watchtower_actuator_fails_closed_until_empty_stop_and_confirms_success(self):
+        base = {"session_id": "s", "driver_id": "d"}
+        calls = []
+        def request(message, _timeout):
+            calls.append(message)
+            if message["type"] == "notification.pending":
+                return {"type": "ok"}, {"generation": 9}
+            return {"type": "ok"}, None
+        completed = subprocess.CompletedProcess([], 0)
+        with mock.patch.dict(os.environ, {"ROZORO_HERDR_PANE_ID": "pane-7"}, clear=True), \
+             mock.patch.object(HOOK, "_request", side_effect=request), \
+             mock.patch.object(HOOK.subprocess, "run", return_value=completed) as run:
+            HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
+                                           "background_tasks": [{"id": "job"}]}, .5)
+            self.assertFalse(run.called)
+            HOOK._watchtower_actuate(base, {"hook_event_name": "Stop", "stop_hook_active": False,
+                                           "background_tasks": []}, .5)
+        run.assert_called_once_with(["herdr", "agent", "prompt", "pane-7",
+                                     "Rozoro notification pending; run ./bin/rozoro reconcile."],
+                                    timeout=.5, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, check=False)
+        self.assertEqual(calls[-1], {"type": "notification.delivered", "driver_id": "d", "generation": 9})
+
     def test_fixture_maps_only_frozen_lifecycle_fields(self):
         expected = ["session.register", "turn.start", "background.start",
                     "turn.stop", "turn.stop", "turn.stop", "session.end"]
