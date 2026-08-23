@@ -88,6 +88,7 @@ case "$VERB" in
     CWD="$(rzr_meta_get "$ID" cwd || true)"
     [ -n "$CWD" ] || rzr_die "task '$ID' has no recorded cwd - cannot restart"
     CREW="$(rzr_meta_get "$ID" crew || true)"
+    ROLE="$(rzr_meta_get "$ID" role || true)"
     HARNESS="$(rzr_meta_get "$ID" harness || true)"
     MODEL="$(rzr_meta_get "$ID" model || true)"
     EFFORT="$(rzr_meta_get "$ID" effort || true)"
@@ -105,8 +106,13 @@ case "$VERB" in
     spawn_args=("$ID" --cwd "$CWD")
     # `rzr-resume` records the lifecycle origin as crew=resumed, which is not a
     # selectable preset. The resolved harness profile below is sufficient to
-    # restart that task as a fresh conversation.
-    [ -n "$CREW" ] && [ "$CREW" != resumed ] && spawn_args+=(--crew "$CREW")
+    # restart that task as a fresh conversation. A role-spawned task recorded no
+    # crew (role and crew are mutually exclusive at spawn), so replay --role instead.
+    if [ -n "$ROLE" ]; then
+      spawn_args+=(--role "$ROLE")
+    elif [ -n "$CREW" ] && [ "$CREW" != resumed ]; then
+      spawn_args+=(--crew "$CREW")
+    fi
     [ -n "$HARNESS" ]   && spawn_args+=(--harness "$HARNESS")
     [ -n "$MODEL" ]     && spawn_args+=(--model "$MODEL")
     [ -n "$EFFORT" ]    && spawn_args+=(--effort "$EFFORT")

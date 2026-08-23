@@ -238,13 +238,11 @@ rzr_crew_json() {  # <preset> -> configured JSON or built-in default JSON
   fi
 }
 
-# Validate known preset fields without rejecting unknown keys. Unknown keys may
+# Shared field-shape check for a preset/role JSON blob (stdin). Unknown keys may
 # belong to a newer rozoro and ignoring them preserves forward compatibility;
 # malformed known fields must never degrade silently into empty defaults.
-rzr_crew_validate() {  # <preset>
-  local name="$1" json
-  json="$(rzr_crew_json "$name")" || return 1
-  printf '%s' "$json" | jq -e '
+rzr_profile_fields_valid() {  # reads JSON on stdin
+  jq -e '
     . as $p |
     type == "object" and
     (["harness", "model", "permission_mode", "effort"] |
@@ -254,6 +252,12 @@ rzr_crew_validate() {  # <preset>
       (($p.rules | type == "array") and ($p.rules | all(type == "string")))) and
     (($p.effort // "") | IN("", "low", "medium", "high", "xhigh", "max"))
   ' >/dev/null 2>&1
+}
+
+rzr_crew_validate() {  # <preset>
+  local name="$1" json
+  json="$(rzr_crew_json "$name")" || return 1
+  printf '%s' "$json" | rzr_profile_fields_valid
 }
 
 rzr_crew_field() {  # <preset> <field> -> value, or empty
@@ -266,6 +270,85 @@ rzr_crew_bool_field() {  # <preset> <field> -> true|false, or empty when absent
 
 rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
   rzr_crew_json "$1" | jq -r '(.rules // []) | join("\n")' 2>/dev/null
+}
+
+# --- machine-local role preferences -----------------------------------------
+# A crew preset says HOW to boot an agent; a ROLE says WHICH backend plays a
+# given part (e.g. "coder", "planner") ON THIS MACHINE. Different machines have
+# different harness binaries installed, so the mapping is host-local config
+# under $ROZORO_HOME/crew/roles/<role>.json (same shape as a crew preset), never
+# a table baked into this script. `--role` is an alternative to `--crew` at
+# spawn time: same resolved fields, same explicit-flag precedence.
+#
+# Unconfigured roles fall back to Claude, the one harness rozoro can assume is
+# present (it drives itself with it) - `coder` to Sonnet, `planner` to Opus -
+# exactly how the virtual `default` crew preset falls back when unconfigured.
+# A machine with Codex/Copilot/Pi installed overrides per role by adding the
+# JSON file; nothing here hardcodes that machine's mix.
+RZR_ROLES="$RZR_HOME/crew/roles"
+
+rzr_role_path() { printf '%s/%s.json' "$RZR_ROLES" "$1"; }
+rzr_role_exists() { [ -f "$(rzr_role_path "$1")" ]; }
+
+rzr_role_builtin_default() {  # <role> -> JSON, or fail for an unknown role
+  case "$1" in
+    coder) cat <<'JSON'
+{
+  "harness": "claude",
+  "model": "sonnet",
+  "permission_mode": "auto",
+  "effort": "",
+  "fast": false,
+  "rules": []
+}
+JSON
+      ;;
+    planner) cat <<'JSON'
+{
+  "harness": "claude",
+  "model": "opus",
+  "permission_mode": "auto",
+  "effort": "",
+  "fast": false,
+  "rules": []
+}
+JSON
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+rzr_role_resolves() { rzr_role_exists "$1" || rzr_role_builtin_default "$1" >/dev/null 2>&1; }
+
+rzr_role_json() {  # <role> -> configured JSON or built-in default
+  local f; f=$(rzr_role_path "$1")
+  if [ -f "$f" ]; then cat "$f"
+  else rzr_role_builtin_default "$1"
+  fi
+}
+
+rzr_role_validate() {  # <role>
+  local name="$1" json
+  json="$(rzr_role_json "$name")" || return 1
+  printf '%s' "$json" | rzr_profile_fields_valid
+}
+
+rzr_role_field() { rzr_role_json "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null; }
+
+rzr_role_bool_field() { rzr_role_json "$1" | jq -r --arg k "$2" 'if has($k) then .[$k] else empty end' 2>/dev/null; }
+
+rzr_role_rules() { rzr_role_json "$1" | jq -r '(.rules // []) | join("\n")' 2>/dev/null; }
+
+# Every KNOWN role name: built-in ones plus whatever host-local files exist.
+rzr_role_names() {
+  { echo coder; echo planner
+    if [ -d "$RZR_ROLES" ]; then
+      for f in "$RZR_ROLES"/*.json; do
+        [ -e "$f" ] || continue
+        basename "$f" .json
+      done
+    fi
+  } | sort -u
 }
 
 # Validate the fully-resolved launch tuple. Fast is intentionally Codex-only in

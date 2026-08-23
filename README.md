@@ -152,7 +152,8 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `./bin/rozoro control <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, Copilot, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
-| `./bin/rozoro crew list\|show <name>` | inspect crewmember presets (spawn profiles) |
+| `./bin/rozoro crew list\|show\|path <name>` | inspect crewmember presets (spawn profiles) |
+| `./bin/rozoro crew roles\|role-show\|role-path <role>` | inspect machine-local role preferences (`coder`/`planner` -> harness/model on this machine) |
 | `./bin/rozoro lock status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `./bin/rozoro list` | known tasks + live agent state |
 | `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/`python3` and the selected harness), herdr server reachable, default preset — exits non-zero on a missing hard dep |
@@ -253,6 +254,49 @@ speed and increased usage). Stage 1 supports this only for Codex with
 Use `--fast` or `--no-fast` to override a preset for spawn and resume. The
 resolved profile is stored in `session.json`, so restart and exact resume reapply
 the model, effort, and service tier instead of depending on user defaults.
+
+## Machine-local role preferences
+
+A preset says *how* an agent boots; a **role** says *which backend plays a
+given part* — `coder` or `planner` today — **on this machine**. Different
+machines have different harnesses installed (one has Codex and Copilot, another
+only Claude), so which concrete model plays a role can't be one hardcoded table
+in this repo. It is host-local config, one JSON file per role (same shape as a
+crew preset) under `$ROZORO_HOME/crew/roles/<role>.json`:
+
+```json
+{
+  "harness": "codex",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "yolo",
+  "effort": "low",
+  "fast": false,
+  "rules": []
+}
+```
+
+- Spawn from a role with `./bin/rozoro spawn <id> --cwd <repo> --role coder`.
+  `--role` and `--crew` are mutually exclusive — a role IS the preset selection
+  for that spawn, not a layer on top of one.
+- **Unconfigured, a role resolves to Claude** — the one harness rozoro can
+  assume is present, since it drives itself with it — `coder` to Sonnet,
+  `planner` to Opus. A fresh machine with no Codex, Copilot, or Pi installed
+  gets exactly this without any setup, and it is byte-identical to the crew
+  preset's own no-flag fallback in spirit: unconfigured stays unconfigured.
+- **Precedence** is the same as presets: explicit flag > role file > built-in
+  fallback.
+- `./bin/rozoro crew roles` lists every role (built-in ones plus any host-local
+  files) with its resolved harness/model and whether it came from a file or the
+  fallback; `./bin/rozoro crew role-show <role>` prints the resolved JSON;
+  `./bin/rozoro crew role-path <role>` prints where to put the file (it need
+  not exist yet).
+- `./bin/rozoro doctor` reports each role's resolved harness and whether that
+  binary is on `PATH` — a missing harness in a host-local role file is a hard
+  failure (real misconfiguration); a missing harness on the built-in fallback
+  is only a warning, since that role is inert until something passes `--role`
+  for it.
+- `restart` (`./bin/rozoro control <id> restart`) replays `--role` for a
+  role-spawned task, the same way it replays `--crew` for a preset-spawned one.
 
 ## Instructing rozoro (the control tower)
 
@@ -394,6 +438,14 @@ printf 'Investigate why CI flakes on the auth suite. Write findings; change no c
 ./bin/rozoro start issue-77 --body /tmp/t.md --cwd ~/proj/acme --crew draft-only
 ```
 
+**Spawn by role instead of a named preset** — "give me this machine's `coder`",
+without caring what that resolves to here:
+
+```sh
+./bin/rozoro crew roles                            # see this machine's role preferences
+./bin/rozoro start issue-88 --body /tmp/t.md --cwd ~/proj/acme --role coder
+```
+
 **Follow up after `done` without losing context.** `done` is an invitation to
 review, not a signal to reap — a done crew sits idle at ~0 cost. If it's still
 live, just continue it (same agent, full context):
@@ -466,8 +518,8 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 ## Configuration (env)
 
 - `ROZORO_HOME` / `RZR_HOME` — home (default `~/.rozoro`). Holds `state/` (task
-  meta, status, locks) and `crew/` (presets). `ROZORO_HOME` wins; `RZR_HOME` is
-  the legacy name.
+  meta, status, locks), `crew/` (presets), and `crew/roles/` (per-machine role
+  preferences). `ROZORO_HOME` wins; `RZR_HOME` is the legacy name.
 - `RZR_WORKSPACE` — herdr workspace for new tabs (default `$HERDR_WORKSPACE_ID`).
 - `RZR_SESSION` — herdr `--session` name (default: the single local server).
 - `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps

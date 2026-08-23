@@ -55,6 +55,34 @@ if command -v jq >/dev/null 2>&1 && command -v herdr >/dev/null 2>&1; then
   fi
 else warn "skipped (needs jq + herdr)"; fi
 
+echo "role preferences (per-machine coder/planner):"
+if command -v jq >/dev/null 2>&1 && command -v herdr >/dev/null 2>&1; then
+  . "$BIN/rzr-lib.sh"           # idempotent if already sourced above
+  set +e
+  for role in $(rzr_role_names); do
+    role_harness="$(rzr_role_field "$role" harness)"
+    role_model="$(rzr_role_field "$role" model)"
+    if rzr_role_exists "$role"; then
+      origin="$(rzr_role_path "$role")"
+      if [ -n "$role_harness" ] && command -v "$role_harness" >/dev/null 2>&1; then
+        pass "$role -> $role_harness/$role_model ($origin)"
+      else
+        # A host-local file naming a missing harness is a real misconfiguration -
+        # unlike the default crew preset, --role is opt-in per spawn, so this
+        # only bites the roles someone actually configured.
+        fail "$role -> harness '${role_harness:-unknown}' not found on PATH ($origin)"
+      fi
+    else
+      origin="built-in fallback"
+      if [ -n "$role_harness" ] && command -v "$role_harness" >/dev/null 2>&1; then
+        pass "$role -> $role_harness/$role_model ($origin)"
+      else
+        warn "$role -> harness '${role_harness:-unknown}' not found on PATH ($origin) - unused until --role $role is passed"
+      fi
+    fi
+  done
+else warn "skipped (needs jq + herdr)"; fi
+
 echo
 if [ "$bad" -eq 0 ]; then
   echo "all good ($ok checks passed) — try: ./bin/rozoro start t1 --body <file> --cwd <repo>"
