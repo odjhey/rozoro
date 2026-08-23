@@ -103,6 +103,8 @@ _ROLE = _enum("crew", "watchtower")
 _PRIORITY = _enum("normal", "urgent")
 _RESULT = _enum("success", "failed", "cancelled", "unknown")
 _AVAILABILITY = _enum("busy", "waiting-background", "quiescent", "blocked", "gone", "unknown")
+_FOREGROUND = _enum("running", "stopped", "unknown")
+_BACKGROUND = _enum("active", "clear", "unknown")
 _VERDICT = _enum("done", "waiting", "needs-action", "failed", "blocked")
 _REPORT_STATE = _enum("missing", "malformed", "valid")
 _ACTIONABLE_REASON = _enum(
@@ -137,6 +139,16 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
     "turn.stop": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE, "background_active": _known_or_unknown_boolean}, {"task_id": _ID, "driver_id": _ID, "turn_id": _ID}),
     "session.end": ({"event_id": _ID, "producer_seq": _POSITIVE, "session_id": _ID, "harness": _HARNESS, "role": _ROLE}, {"task_id": _ID, "driver_id": _ID}),
     "health": ({"request_id": _ID}, {}),
+    "task.status": ({"request_id": _ID, "task_id": _ID}, {}),
+    "task.status.result": ({"request_id": _ID, "task_id": _ID, "found": _BOOL},
+                           {"availability": _AVAILABILITY, "foreground": _FOREGROUND,
+                            "background": _BACKGROUND, "background_count": _nullable(_NONNEGATIVE),
+                            "report_state": _REPORT_STATE, "verdict": _nullable(_VERDICT),
+                            "actionable_reason": _ACTIONABLE_REASON}),
+    "driver.snapshot": ({"request_id": _ID, "driver_id": _ID}, {}),
+    "driver.snapshot.result": ({"request_id": _ID, "driver_id": _ID,
+                                "generation": _NONNEGATIVE, "delivered_generation": _NONNEGATIVE,
+                                "acked_generation": _NONNEGATIVE}, {}),
     "health.result": ({"request_id": _ID, "running": _BOOL, "socket": _STRING,
                        "schema_version": _POSITIVE, "last_durable_seq": _NONNEGATIVE,
                        "clients": _NONNEGATIVE, "task_count": _NONNEGATIVE,

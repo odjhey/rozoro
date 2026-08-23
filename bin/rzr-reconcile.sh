@@ -25,6 +25,42 @@ while [ $# -gt 0 ]; do
 done
 
 DIR="$(rzr_resolve_driver_dir "$DRIVER")"
+
+if [ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "${ROZORO_EVENT_BUS_FALLBACK:-0}" != 1 ]; then
+  DRIVER_ID="$(basename "$DIR")"
+  HARNESS="$(jq -r '.harness // "pi"' "$DIR/target.json" 2>/dev/null || echo pi)"
+  SNAPSHOT="$(python3 "$RZR_BIN/rzr-event-bus-client.py" snapshot --driver "$DRIVER_ID" --harness "$HARNESS")"
+  GEN="$(printf '%s' "$SNAPSHOT" | jq -er '.through')"
+  REPORTS='[]'; VANISHED='[]'
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    tid="$(printf '%s' "$row" | jq -r .task_id)"
+    if [ -f "$(rzr_task_dir "$tid")/handoff.md" ]; then
+      status="$("$RZR_BIN/rzr-status.sh" "$tid" --json)" # failure intentionally prevents ACK
+      merged="$(jq -cn --argjson s "$status" --argjson r "$row" '$s + {availability:$r.availability,availability_source:"event-bus-snapshot",runtime_status:$r.availability,action_reason:$r.actionable_reason,action_required:($r.actionable_reason != "none"),snapshot_generation:$r.generation}')"
+      REPORTS="$(jq -cn --argjson a "$REPORTS" --argjson v "$merged" '$a+[$v]')"
+    elif rzr_task_exists "$tid"; then
+      :
+    else
+      VANISHED="$(jq -cn --argjson a "$VANISHED" --arg v "$tid" '$a+[$v]')"
+    fi
+  done < <(printf '%s' "$SNAPSHOT" | jq -c '.reports[]')
+
+  if [ "$JSON" -eq 1 ]; then
+    jq -n --arg driver "$DRIVER_ID" --argjson gen "$GEN" --argjson reports "$REPORTS" --argjson vanished "$VANISHED" \
+      '{driver:$driver,acknowledged_generation:$gen,reports:$reports,vanished:$vanished,source:"event-bus"}'
+  else
+    echo "reconciled driver $DRIVER_ID through generation $GEN"
+    printf '%s' "$REPORTS" | jq -r '.[] | "  \(.id): runtime=\(.runtime_status) task=\(.task_status) turn=\(.turn_report_status) action=\(.action_reason // "none")"'
+    printf '%s' "$VANISHED" | jq -r '.[] | "  \(.) : vanished (no task folder)"'
+  fi
+  # Rendering above is caller-visible work. Only now consume exactly snapshot N.
+  if [ "$GEN" -gt 0 ]; then
+    python3 "$RZR_BIN/rzr-event-bus-client.py" ack --driver "$DRIVER_ID" --harness "$HARNESS" --through "$GEN" >/dev/null
+  fi
+  exit 0
+fi
+
 GEN="$(rzr_ledger_int "$DIR" generation)"
 
 # Gather the affected tasks recorded in the ledger, newest snapshot wins. For each

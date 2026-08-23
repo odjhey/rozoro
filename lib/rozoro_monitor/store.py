@@ -731,6 +731,17 @@ class EventStore:
             ).fetchone()
             return None if row is None else dict(row)
 
+    def driver_snapshot(self, driver_id: str) -> dict[str, int]:
+        """Return one driver's exact generation cursors for CLI reconciliation."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if row is None:
+                return {"generation": 0, "delivered_generation": 0, "acked_generation": 0}
+            return {"generation": int(row[0]), "delivered_generation": int(row[1]), "acked_generation": int(row[2])}
+
     def health_snapshot(self) -> dict[str, Any]:
         """Return a consistent, read-only diagnostic snapshot."""
         with self._lock:
