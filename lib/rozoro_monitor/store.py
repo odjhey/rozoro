@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterator, Mapping
 from .handoff import parse_task_report
 from .reducer import LifecycleState, PendingEvent, ReportState, reduce_event
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -158,6 +158,30 @@ _MIGRATIONS = {
     4: """
         ALTER TABLE sessions ADD COLUMN registered INTEGER NOT NULL DEFAULT 0 CHECK(registered IN (0,1));
     """,
+    5: """
+        CREATE TABLE watchtower_registrations (
+            driver_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            registration_epoch INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE TABLE delivery_offers (
+            driver_id TEXT NOT NULL REFERENCES watchtower_registrations(driver_id) ON DELETE CASCADE,
+            registration_epoch INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            generation INTEGER NOT NULL,
+            confirmed INTEGER NOT NULL DEFAULT 0 CHECK(confirmed IN (0,1)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            PRIMARY KEY(driver_id, registration_epoch, generation)
+        );
+        CREATE INDEX delivery_offers_active ON delivery_offers(driver_id,registration_epoch,confirmed);
+        CREATE TABLE generation_membership_snapshots (
+            generation INTEGER NOT NULL REFERENCES pending_generations(generation) ON DELETE CASCADE,
+            task_id TEXT NOT NULL,
+            PRIMARY KEY(generation, task_id)
+        );
+    """,
 }
 
 
@@ -262,16 +286,20 @@ class StoreTransaction:
             "INSERT INTO pending_generation_tasks(generation,task_id,actionable_reason) VALUES(?,?,?)",
             (generation, change.task_id, change.reason),
         )
-        # Capture the authoritative projection after assigning this generation.
-        # Later task updates cannot change what reconciliation through N sees.
+        # Freeze both membership and every projection at this generation. Later
+        # joins never consult mutable task rows, so N+1 cannot leak into N.
+        self._connection.execute(
+            "INSERT INTO generation_membership_snapshots(generation,task_id) SELECT ?,task_id FROM task_projections",
+            (generation,),
+        )
         self._connection.execute(
             """INSERT INTO generation_task_snapshots(
                    generation,task_id,availability,report_state,verdict,actionable_reason,
                    projection_generation,last_event_seq,projection_json)
                SELECT ?,task_id,availability,report_state,verdict,actionable_reason,
                       projection_generation,last_event_seq,projection_json
-               FROM task_projections WHERE task_id=?""",
-            (generation, change.task_id),
+               FROM task_projections""",
+            (generation,),
         )
         self._connection.execute(
             "UPDATE watchtower_deliveries SET latest_generation=?", (generation,)
@@ -555,7 +583,28 @@ class EventStore:
                     raise RuntimeError(f"incomplete SQL in migration {version}")
                 if version == 4:
                     self._replay_v3_projections(connection)
+                if version == 5:
+                    self._validate_v4_delivery_upgrade(connection)
                 connection.execute(f"PRAGMA user_version={version}")
+
+    @staticmethod
+    def _validate_v4_delivery_upgrade(connection: sqlite3.Connection) -> None:
+        """Only empty v4 ledgers can migrate: v4 did not freeze full membership."""
+        generated = connection.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM pending_generations) +
+                 (SELECT COUNT(*) FROM pending_generation_tasks) +
+                 (SELECT COUNT(*) FROM generation_task_snapshots) +
+                 (SELECT COUNT(*) FROM task_projections WHERE projection_generation<>0) +
+                 (SELECT COUNT(*) FROM watchtower_deliveries
+                    WHERE latest_generation<>0 OR delivered_generation<>0 OR acked_generation<>0) +
+                 (SELECT CASE WHEN CAST(value AS INTEGER)<>0 THEN 1 ELSE 0 END
+                    FROM daemon_metadata WHERE key='latest_generation')"""
+        ).fetchone()[0]
+        if generated:
+            raise RuntimeError(
+                "cannot upgrade schema 4 with generation history: run `rozoro monitor reset --force`; task folders are preserved"
+            )
 
     def _replay_v3_projections(self, connection: sqlite3.Connection) -> None:
         """Validate v3 history, then derive registration and projections from it."""
@@ -627,11 +676,31 @@ class EventStore:
             )
             durable_seq = int(cursor.lastrowid)
             tx = StoreTransaction(connection)
+            before_projection = None
+            if reducer is _DEFAULT_REDUCER and event.get("task_id"):
+                before_projection = connection.execute(
+                    "SELECT availability,report_state,verdict,actionable_reason,projection_json FROM task_projections WHERE task_id=?",
+                    (event["task_id"],),
+                ).fetchone()
             if reducer is _DEFAULT_REDUCER:
                 reduced = _reduce_projection(tx, event, durable_seq, self.tasks_dir)
             else:
                 reduced = reducer(tx, event, durable_seq) if reducer is not None else None
-            change = actionable(tx, event, durable_seq, reduced) if actionable is not None else None
+            if actionable is not None:
+                change = actionable(tx, event, durable_seq, reduced)
+            elif reducer is _DEFAULT_REDUCER and event.get("task_id"):
+                after_projection = connection.execute(
+                    "SELECT availability,report_state,verdict,actionable_reason,projection_json FROM task_projections WHERE task_id=?",
+                    (event["task_id"],),
+                ).fetchone()
+                before_tuple = None if before_projection is None else tuple(before_projection)
+                after_tuple = None if after_projection is None else tuple(after_projection)
+                change = (ActionableChange(event["task_id"], after_projection["actionable_reason"])
+                          if after_projection is not None
+                          and after_projection["actionable_reason"] != "none"
+                          and before_tuple != after_tuple else None)
+            else:
+                change = None
             generation = tx.bump_actionable(change) if change is not None else None
             return AcceptedEvent(durable_seq, False, generation)
 
@@ -691,6 +760,174 @@ class EventStore:
                     "SELECT COUNT(DISTINCT task_id) FROM pending_generation_tasks"
                 ).fetchone()[0]),
             }
+
+    def register_driver(self, driver_id: str, session_id: str, harness: str) -> dict[str, Any]:
+        """Bind a new connection epoch, including for same-session reconnects."""
+        with self._lock, self._immediate() as connection:
+            current = connection.execute(
+                "SELECT harness,registration_epoch FROM watchtower_registrations WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            if current is None:
+                epoch = 1
+                connection.execute(
+                    "INSERT INTO watchtower_registrations(driver_id,session_id,harness,registration_epoch) VALUES(?,?,?,?)",
+                    (driver_id, session_id, harness, epoch),
+                )
+                latest = int(connection.execute(
+                    "SELECT value FROM daemon_metadata WHERE key='latest_generation'"
+                ).fetchone()[0])
+                connection.execute(
+                    "INSERT INTO watchtower_deliveries(driver_id,latest_generation) VALUES(?,?)",
+                    (driver_id, latest),
+                )
+            else:
+                if current["harness"] != harness:
+                    raise ValueError("driver harness is immutable")
+                epoch = int(current["registration_epoch"]) + 1
+                connection.execute(
+                    "UPDATE watchtower_registrations SET session_id=?,registration_epoch=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                    (session_id, epoch, driver_id),
+                )
+            return {"driver_id": driver_id, "session_id": session_id, "epoch": epoch}
+
+    @staticmethod
+    def _require_registration(connection: sqlite3.Connection, driver_id: str,
+                              session_id: str, epoch: int) -> None:
+        row = connection.execute(
+            "SELECT session_id,registration_epoch FROM watchtower_registrations WHERE driver_id=?",
+            (driver_id,),
+        ).fetchone()
+        if row is None or row["session_id"] != session_id or int(row["registration_epoch"]) != epoch:
+            raise ValueError("stale or mismatched driver connection epoch")
+
+    def offer_notification(self, driver_id: str, session_id: str, epoch: int) -> dict[str, Any] | None:
+        """Return one exact offer until confirmation or registration invalidation."""
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            existing = connection.execute(
+                """SELECT generation FROM delivery_offers
+                   WHERE driver_id=? AND registration_epoch=? AND session_id=?
+                     AND confirmed=0 AND generation>(
+                         SELECT acked_generation FROM watchtower_deliveries WHERE driver_id=?)
+                   ORDER BY generation LIMIT 1""",
+                (driver_id, epoch, session_id, driver_id),
+            ).fetchone()
+            ledger = connection.execute(
+                "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            g, d, a = map(int, ledger)
+            if existing is not None:
+                generation = int(existing[0])
+            elif g <= a:
+                return None
+            elif d > a:
+                # The current connection already consumed its one normal wake.
+                # Only a fresh registration epoch may redeliver delivered-but-
+                # unacked N; N+1 remains pending until N is acknowledged.
+                confirmed_here = connection.execute(
+                    """SELECT 1 FROM delivery_offers
+                       WHERE driver_id=? AND registration_epoch=? AND session_id=?
+                         AND generation=? AND confirmed=1""",
+                    (driver_id, epoch, session_id, d),
+                ).fetchone()
+                if confirmed_here is not None:
+                    return None
+                generation = d
+                connection.execute(
+                    "INSERT INTO delivery_offers(driver_id,registration_epoch,session_id,generation) VALUES(?,?,?,?)",
+                    (driver_id, epoch, session_id, generation),
+                )
+            else:
+                generation = g
+                connection.execute(
+                    "INSERT INTO delivery_offers(driver_id,registration_epoch,session_id,generation) VALUES(?,?,?,?)",
+                    (driver_id, epoch, session_id, generation),
+                )
+            priority = connection.execute(
+                "SELECT priority FROM pending_generations WHERE generation=?", (generation,)
+            ).fetchone()
+            count = connection.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM pending_generation_tasks WHERE generation<=? AND generation>?",
+                (generation, a),
+            ).fetchone()[0]
+            return {"generation": generation, "priority": "normal" if priority is None else priority[0],
+                    "task_count": int(count)}
+
+    def confirm_delivery(self, driver_id: str, session_id: str, epoch: int, generation: int) -> bool:
+        """Confirm only the current epoch's exact outstanding offer."""
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            offer = connection.execute(
+                """SELECT generation,confirmed FROM delivery_offers
+                   WHERE driver_id=? AND registration_epoch=? AND session_id=?
+                   ORDER BY generation DESC LIMIT 1""",
+                (driver_id, epoch, session_id),
+            ).fetchone()
+            if offer is None or int(offer["generation"]) != generation:
+                raise ValueError("generation does not match the exact outstanding offer")
+            if offer["confirmed"]:
+                return False
+            connection.execute(
+                "UPDATE delivery_offers SET confirmed=1 WHERE driver_id=? AND registration_epoch=? AND generation=?",
+                (driver_id, epoch, generation),
+            )
+            connection.execute(
+                "UPDATE watchtower_deliveries SET delivered_generation=MAX(delivered_generation,?),delivery_state='delivered',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                (generation, driver_id),
+            )
+            return True
+
+    def reconcile(self, driver_id: str, session_id: str, epoch: int,
+                  through: int) -> list[dict[str, Any]]:
+        """Return the authoritative immutable per-task snapshot through N; never ACK."""
+        with self._lock:
+            self._require_registration(self._connection, driver_id, session_id, epoch)
+            ledger = self._connection.execute(
+                "SELECT latest_generation FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)
+            ).fetchone()
+            if ledger is None or through > ledger[0]:
+                raise ValueError("unavailable generation")
+            rows = self._connection.execute(
+                """SELECT s.* FROM generation_task_snapshots s
+                   JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
+                         WHERE generation<=? GROUP BY task_id) latest
+                     ON latest.task_id=s.task_id AND latest.generation=s.generation
+                   ORDER BY s.generation,s.task_id""", (through,)
+            ).fetchall()
+            return [{"task_id": row["task_id"], "generation": int(row["generation"]),
+                     "availability": row["availability"], "report_state": row["report_state"],
+                     "verdict": row["verdict"], "actionable_reason": row["actionable_reason"]}
+                    for row in rows]
+
+    def ack_generation(self, driver_id: str, session_id: str, epoch: int, through: int) -> bool:
+        """Advance ACK to exactly a delivered, consumed generation; never consume N+1."""
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            ledger = connection.execute(
+                "SELECT delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
+            ).fetchone()
+            delivered, acked = map(int, ledger)
+            if through < acked:
+                raise ValueError("stale acknowledgement")
+            if through == acked:
+                return False
+            if through > delivered:
+                raise ValueError("cannot acknowledge an undelivered generation")
+            connection.execute(
+                "UPDATE watchtower_deliveries SET acked_generation=?,delivery_state='pending',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE driver_id=?",
+                (through, driver_id),
+            )
+            # ACK is authoritative consumption. Retire stale unconfirmed
+            # redeliveries through that cursor so selection can expose N+1.
+            # Offers above a partial ACK remain available when d>a.
+            connection.execute(
+                "UPDATE delivery_offers SET confirmed=1 WHERE driver_id=? AND generation<=?",
+                (driver_id, through),
+            )
+            return True
 
     def projection_snapshots_through(self, through: int) -> list[sqlite3.Row]:
         """Return immutable actionable projection history through a generation."""

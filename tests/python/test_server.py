@@ -361,6 +361,41 @@ class ServerProcessTests(unittest.TestCase):
         self.assertEqual((self.socket_path.lstat().st_dev, self.socket_path.lstat().st_ino),
                          (info.st_dev, info.st_ino))
 
+    def test_registration_is_correlated_and_same_session_reconnect_invalidates_old_socket(self):
+        self.start()
+        producer = {"v": 1, "type": "session.register", "event_id": "crew-register",
+                    "producer_seq": 1, "session_id": "crew-session", "harness": "claude",
+                    "role": "crew", "task_id": "task-1"}
+        self.assertEqual(self.exchange(producer)["type"], "ack")
+
+        clients = []
+        streams = []
+        try:
+            for request_id in ("register-1", "register-2"):
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(3)
+                client.connect(str(self.socket_path))
+                stream = client.makefile("rwb", buffering=0)
+                clients.append(client); streams.append(stream)
+                stream.write(protocol.encode({"v": 1, "type": "watchtower.register",
+                    "request_id": request_id, "session_id": "same-session",
+                    "harness": "pi", "driver_id": "driver-1"}).encode())
+                correlated = protocol.decode(stream.readline())
+                self.assertEqual(correlated, {"v": 1, "type": "ok", "request_id": request_id})
+                self.assertEqual(protocol.decode(stream.readline())["type"], "notification")
+
+            streams[0].write(protocol.encode({"v": 1, "type": "reconcile", "request_id": "stale",
+                "driver_id": "driver-1", "through": 1}).encode())
+            self.assertEqual(protocol.decode(streams[0].readline()),
+                             {"v": 1, "type": "request.error", "request_id": "stale", "code": "invalid-field"})
+            streams[1].write(protocol.encode({"v": 1, "type": "notification.delivered",
+                "request_id": "delivered", "driver_id": "driver-1", "generation": 1}).encode())
+            self.assertEqual(protocol.decode(streams[1].readline()),
+                             {"v": 1, "type": "ok", "request_id": "delivered"})
+        finally:
+            for stream in streams: stream.close()
+            for client in clients: client.close()
+
     def test_connectable_socket_is_never_unlinked_when_lock_is_available(self):
         self.home.mkdir(mode=0o700)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
