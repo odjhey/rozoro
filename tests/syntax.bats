@@ -10,10 +10,10 @@ load test_helper/common
   done
 }
 
-@test "Pi watchtower fallback and event-bus adapter are covered by Node tests" {
+@test "Pi watchtower event-bus adapter is covered by Node tests" {
   run node --experimental-strip-types --test \
-    "$REPO_ROOT/tests/pi-watchtower.test.ts" \
-    "$REPO_ROOT/tests/pi-event-bus-adapter.test.ts"
+    "$REPO_ROOT/tests/pi-event-bus-adapter.test.ts" \
+    "$REPO_ROOT/tests/pi-cutover-additional.test.ts"
   assert_success
 }
 

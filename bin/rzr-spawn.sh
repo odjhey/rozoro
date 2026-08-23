@@ -112,7 +112,10 @@ HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
 SESSION_ID=""
 EVENT_BUS=false
-[ "${ROZORO_EVENT_BUS:-0}" = 1 ] && [ "$HARNESS" = claude ] && EVENT_BUS=true
+[ "$HARNESS" = claude ] && EVENT_BUS=true
+if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
+  "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
+fi
 [ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 case "$HARNESS" in
   pi|copilot)
@@ -128,7 +131,8 @@ if [ "$EVENT_BUS" = true ]; then
 fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
-  { cat "$HANDOFF"
+  { printf 'rozoro-task: %s\n\n' "$ID"
+    cat "$HANDOFF"
     [ -n "$RULES" ] && printf '\n\n---\n## Crew rules\n\n%s\n' "$RULES"
   } > "$SYSFILE"
 elif [ -n "$PROMPT" ]; then

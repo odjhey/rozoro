@@ -31,11 +31,11 @@ proved:
   both Stop events; daemon restart replayed two unique identities and restored
   quiescent state without duplicates.
 
-The event-bus path remains opt-in. `./bin/rozoro claude-watchtower` owns launch
+The event-bus path is production authority after the G4/G5 cutover. `./bin/rozoro claude-watchtower` owns launch
 and `--resume <session>` exact resume, validates the Herdr pane after Claude is
 ready, retains a session-stable driver identity, and activates the existing legacy/event-bus authority fence only after the
 poller proves registration readiness. Exact native resume creates a fresh
 adapter incarnation under the same native session/driver: SessionEnd remains a
 terminal fact for the old incarnation, while its `gone` state cannot poison the
-new registration. Owner death closes the poller socket promptly. No Pi/default
-cutover is included.
+new registration. Owner death closes the poller socket promptly. Production Pi
+and supported-Claude default cutover is completed by PR #63 after this G3 gate.

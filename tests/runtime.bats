@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 load test_helper/common
 
+export ROZORO_LEGACY_DIAGNOSTIC=1
+
 reduce() { python3 "$REPO_ROOT/bin/rzr-runtime.py" "$1" --id task --path "$ROZORO_HOME/state/task.runtime.json" --handoff "$ROZORO_HOME/tasks/task/handoff.md" --parser "$REPO_ROOT/bin/rzr-handoff.py" --foreground "$2"; }
 
 @test "initial settled reconciliation is unobserved and a missing report is turn-aware" {

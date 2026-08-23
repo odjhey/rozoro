@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import test from "node:test";
-import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/extensions/rozoro-event-bus-client.ts";
+import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
 
 const waitFor = async (predicate: () => boolean, timeout = 2000) => {
 	const end = Date.now() + timeout;
@@ -62,8 +62,16 @@ const registerProductionTarget = async (home: string, pane: string): Promise<str
 
 const sendProducer = async (path: string, task = "task-native", session = "crew-native") => {
 	const socket = createConnection(path); await new Promise<void>((resolve) => socket.once("connect", resolve));
-	socket.write(JSON.stringify({v:1,type:"session.register",event_id:`crew-${randomUUID()}`,producer_seq:1,session_id:session,harness:"claude",role:"crew",task_id:task}) + "\n");
-	await new Promise<void>((resolve) => socket.once("data", () => resolve())); socket.destroy();
+	const frames = [
+		{v:1,type:"session.register",event_id:`crew-register-${randomUUID()}`,producer_seq:1,session_id:session,harness:"claude",role:"crew",task_id:task},
+		{v:1,type:"turn.start",event_id:`crew-start-${randomUUID()}`,producer_seq:2,session_id:session,harness:"claude",role:"crew",task_id:task,turn_id:`${session}-turn`},
+		{v:1,type:"turn.stop",event_id:`crew-stop-${randomUUID()}`,producer_seq:3,session_id:session,harness:"claude",role:"crew",task_id:task,turn_id:`${session}-turn`,background_active:false},
+	];
+	for (const frame of frames) {
+		socket.write(JSON.stringify(frame) + "\n");
+		await new Promise<void>((resolve) => socket.once("data", () => resolve()));
+	}
+	socket.destroy();
 };
 
 const closeServer = async (server: Server, sockets: Set<Socket>) => {
@@ -76,8 +84,10 @@ test("native coalescer batches two completions straddling a 500ms adapter poll",
 	const daemon = await startDaemon(home); let wakes = 0;
 	const client = new RozoroEventBusClient({socketPath:path,sessionId:"native-cluster",driverId:driver,pollMs:500,onNotification:()=>{wakes++;}});
 	client.start(); await new Promise((resolve) => setTimeout(resolve, 450));
+	const state = join(home, "state"); await mkdir(state, {recursive:true});
+	const rewrite = (async()=>{ for(let i=0;i<12;i++){ await writeFile(join(state,"unrelated.meta"),`pane=unrelated\nnote=${i}\n`); await new Promise(r=>setTimeout(r,8)); } })();
 	await sendProducer(path, "task-cluster-a", "crew-cluster-a"); await new Promise((resolve) => setTimeout(resolve, 100));
-	await sendProducer(path, "task-cluster-b", "crew-cluster-b"); await waitFor(() => wakes === 1, 5000);
+	await sendProducer(path, "task-cluster-b", "crew-cluster-b"); await rewrite; await waitFor(() => wakes === 1, 5000);
 	await new Promise((resolve) => setTimeout(resolve, 600)); assert.equal(wakes, 1);
 	const reconcile = spawn(join(process.cwd(), "bin/rozoro"), ["reconcile", "--json"], {env:{...process.env,ROZORO_HOME:home,ROZORO_EVENT_BUS:"1",HERDR_PANE_ID:"cluster:p1"}});
 	let stdout = ""; reconcile.stdout?.on("data", (chunk) => { stdout += chunk; }); const code = await new Promise<number|null>((resolve) => reconcile.once("exit", resolve));

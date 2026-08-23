@@ -347,7 +347,7 @@ try:
     finally:
         try: os.unlink(proof+".tmp")
         except FileNotFoundError: pass
-    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
+    command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
     tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"
@@ -401,7 +401,7 @@ try:
         try: os.unlink(proof+".tmp")
         except FileNotFoundError: pass
     command = shlex.join([
-        "env", "ROZORO_EVENT_BUS=1", "ROZORO_ROLE=crew",
+        "env",  "ROZORO_ROLE=crew",
         f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
         f"ROZORO_HOME={home}", "python3", hook, "--claude-binary", binary,
         "--capability-proof", proof,
@@ -457,6 +457,9 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
       ;;
     pi)
+      # Managed Pi crews explicitly load the checkout-owned event-bus producer,
+      # even when their cwd is an arbitrary target repository.
+      printf '%s\0%s\0' --extension "$RZR_BIN/../.pi/extensions/rozoro-watchtower.ts"
       [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]     && printf '%s\0%s\0' --thinking "$effort"
       [ -n "$permmode" ]   && printf '%s\0' --approve

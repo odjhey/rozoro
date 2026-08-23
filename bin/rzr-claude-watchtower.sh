@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch or exactly resume an opt-in Claude watchtower with one event-bus owner.
+# Launch or exactly resume a daemon-authoritative Claude watchtower.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -14,6 +14,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 rzr_claude_event_capability || exit 1
+"$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
 CLAUDE_BIN="$(command -v claude)"
 PANE="${HERDR_PANE_ID:-}"
 [ -n "$PANE" ] || rzr_die "Claude watchtower launch requires its owning HERDR_PANE_ID"
@@ -46,7 +47,7 @@ READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
   ready=0
   for _ in $(seq 1 40); do [ -s "$READY" ] && ready=1 && break; kill -0 "$poller" 2>/dev/null || break; sleep .05; done
   [ "$ready" -eq 1 ] || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
-  ROZORO_EVENT_BUS=1 python3 "$RZR_BIN/rzr-event-bus-client.py" authority-activate --driver "$DRIVER" >/dev/null \
+  python3 "$RZR_BIN/rzr-event-bus-client.py" authority-activate --driver "$DRIVER" >/dev/null \
     || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
   [ -f "$DIR/.event-bus-authority" ] || { kill "$poller" 2>/dev/null || true; exit 1; }
   wait "$poller"

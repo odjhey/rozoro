@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hardened daemon API bridge for opt-in status and exact-offer reconciliation."""
+"""Hardened daemon API bridge for daemon-authoritative status and reconciliation."""
 from __future__ import annotations
 import argparse, fcntl, json, os, socket, stat, sys, uuid
 from pathlib import Path
@@ -107,7 +107,7 @@ class AuthorityBoundary:
     def require_clean(self,driver:str):
         generation,_,ack=self.cursors.get(driver,(0,0,0))
         if generation>ack:
-            raise BridgeError(f"legacy wake ledger still has pending work ({driver} generation={generation} ack={ack}). Reconcile legacy state first with ROZORO_EVENT_BUS_FALLBACK=1 ./bin/rozoro reconcile --driver {driver}")
+            raise BridgeError(f"legacy wake ledger still has pending work ({driver} generation={generation} ack={ack}). This release refuses until it is drained; check out the prior release and run: ./bin/rozoro reconcile --driver {driver}")
     def drivers(self):
         return [n for n in os.listdir(self.root_fd) if n!=".authority.lock"]
     def activate(self, driver: str|None=None):
@@ -199,10 +199,9 @@ def main():
             boundary.require_clean(a.driver); boundary.activate(a.driver); print(a.driver)
           elif a.operation=="authority-disable":
             if not a.driver: ap.error("--driver is required")
-            if any(os.environ.get(name)!="1" for name in ("ROZORO_EVENT_BUS","ROZORO_EVENT_BUS_FALLBACK","ROZORO_EVENT_BUS_DISABLE")):
-              raise BridgeError("authority-disable requires ROZORO_EVENT_BUS=1, ROZORO_EVENT_BUS_FALLBACK=1, and ROZORO_EVENT_BUS_DISABLE=1")
             flow.request(req("driver.disable",driver_id=a.driver))
-            boundary.disable(a.driver); print(a.driver)
+            boundary.disable(a.driver)
+            print(a.driver)
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
             active_drivers=[]

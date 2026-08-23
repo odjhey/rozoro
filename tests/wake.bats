@@ -2,6 +2,8 @@
 # Generic registered wake: ledger-backed delivery, driver-status gating, reconcile.
 load test_helper/common
 
+export ROZORO_LEGACY_DIAGNOSTIC=1
+
 # Register a herdr-backed Claude driver on pane "driver-pane" and echo its id.
 register_claude_driver() {
   export HERDR_PANE_ID=driver-pane

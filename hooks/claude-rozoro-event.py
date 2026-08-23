@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code 2.1.240 lifecycle hook for opt-in Rozoro crew and watchtower sessions.
+"""Claude Code 2.1.240 lifecycle hook for managed Rozoro crew and watchtower sessions.
 
 The hook deliberately extracts only opaque lifecycle identifiers and never
 publishes prompt, transcript, command, description, or assistant content.
@@ -47,8 +47,6 @@ def _claude_version() -> str | None:
 
 
 def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
-    if os.environ.get("ROZORO_EVENT_BUS") != "1":
-        return None
     role = os.environ.get("ROZORO_ROLE")
     if role not in {"crew", "watchtower"} or _claude_version() != CAPABILITY:
         return None

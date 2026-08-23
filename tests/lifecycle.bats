@@ -33,7 +33,7 @@ load test_helper/common
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
-@test "Claude event-bus opt-in generates isolated hooks and exact launch identity" {
+@test "Claude event-bus production generates isolated hooks and exact launch identity" {
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --prompt 'do exactly this'
   assert_success
   session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
@@ -59,14 +59,6 @@ load test_helper/common
   [ "$(cat "$SENTINEL")" = untouched ]
 }
 
-@test "Claude default launch has no event hooks or identity behavior change" {
-  run rzr-spawn.sh task --cwd "$TEST_ROOT"
-  assert_success
-  [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = false ]
-  [ ! -e "$ROZORO_HOME/tasks/task/claude-event-settings.json" ]
-  ! grep -F -- '--settings' "$FAKE_HERDR_LOG"
-  ! grep -F -- '--session-id' "$FAKE_HERDR_LOG"
-}
 
 @test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
   mkdir -p "$ROZORO_HOME/crew"
@@ -83,7 +75,8 @@ JSON
   [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
   assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'never push'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
   assert_file_contains "$FAKE_HERDR_LOG" $'\t--session-id\t'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
 }
@@ -395,7 +388,9 @@ JSON
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-pi'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'rozoro-task: task'
   assert_file_contains "$FAKE_HERDR_LOG" "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 

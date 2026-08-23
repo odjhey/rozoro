@@ -48,6 +48,11 @@ def _id(value: Any, field: str) -> None:
         _fail("invalid-field", f"{field} must be a safe non-empty identifier", field)
 
 
+def _array(value: Any, field: str) -> None:
+    if not isinstance(value, list):
+        _fail("invalid-field", f"{field} must be an array", field)
+
+
 def _string(value: Any, field: str) -> None:
     if not isinstance(value, str) or not value or len(value) > 128:
         _fail("invalid-field", f"{field} must be a non-empty string of at most 128 characters", field)
@@ -174,7 +179,8 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
                        "herdr_connected": _BOOL,
                        "herdr_last_error": _nullable(_STRING),
                        "herdr_inventory_errors": _NONNEGATIVE,
-                       "herdr_task_count": _NONNEGATIVE}),
+                       "herdr_task_count": _NONNEGATIVE,
+                       "drivers": _array}),
     "monitor.stop": ({"request_id": _ID}, {}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
     "watchtower.availability": ({"request_id": _ID, "driver_id": _ID}, {}),
