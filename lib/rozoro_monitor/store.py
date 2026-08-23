@@ -2,7 +2,12 @@
 
 The store has one serialized connection and one transaction boundary for event
 insertion, lifecycle reduction, projection persistence, and actionable
-membership.  Socket/client code deliberately does not live here.
+membership. Socket/client code deliberately does not live here.
+
+Threat model: the owning effective UID is trusted. We reject other owners,
+unsafe pre-existing entries, direct symlinks/non-files, and insecure modes, but
+do not claim race-free protection against malicious concurrent mutation by the
+same UID. SQLite remains file-backed in WAL mode.
 """
 
 from __future__ import annotations
@@ -274,132 +279,66 @@ def _default_reducer(tx: StoreTransaction, event: Mapping[str, Any], durable_seq
 
 
 class EventStore:
-    """One connection and lock: the daemon's only SQLite write path."""
+    """File-backed SQLite store under an owning-effective-UID trust boundary."""
 
     @staticmethod
-    def _fd_identities() -> dict[int, tuple[int, int]]:
-        """Snapshot this process's open descriptor inode identities."""
-        identities: dict[int, tuple[int, int]] = {}
+    def _validate_entry(directory_fd: int, name: str, *, create: bool = False) -> None:
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        if create:
+            flags |= os.O_CREAT
+        fd = os.open(name, flags, 0o600, dir_fd=directory_fd)
         try:
-            names = os.listdir("/dev/fd")
-        except OSError:
-            names = os.listdir("/proc/self/fd")
-        for name in names:
-            if not name.isdigit():
-                continue
-            fd = int(name)
-            try:
-                info = os.fstat(fd)
-            except OSError:
-                continue
-            identities[fd] = (info.st_dev, info.st_ino)
-        return identities
-
-    @classmethod
-    def _require_new_sqlite_handle(
-        cls, before: Mapping[int, tuple[int, int]], expected: os.stat_result, label: str
-    ) -> None:
-        wanted = (expected.st_dev, expected.st_ino)
-        after = cls._fd_identities()
-        if not any(identity == wanted and before.get(fd) != identity
-                   for fd, identity in after.items()):
-            raise RuntimeError(f"SQLite did not open the pinned {label} inode")
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise RuntimeError(f"unsafe SQLite state entry: {name}")
+            os.fchmod(fd, 0o600)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+                raise RuntimeError(f"could not make SQLite state private: {name}")
+        finally:
+            os.close(fd)
 
     def __init__(self, path: str | os.PathLike[str]):
-        self.path = Path(path)
+        self.path = Path(path).absolute()
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory_fd = os.open(
             self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        database_fd = -1
-        sidecar_fds: list[int] = []
         try:
+            directory_info = os.fstat(directory_fd)
+            if directory_info.st_uid != os.geteuid():
+                raise RuntimeError("SQLite directory must be owner-controlled")
             os.fchmod(directory_fd, 0o700)
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            database_fd = os.open(self.path.name, flags, 0o600, dir_fd=directory_fd)
-            database_info = os.fstat(database_fd)
-            if not stat.S_ISREG(database_info.st_mode) or database_info.st_uid != os.geteuid():
-                raise RuntimeError("database must be an owner-controlled regular file")
-            os.fchmod(database_fd, 0o600)
+            if stat.S_IMODE(os.fstat(directory_fd).st_mode) != 0o700:
+                raise RuntimeError("could not make SQLite directory private")
+            self._validate_entry(directory_fd, self.path.name, create=True)
             for suffix in ("-wal", "-shm"):
                 try:
-                    fd = os.open(self.path.name + suffix,
-                                 os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+                    self._validate_entry(directory_fd, self.path.name + suffix)
                 except FileNotFoundError:
-                    continue
-                info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-                    os.close(fd)
-                    raise RuntimeError(f"database sidecar {suffix} is unsafe")
-                os.fchmod(fd, 0o600)
-                sidecar_fds.append(fd)
-
-            # sqlite3 has no dirfd parameter. Anchor its actual open to the held
-            # no-follow directory, then verify it opened the pinned inode before
-            # issuing any PRAGMA or migration write.
-            open_before = self._fd_identities()
-            previous_cwd = os.open(".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fchdir(directory_fd)
-                self._connection = sqlite3.connect(
-                    self.path.name, isolation_level=None, check_same_thread=False
-                )
-            finally:
-                os.fchdir(previous_cwd)
-                os.close(previous_cwd)
-            actual = os.stat(self.path.name, dir_fd=directory_fd, follow_symlinks=False)
-            try:
-                if (actual.st_dev, actual.st_ino) != (database_info.st_dev, database_info.st_ino):
-                    raise RuntimeError("database entry changed during SQLite open")
-                self._require_new_sqlite_handle(open_before, database_info, "database")
-            except BaseException:
-                self._connection.close()
-                raise
+                    pass
 
             self._lock = threading.RLock()
+            self._connection = sqlite3.connect(
+                self.path, isolation_level=None, check_same_thread=False
+            )
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys=ON")
-            sidecars_before = self._fd_identities()
             self._connection.execute("PRAGMA journal_mode=WAL")
-            # Force SQLite to open its WAL/SHM handles before any migration or
-            # event write, then prove those handles name the no-follow entries.
-            self._connection.execute("BEGIN IMMEDIATE")
-            self._connection.rollback()
-            for suffix in ("-wal", "-shm"):
-                fd = os.open(self.path.name + suffix,
-                             os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
-                try:
-                    info = os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-                        raise RuntimeError(f"database sidecar {suffix} is unsafe")
-                    self._require_new_sqlite_handle(sidecars_before, info, suffix[1:])
-                finally:
-                    os.close(fd)
             try:
                 self._migrate()
+                # SQLite may create sidecars while enabling WAL/migrating. Under
+                # the accepted threat model the owning effective UID is trusted;
+                # directly reject unsafe resulting entries and chmod only fds.
+                for suffix in ("-wal", "-shm"):
+                    try:
+                        self._validate_entry(directory_fd, self.path.name + suffix)
+                    except FileNotFoundError:
+                        pass
             except BaseException:
                 self._connection.close()
                 raise
-            for suffix in ("-wal", "-shm"):
-                try:
-                    fd = os.open(self.path.name + suffix,
-                                 os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
-                except FileNotFoundError:
-                    continue
-                try:
-                    info = os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-                        raise RuntimeError(f"database sidecar {suffix} is unsafe")
-                    os.fchmod(fd, 0o600)
-                    self._require_new_sqlite_handle(sidecars_before, info, suffix[1:])
-                finally:
-                    os.close(fd)
         finally:
-            for fd in sidecar_fds:
-                os.close(fd)
-            if database_fd >= 0:
-                os.close(database_fd)
             os.close(directory_fd)
 
     def _commit(self) -> None:

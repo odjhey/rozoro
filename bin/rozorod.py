@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="foreground Rozoro event monitor")
     parser.add_argument("--home", help="override ROZORO_HOME")
     args = parser.parse_args()
+    os.umask(0o077)
     try:
         return asyncio.run(run(args.home))
     except AlreadyRunningError as exc:

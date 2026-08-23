@@ -11,7 +11,6 @@ import resource
 import socket
 import stat
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -76,17 +75,6 @@ class MonitorServer:
             return os.stat(name, dir_fd=self._home_fd, follow_symlinks=False)
         except FileNotFoundError:
             return None
-
-    @contextmanager
-    def _anchored_cwd(self):
-        """Anchor pathname-only stdlib APIs to the already verified home fd."""
-        previous = os.open(".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fchdir(self._home_fd)
-            yield
-        finally:
-            os.fchdir(previous)
-            os.close(previous)
 
     def _assert_home_anchor(self) -> None:
         current = os.stat(self.home, follow_symlinks=False)
@@ -186,25 +174,18 @@ class MonitorServer:
         try:
             self._assert_home_anchor()
             self._prepare_entries()
-            # sqlite3 and AF_UNIX bind expose pathname-only APIs. Anchor both
-            # synchronously, restore cwd, and only then yield to asyncio.
-            listener: socket.socket | None = None
-            with self._anchored_cwd():
-                self._store = EventStore("monitor.db")
-                db_info = self._entry("monitor.db")
-                if db_info is None or not stat.S_ISREG(db_info.st_mode):
-                    raise UnsafeStateError("database creation escaped private home")
-                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                old_umask = os.umask(0o177)
-                try:
-                    listener.bind("monitor.sock")
-                    listener.listen(self._client_limit)
-                    listener.setblocking(False)
-                except BaseException:
-                    listener.close()
-                    raise
-                finally:
-                    os.umask(old_umask)
+            self._store = EventStore(self.db_path)
+            db_info = self._entry("monitor.db")
+            if db_info is None or not stat.S_ISREG(db_info.st_mode):
+                raise UnsafeStateError("database creation escaped private home")
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                listener.bind(str(self.socket_path))
+                listener.listen(self._client_limit)
+                listener.setblocking(False)
+            except BaseException:
+                listener.close()
+                raise
             self._assert_home_anchor()
             info = self._entry("monitor.sock")
             if info is None or not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.geteuid():

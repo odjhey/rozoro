@@ -6,7 +6,6 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from lib.rozoro_monitor.store import ActionableChange, EventStore, SCHEMA_VERSION, _MIGRATIONS
 
@@ -387,31 +386,17 @@ class StoreTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(tuple(state), ("stopped", "clear", "quiescent", 2))
 
-    def test_sqlite_open_swap_is_detected_before_pragmas_or_migrations(self):
+    def test_direct_db_symlink_is_rejected_without_target_mutation(self):
         self.home.mkdir(parents=True, mode=0o700)
         external = Path(self.temp.name) / "external.db"
-        connection = sqlite3.connect(external)
-        connection.execute("CREATE TABLE sentinel(value TEXT)")
-        connection.execute("INSERT INTO sentinel VALUES('unchanged')")
-        connection.commit()
-        connection.close()
-        before = external.read_bytes()
-        real_connect = sqlite3.connect
-        def swap_then_connect(name, *args, **kwargs):
-            pinned = self.home / "pinned.db"
-            self.db.rename(pinned)
-            self.db.symlink_to(external)
-            connection = real_connect(name, *args, **kwargs)
-            self.db.unlink()
-            pinned.rename(self.db)
-            return connection
-        with mock.patch("lib.rozoro_monitor.store.sqlite3.connect", side_effect=swap_then_connect):
-            with self.assertRaisesRegex(RuntimeError, "did not open the pinned database inode"):
-                EventStore(self.db)
-        self.assertEqual(external.read_bytes(), before)
-        self.assertTrue(self.db.is_file())
-        self.assertFalse(self.db.is_symlink())
-        self.assertEqual(list(self.home.glob(".*.tmp")), [])
+        external.write_bytes(b"sentinel")
+        os.chmod(external, 0o644)
+        self.db.symlink_to(external)
+        with self.assertRaises(OSError):
+            EventStore(self.db)
+        self.assertEqual(external.read_bytes(), b"sentinel")
+        self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
+        self.assertTrue(self.db.is_symlink())
 
     def test_two_store_connections_serialize_writers_and_unique_sequences(self):
         first = EventStore(self.db)
