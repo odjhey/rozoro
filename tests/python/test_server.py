@@ -233,6 +233,10 @@ class ServerProcessTests(unittest.TestCase):
         killed.kill()
         killed.wait(timeout=5)
         self.assertTrue(self.socket_path.exists())
+        if sys.platform == "darwin":
+            refused = self.start(wait=False)
+            self.assertEqual(refused.wait(timeout=5), 2)
+            self.socket_path.unlink()  # explicit operator/supervisor stale cleanup
         restarted = self.start()
         self.assertEqual(self.health()["type"], "health.result")
         retried = self.exchange(event(91))
@@ -256,6 +260,10 @@ class ServerProcessTests(unittest.TestCase):
             {"pid": 99999999, "socket_dev": stale_info.st_dev, "socket_ino": stale_info.st_ino}
         ) + "\n")
         os.chmod(self.home / "monitor.lock", 0o600)
+        if sys.platform == "darwin":
+            refused = self.start(wait=False)
+            self.assertEqual(refused.wait(timeout=5), 2)
+            self.socket_path.unlink()
         process = self.start()
         self.assertEqual(stat.S_IMODE(self.home.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(self.socket_path.stat().st_mode), 0o600)
@@ -322,6 +330,11 @@ class ServerProcessTests(unittest.TestCase):
             self.assertTrue(backlog_full, "backlog must be demonstrably full")
             if sys.platform == "darwin":
                 self.assertTrue(backlog_refused, "Darwin full backlog must produce ECONNREFUSED")
+            live_info = self.socket_path.lstat()
+            (self.home / "monitor.lock").write_text(json.dumps({
+                "pid": 99999999, "socket_dev": live_info.st_dev, "socket_ino": live_info.st_ino,
+            }) + "\n")
+            os.chmod(self.home / "monitor.lock", 0o600)
             process = self.start(wait=False)
             self.assertEqual(process.wait(timeout=5), 2)
             self.assertTrue(self.socket_path.exists())

@@ -10,6 +10,7 @@ import os
 import resource
 import socket
 import stat
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -156,7 +157,11 @@ class MonitorServer:
             if not stat.S_ISSOCK(socket_info.st_mode):
                 raise UnsafeStateError("monitor.sock exists but is not a socket")
             identity = (socket_info.st_dev, socket_info.st_ino)
-            if (not self._previous_owner_dead or self._previous_socket_identity != identity
+            # Darwin reports ECONNREFUSED for a genuinely full live AF_UNIX
+            # backlog. User-writable metadata cannot disambiguate that result,
+            # so automatic deletion is never safe there.
+            if (sys.platform == "darwin" or not self._previous_owner_dead
+                    or self._previous_socket_identity != identity
                     or not self._socket_definitively_stale()):
                 raise AlreadyRunningError("refusing live or indeterminate monitor.sock")
             # Lock is held and the exact no-follow entry was proven to be a stale socket.

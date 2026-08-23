@@ -398,14 +398,19 @@ class StoreTests(unittest.TestCase):
         before = external.read_bytes()
         real_connect = sqlite3.connect
         def swap_then_connect(name, *args, **kwargs):
-            self.db.unlink()
+            pinned = self.home / "pinned.db"
+            self.db.rename(pinned)
             self.db.symlink_to(external)
-            return real_connect(name, *args, **kwargs)
+            connection = real_connect(name, *args, **kwargs)
+            self.db.unlink()
+            pinned.rename(self.db)
+            return connection
         with mock.patch("lib.rozoro_monitor.store.sqlite3.connect", side_effect=swap_then_connect):
-            with self.assertRaisesRegex(RuntimeError, "changed during SQLite open"):
+            with self.assertRaisesRegex(RuntimeError, "did not open the pinned database inode"):
                 EventStore(self.db)
         self.assertEqual(external.read_bytes(), before)
-        self.assertTrue(self.db.is_symlink())
+        self.assertTrue(self.db.is_file())
+        self.assertFalse(self.db.is_symlink())
         self.assertEqual(list(self.home.glob(".*.tmp")), [])
 
     def test_two_store_connections_serialize_writers_and_unique_sequences(self):

@@ -276,6 +276,35 @@ def _default_reducer(tx: StoreTransaction, event: Mapping[str, Any], durable_seq
 class EventStore:
     """One connection and lock: the daemon's only SQLite write path."""
 
+    @staticmethod
+    def _fd_identities() -> dict[int, tuple[int, int]]:
+        """Snapshot this process's open descriptor inode identities."""
+        identities: dict[int, tuple[int, int]] = {}
+        try:
+            names = os.listdir("/dev/fd")
+        except OSError:
+            names = os.listdir("/proc/self/fd")
+        for name in names:
+            if not name.isdigit():
+                continue
+            fd = int(name)
+            try:
+                info = os.fstat(fd)
+            except OSError:
+                continue
+            identities[fd] = (info.st_dev, info.st_ino)
+        return identities
+
+    @classmethod
+    def _require_new_sqlite_handle(
+        cls, before: Mapping[int, tuple[int, int]], expected: os.stat_result, label: str
+    ) -> None:
+        wanted = (expected.st_dev, expected.st_ino)
+        after = cls._fd_identities()
+        if not any(identity == wanted and before.get(fd) != identity
+                   for fd, identity in after.items()):
+            raise RuntimeError(f"SQLite did not open the pinned {label} inode")
+
     def __init__(self, path: str | os.PathLike[str]):
         self.path = Path(path)
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -309,6 +338,7 @@ class EventStore:
             # sqlite3 has no dirfd parameter. Anchor its actual open to the held
             # no-follow directory, then verify it opened the pinned inode before
             # issuing any PRAGMA or migration write.
+            open_before = self._fd_identities()
             previous_cwd = os.open(".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
                 os.fchdir(directory_fd)
@@ -319,14 +349,33 @@ class EventStore:
                 os.fchdir(previous_cwd)
                 os.close(previous_cwd)
             actual = os.stat(self.path.name, dir_fd=directory_fd, follow_symlinks=False)
-            if (actual.st_dev, actual.st_ino) != (database_info.st_dev, database_info.st_ino):
+            try:
+                if (actual.st_dev, actual.st_ino) != (database_info.st_dev, database_info.st_ino):
+                    raise RuntimeError("database entry changed during SQLite open")
+                self._require_new_sqlite_handle(open_before, database_info, "database")
+            except BaseException:
                 self._connection.close()
-                raise RuntimeError("database entry changed during SQLite open")
+                raise
 
             self._lock = threading.RLock()
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys=ON")
+            sidecars_before = self._fd_identities()
             self._connection.execute("PRAGMA journal_mode=WAL")
+            # Force SQLite to open its WAL/SHM handles before any migration or
+            # event write, then prove those handles name the no-follow entries.
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.rollback()
+            for suffix in ("-wal", "-shm"):
+                fd = os.open(self.path.name + suffix,
+                             os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                        raise RuntimeError(f"database sidecar {suffix} is unsafe")
+                    self._require_new_sqlite_handle(sidecars_before, info, suffix[1:])
+                finally:
+                    os.close(fd)
             try:
                 self._migrate()
             except BaseException:
@@ -343,6 +392,7 @@ class EventStore:
                     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
                         raise RuntimeError(f"database sidecar {suffix} is unsafe")
                     os.fchmod(fd, 0o600)
+                    self._require_new_sqlite_handle(sidecars_before, info, suffix[1:])
                 finally:
                     os.close(fd)
         finally:
