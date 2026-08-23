@@ -64,10 +64,11 @@ def run(home: Path, driver: str, session: str, pane: str, *, parent: int = 0,
                                 ["herdr", "agent", "prompt", pane, FIXED], timeout=rpc_timeout,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=False)
-                            if delivered.returncode == 0:
-                                confirmed, _ = request("notification.delivered", driver_id=driver,
-                                                       generation=generation)
-                                if confirmed.get("type") != "ok": raise RuntimeError("confirmation refused")
+                            if delivered.returncode != 0:
+                                raise RuntimeError("herdr delivery refused")
+                            confirmed, _ = request("notification.delivered", driver_id=driver,
+                                                   generation=generation)
+                            if confirmed.get("type") != "ok": raise RuntimeError("confirmation refused")
                     time.sleep(poll)
         except (ConnectionError, OSError, TimeoutError, ValueError, RuntimeError,
                 json.JSONDecodeError, subprocess.SubprocessError):
