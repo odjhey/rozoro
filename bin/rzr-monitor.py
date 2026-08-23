@@ -198,15 +198,28 @@ def reset(home: Path, force: bool) -> int:
     if not force:
         print("monitor reset requires --force; task folders are preserved", file=sys.stderr)
         return 1
-    if health(home)["running"]:
-        print("monitor reset refused while daemon is running", file=sys.stderr)
-        return 1
+    lock_fd = None
     try:
         _, home_fd = _open_home(home, create=False)
     except FileNotFoundError:
         print("monitor state already absent")
         return 0
     try:
+        lock_fd = os.open("monitor.lock", os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+                          | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=home_fd)
+        lock_info = os.fstat(lock_fd)
+        if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
+                or stat.S_IMODE(lock_info.st_mode) & 0o077):
+            raise RuntimeError("monitor.lock is not an owner-private regular file")
+        os.fchmod(lock_fd, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("monitor daemon owner lock is held") from exc
+
+        # Preflight every entry before mutating any, preventing partial reset if
+        # a later WAL/SHM path is unsafe.
+        present = []
         for name in ("monitor.db", "monitor.db-wal", "monitor.db-shm"):
             try:
                 info = os.stat(name, dir_fd=home_fd, follow_symlinks=False)
@@ -214,11 +227,15 @@ def reset(home: Path, force: bool) -> int:
                 continue
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
                 raise RuntimeError(f"refusing unsafe state entry: {name}")
+            present.append(name)
+        for name in present:
             os.unlink(name, dir_fd=home_fd)
     except Exception as exc:
         print(f"monitor reset refused: {exc}", file=sys.stderr)
         return 1
     finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
         os.close(home_fd)
     print("event-bus database reset; task folders preserved")
     return 0

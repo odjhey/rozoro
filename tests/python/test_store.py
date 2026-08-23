@@ -59,6 +59,14 @@ class StoreTests(unittest.TestCase):
         connection.execute("PRAGMA user_version=3")
         for item in items:
             self.insert_v2_event(connection, item)
+        for item in {value["session_id"]: value for value in items}.values():
+            connection.execute(
+                """INSERT INTO sessions(
+                       session_id,task_id,driver_id,harness,role,reducer_state_json,latest_durable_seq)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (item["session_id"], item.get("task_id"), item.get("driver_id"),
+                 item["harness"], item["role"], "{}", len(items)),
+            )
         connection.commit()
         connection.close()
 
@@ -135,6 +143,34 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(reopened._connection.execute(
                 "SELECT registered FROM sessions"
             ).fetchone()[0], 0)
+
+    def test_v3_upgrade_rejects_stored_column_payload_mismatch_transactionally(self):
+        self.create_v3_database([event("register", 1, "session.register")])
+        connection = sqlite3.connect(self.db)
+        connection.execute("UPDATE events SET event_type='turn.start'")
+        connection.commit(); connection.close()
+        with self.assertRaisesRegex(RuntimeError, "payload identity disagrees with stored columns"):
+            EventStore(self.db)
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertNotIn("registered", {row[1] for row in connection.execute("PRAGMA table_info(sessions)")})
+        finally:
+            connection.close()
+
+    def test_v3_upgrade_rejects_contradictory_session_identity_transactionally(self):
+        self.create_v3_database([
+            event("register", 1, "session.register"),
+            event("start", 2, "turn.start", task_id="task-2"),
+        ])
+        with self.assertRaisesRegex(RuntimeError, "contradictory session identity history"):
+            EventStore(self.db)
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 2)
+        finally:
+            connection.close()
 
     def test_v3_upgrade_replay_failure_rolls_back_schema_and_old_projections(self):
         self.create_v3_database([event("register", 1, "session.register")])

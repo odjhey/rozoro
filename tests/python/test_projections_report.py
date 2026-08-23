@@ -74,13 +74,27 @@ artifacts: none
             self.assertEqual(before["availability"], "busy")
             self.assertEqual(before["actionable_reason"], "needs-action")
             self.assertEqual(before["projection_json"]["report"]["unresolved"], 1)
+            with (self.task / "handoff.md").open("a") as handoff:
+                handoff.write("""## turn 2 — done
+verdict: done
+reason:
+did: continued
+pending: none
+inputs-needed: none
+artifacts: none
+""")
+            store.accept_event(event("stop", 3, "turn.stop", background_active=False))
+            unresolved = self.projection(store)
+            self.assertEqual((unresolved["verdict"], unresolved["actionable_reason"]),
+                             ("needs-action", "needs-action"))
+            self.assertEqual(unresolved["projection_json"]["report"]["latest_verdict"], "done")
             (self.task / ".acked-blocks-v2").write_text("1\n")
             # ACK is filesystem/report authority and never changes SQLite by itself.
-            self.assertEqual(self.projection(store), before)
-            store.accept_event(event("stop", 3, "turn.stop", background_active=False))
+            self.assertEqual(self.projection(store), unresolved)
+            store.accept_event(event("restart", 4, "turn.start", turn_id="turn-2"))
             after = self.projection(store)
-            self.assertEqual(after["availability"], "quiescent")
-            self.assertEqual(after["actionable_reason"], "needs-action")
+            self.assertEqual(after["availability"], "busy")
+            self.assertEqual((after["verdict"], after["actionable_reason"]), ("done", "none"))
             self.assertEqual(after["projection_json"]["report"]["acked_through"], 1)
 
     def test_structured_reasons_cover_invalid_failed_blocked_and_gone(self):
@@ -139,7 +153,8 @@ artifacts: none
         self.assertEqual(malformed, parse_task_report(self.task))
 
     def test_noncanonical_only_and_invalid_utf8_are_malformed_without_rejecting_event(self):
-        for number, content in enumerate((b"## notes\nprose\n", b"\xff\xfe")):
+        huge_turn = b"## turn " + (b"9" * 5000) + b"\n"
+        for number, content in enumerate((b"## notes\nprose\n", b"\xff\xfe", huge_turn)):
             with self.subTest(number=number):
                 case = self.home / f"malformed-{number}"
                 task = case / "tasks" / "task-1"

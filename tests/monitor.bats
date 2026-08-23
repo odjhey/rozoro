@@ -12,10 +12,17 @@ load test_helper/common
   printf 'authoritative\n' > "$ROZORO_HOME/tasks/task-1/handoff.md"
   chmod 700 "$ROZORO_HOME"
   run "$REPO_ROOT/bin/rozoro" monitor start; assert_success
+  run "$REPO_ROOT/bin/rozoro" monitor reset --force; assert_failure
+  [ -e "$ROZORO_HOME/monitor.db" ]
   run "$REPO_ROOT/bin/rozoro" monitor stop; assert_success
   [ -e "$ROZORO_HOME/monitor.db" ]
   run "$REPO_ROOT/bin/rozoro" monitor reset; assert_failure
   [ -e "$ROZORO_HOME/monitor.db" ]
+  external="$BATS_TEST_TMPDIR/external"; printf sentinel > "$external"
+  ln -s "$external" "$ROZORO_HOME/monitor.db-shm"
+  run "$REPO_ROOT/bin/rozoro" monitor reset --force; assert_failure
+  [ -e "$ROZORO_HOME/monitor.db" ]; [ "$(cat "$external")" = sentinel ]
+  rm "$ROZORO_HOME/monitor.db-shm"
   run "$REPO_ROOT/bin/rozoro" monitor reset --force; assert_success
   [ ! -e "$ROZORO_HOME/monitor.db" ]
   [ ! -e "$ROZORO_HOME/monitor.db-wal" ]

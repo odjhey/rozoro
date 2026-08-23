@@ -282,19 +282,26 @@ class StoreTransaction:
 def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]:
     try:
         report = parse_task_report(task_dir)
-    except (OSError, UnicodeError) as exc:
+    except Exception as exc:
         report = {
             "blocks": 0, "acked_through": 0, "unresolved": 0, "open_items": [],
             "latest": None, "protocol_errors": [f"unreadable handoff: {type(exc).__name__}"],
         }
     latest = report["latest"]
     state = "malformed" if report["protocol_errors"] else ("missing" if report["blocks"] == 0 else "valid")
-    verdict = (None if latest is None else latest["fields"].get("verdict", "").casefold() or None)
+    latest_verdict = (None if latest is None else latest["fields"].get("verdict", "").casefold() or None)
+    verdict = latest_verdict
     if state != "valid":
         verdict = None
+    elif report["open_items"]:
+        # FIFO report authority: the earliest unacknowledged open verdict
+        # survives a later done block, encoded using protocol v1's frozen tuple.
+        open_verdict = report["open_items"][0].get("verdict", "").casefold()
+        verdict = open_verdict if open_verdict in {"needs-action", "failed", "blocked"} else "needs-action"
     summary = {
         "state": state,
         "verdict": verdict,
+        "latest_verdict": latest_verdict,
         "blocks": report["blocks"],
         "acked_through": report["acked_through"],
         "unresolved": report["unresolved"],
@@ -551,22 +558,47 @@ class EventStore:
                 connection.execute(f"PRAGMA user_version={version}")
 
     def _replay_v3_projections(self, connection: sqlite3.Connection) -> None:
-        """Derive registration and projections from v3's immutable event history."""
+        """Validate v3 history, then derive registration and projections from it."""
+        anchors = {
+            row["session_id"]: (row["harness"], row["role"], row["task_id"], row["driver_id"])
+            for row in connection.execute(
+                "SELECT session_id,harness,role,task_id,driver_id FROM sessions"
+            )
+        }
+        identities: dict[str, tuple[Any, ...]] = {}
+        decoded: list[tuple[int, dict[str, Any]]] = []
+        for row in connection.execute(
+            """SELECT durable_seq,event_id,session_id,task_id,driver_id,event_type,payload_json
+               FROM events ORDER BY durable_seq"""
+        ):
+            try:
+                event = json.loads(row["payload_json"])
+                if not isinstance(event, dict):
+                    raise TypeError
+                stored = (row["event_id"], row["session_id"], row["task_id"],
+                          row["driver_id"], row["event_type"])
+                embedded = (event["event_id"], event["session_id"], event.get("task_id"),
+                            event.get("driver_id"), event["type"])
+                identity = (event["harness"], event["role"], event.get("task_id"),
+                            event.get("driver_id"))
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise RuntimeError("cannot upgrade schema 3: malformed event identity history") from exc
+            if stored != embedded:
+                raise RuntimeError("cannot upgrade schema 3: event payload identity disagrees with stored columns")
+            previous = identities.setdefault(event["session_id"], identity)
+            if previous != identity:
+                raise RuntimeError("cannot upgrade schema 3: contradictory session identity history")
+            decoded.append((int(row["durable_seq"]), event))
+        for session_id, identity in identities.items():
+            if anchors.get(session_id) != identity:
+                raise RuntimeError("cannot upgrade schema 3: event identity disagrees with session anchor")
         if connection.execute("SELECT COUNT(*) FROM generation_task_snapshots").fetchone()[0]:
             raise RuntimeError("cannot upgrade schema 3 with generated projection snapshots")
         connection.execute("DELETE FROM task_projections")
         connection.execute("DELETE FROM sessions")
         tx = StoreTransaction(connection)
-        for row in connection.execute(
-            "SELECT durable_seq,payload_json FROM events ORDER BY durable_seq"
-        ).fetchall():
-            try:
-                event = json.loads(row["payload_json"])
-                if not isinstance(event, dict):
-                    raise TypeError
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise RuntimeError("cannot upgrade schema 3: malformed event history") from exc
-            _reduce_projection(tx, event, int(row["durable_seq"]), self.tasks_dir)
+        for durable_seq, event in decoded:
+            _reduce_projection(tx, event, durable_seq, self.tasks_dir)
 
     @property
     def schema_version(self) -> int:
