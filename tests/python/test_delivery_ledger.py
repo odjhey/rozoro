@@ -203,6 +203,20 @@ class DeliveryLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "snapshots lacking immutable report fields"):
             EventStore(self.db)
 
+    def test_v4_generation_zero_task_projection_is_rejected_before_truthful_marker(self):
+        with EventStore(self.db) as store:
+            store._connection.execute(
+                "INSERT INTO task_projections(task_id,last_event_seq,projection_json) VALUES('zero',0,'{}')"
+            )
+            store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
+            store._connection.execute("DROP TABLE disabled_drivers")
+            store._connection.execute("DROP TABLE delivery_offers")
+            store._connection.execute("DROP TABLE watchtower_registrations")
+            store._connection.execute("DROP TABLE generation_membership_snapshots")
+            store._connection.execute("PRAGMA user_version=4")
+        with self.assertRaisesRegex(RuntimeError, "snapshots lacking immutable report fields"):
+            EventStore(self.db)
+
     def test_empty_v5_upgrades_with_explicit_complete_marker(self):
         with EventStore(self.db) as store:
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")

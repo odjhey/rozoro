@@ -603,7 +603,7 @@ class EventStore:
                 if version == 5:
                     self._validate_v4_delivery_upgrade(connection)
                 if version == 6:
-                    self._validate_v5_compat_upgrade(connection, reject_task_projections=original_version == 5)
+                    self._validate_v5_compat_upgrade(connection, reject_task_projections=original_version >= 4)
                     connection.execute("UPDATE generation_task_snapshots SET compat_complete=1")
                 connection.execute(f"PRAGMA user_version={version}")
 
