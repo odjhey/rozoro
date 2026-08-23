@@ -394,10 +394,12 @@ class MonitorServer:
             raise protocol.ProtocolError("read-timeout", "client read deadline exceeded") from exc
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        registered_driver: tuple[str, str, int] | None = None
         try:
             while True:
                 frame = b""
                 request_shutdown = False
+                notification: dict[str, Any] | None = None
                 try:
                     read = await self._read_frame(reader)
                     if read is None:
@@ -415,6 +417,30 @@ class MonitorServer:
                     elif message["type"] == "monitor.stop":
                         reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                         request_shutdown = True
+                    elif message["type"] == "watchtower.register":
+                        assert self._store is not None
+                        registration = self._store.register_driver(
+                            message["driver_id"], message["session_id"], message["harness"])
+                        registered_driver = (message["driver_id"], message["session_id"], registration["epoch"])
+                        offered = self._store.offer_notification(*registered_driver)
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                        if offered is not None:
+                            notification = {"v": 1, "type": "notification", **offered}
+                    elif message["type"] in {"notification.delivered", "reconcile", "ack-generation"}:
+                        assert self._store is not None
+                        if registered_driver is None or registered_driver[0] != message["driver_id"]:
+                            raise protocol.ProtocolError("invalid-field", "request is not bound to this driver session")
+                        driver_id, session_id, epoch = registered_driver
+                        if message["type"] == "notification.delivered":
+                            self._store.confirm_delivery(driver_id, session_id, epoch, message["generation"])
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                        elif message["type"] == "reconcile":
+                            reports = self._store.reconcile(driver_id, session_id, epoch, message["through"])
+                            reply = {"v": 1, "type": "reconcile.result", "request_id": message["request_id"],
+                                     "through": message["through"], "reports": reports}
+                        else:
+                            self._store.ack_generation(driver_id, session_id, epoch, message["through"])
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                     elif "event_id" in message and protocol.requires_producer_seq(message["type"]):
                         assert self._store is not None
                         try:
@@ -432,9 +458,14 @@ class MonitorServer:
                         raise protocol.ProtocolError("unsupported-type", "request is not served yet")
                 except protocol.ProtocolError as exc:
                     reply = self._correlated_error(frame, exc) if frame else self._frame_error(exc.code)
+                except ValueError:
+                    error = protocol.ProtocolError("invalid-field", "ledger request conflicts with durable state")
+                    reply = self._correlated_error(frame, error) if frame else self._frame_error(error.code)
                 except (MemoryError, RecursionError):
                     reply = self._frame_error("internal-error")
                 await self._send(writer, reply)
+                if notification is not None:
+                    await self._send(writer, notification)
                 if request_shutdown:
                     self.shutdown_requested.set()
                     return
