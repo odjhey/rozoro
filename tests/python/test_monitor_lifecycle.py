@@ -125,6 +125,76 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.assertGreaterEqual(value["spool_errors"], 2)
         self.assertTrue(malformed.exists()); self.assertTrue(temporary.exists())
 
+    def test_start_rejects_home_and_log_symlinks_without_touching_targets(self):
+        external_home = Path(self.temp.name) / "external-home"
+        external_home.mkdir(mode=0o700)
+        linked_home = Path(self.temp.name) / "linked-home"
+        linked_home.symlink_to(external_home, target_is_directory=True)
+        result = subprocess.run([str(CLI), "monitor", "start"], cwd=ROOT,
+                                env={**os.environ, "ROZORO_HOME": str(linked_home)},
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((external_home / "monitor.log").exists())
+
+        self.home.mkdir(mode=0o700)
+        external_log = Path(self.temp.name) / "external.log"; external_log.write_text("sentinel")
+        os.chmod(external_log, 0o644)
+        (self.home / "monitor.log").symlink_to(external_log)
+        result = self.cli("start")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(external_log.read_text(), "sentinel")
+        self.assertEqual(oct(external_log.stat().st_mode & 0o777), "0o644")
+
+    def test_spool_special_entries_never_block_start_periodic_health_or_sigterm(self):
+        spool = self.home / "spool"; spool.mkdir(parents=True, mode=0o700)
+        os.chmod(self.home, 0o700)
+        os.mkfifo(spool / "fifo.json", 0o600)
+        (spool / "directory.json").mkdir(mode=0o700)
+        external = Path(self.temp.name) / "external-evidence"; external.write_text("sentinel")
+        (spool / "symlink.json").symlink_to(external)
+        process = self.start_daemon()
+        value = json.loads(self.cli("status", "--json").stdout)
+        self.assertGreaterEqual(value["spool_errors"], 3)
+        self.assertTrue((spool / "fifo.json").exists())
+        periodic = spool / "periodic-fifo.json"; os.mkfifo(periodic, 0o600)
+        time.sleep(.12)
+        self.assertTrue(json.loads(self.cli("status", "--json").stdout)["running"])
+        started = time.monotonic(); process.send_signal(signal.SIGTERM)
+        self.assertEqual(process.wait(timeout=2), 0)
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(external.read_text(), "sentinel")
+
+    def test_stop_refuses_unlocked_corrupt_and_reused_pid_records_without_signal(self):
+        # A protocol-compatible foreign socket plus matching mutable JSON is not
+        # enough: the lock must be actively held.
+        self.home.mkdir(mode=0o700)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(self.home / "monitor.sock")); listener.listen()
+        socket_info = (self.home / "monitor.sock").lstat()
+        (self.home / "monitor.lock").write_text(json.dumps({"pid": os.getpid(),
+            "socket_dev": socket_info.st_dev, "socket_ino": socket_info.st_ino}))
+        os.chmod(self.home / "monitor.lock", 0o600)
+        try:
+            refused = self.cli("stop")
+            self.assertNotEqual(refused.returncode, 0)
+        finally:
+            listener.close(); (self.home / "monitor.sock").unlink(); (self.home / "monitor.lock").unlink()
+
+        self.start_daemon()
+        lock_path = self.home / "monitor.lock"; real = lock_path.read_text()
+        unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.processes.append(unrelated)
+        record = json.loads(real); record["pid"] = unrelated.pid
+        lock_path.write_text(json.dumps(record)); os.chmod(lock_path, 0o600)
+        self.assertNotEqual(self.cli("stop").returncode, 0)
+        self.assertIsNone(unrelated.poll())
+        lock_path.write_text("corrupt"); os.chmod(lock_path, 0o600)
+        self.assertNotEqual(self.cli("stop").returncode, 0)
+        self.assertIsNone(unrelated.poll())
+        lock_path.write_text(real); os.chmod(lock_path, 0o600)
+        self.assertEqual(self.cli("stop").returncode, 0)
+        self.assertIsNone(unrelated.poll())
+
     def test_detached_start_status_stop_and_foreign_owner_refusal(self):
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)

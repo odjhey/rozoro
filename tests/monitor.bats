@@ -8,6 +8,7 @@ load test_helper/common
 }
 
 @test "dispatcher monitor detached lifecycle becomes healthy and stops proven owner" {
+  chmod 700 "$ROZORO_HOME"
   run "$REPO_ROOT/bin/rozoro" monitor start
   assert_success
   run "$REPO_ROOT/bin/rozoro" monitor status --json

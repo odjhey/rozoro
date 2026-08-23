@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
-import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from lib.rozoro_monitor import protocol
+from lib.rozoro_monitor.client import _open_home
 
 
 def home_path() -> Path:
@@ -23,7 +25,7 @@ def home_path() -> Path:
 
 
 def down(home: Path, error: str | None = None) -> dict:
-    return {"running": False, "socket": str(home / "monitor.sock"), "schema_version": 0,
+    return {"running": False, "socket": str(home / "monitor.sock"), "pid": None, "schema_version": 0,
             "last_durable_seq": 0, "last_durable_time": None, "clients": 0,
             "task_count": 0, "driver_count": 0, "generation": 0,
             "delivered_generation": 0, "acked_generation": 0, "pending_count": 0,
@@ -38,22 +40,26 @@ def spool_count(home: Path) -> int:
         return 0
 
 
+def exchange(home: Path, request: dict, timeout: float = 1.0) -> dict:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(timeout)
+        connection.connect(str(home / "monitor.sock"))
+        connection.sendall(protocol.encode(request).encode())
+        data = bytearray()
+        while not data.endswith(b"\n"):
+            chunk = connection.recv(65536)
+            if not chunk:
+                raise RuntimeError("socket closed before response")
+            data.extend(chunk)
+            if len(data) > protocol.MAX_FRAME_BYTES:
+                raise RuntimeError("response is oversized")
+    return protocol.decode(bytes(data))
+
+
 def health(home: Path, timeout: float = 1.0) -> dict:
     request = {"v": 1, "type": "health", "request_id": "cli-" + uuid.uuid4().hex}
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(timeout)
-            connection.connect(str(home / "monitor.sock"))
-            connection.sendall(protocol.encode(request).encode())
-            data = bytearray()
-            while not data.endswith(b"\n"):
-                chunk = connection.recv(65536)
-                if not chunk:
-                    raise RuntimeError("socket closed before health response")
-                data.extend(chunk)
-                if len(data) > protocol.MAX_FRAME_BYTES:
-                    raise RuntimeError("health response is oversized")
-        result = protocol.decode(bytes(data))
+        result = exchange(home, request, timeout)
         if result.get("type") != "health.result" or result.get("request_id") != request["request_id"]:
             raise RuntimeError("invalid health response")
         result.pop("v", None); result.pop("type", None); result.pop("request_id", None)
@@ -78,21 +84,37 @@ def print_status(value: dict, as_json: bool) -> None:
 
 
 def start(home: Path) -> int:
+    try:
+        _, home_fd = _open_home(home)
+    except Exception as exc:
+        print(f"monitor start refused: {exc}", file=sys.stderr)
+        return 1
     current = health(home)
     if current["running"]:
+        os.close(home_fd)
         print("monitor already running", file=sys.stderr)
         return 0
-    home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(home, 0o700)
-    log_fd = os.open(home / "monitor.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    os.fchmod(log_fd, 0o600)
-    log = os.fdopen(log_fd, "ab", buffering=0)
     try:
-        subprocess.Popen([sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)],
-                         cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                         start_new_session=True, close_fds=True)
+        log_fd = os.open("monitor.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=home_fd)
+        info = os.fstat(log_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077):
+            os.close(log_fd)
+            raise RuntimeError("monitor.log must be an owner-private regular file")
+        os.fchmod(log_fd, 0o600)
+        log = os.fdopen(log_fd, "ab", buffering=0)
+        try:
+            subprocess.Popen([sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)],
+                             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                             start_new_session=True, close_fds=True)
+        finally:
+            log.close()
+    except Exception as exc:
+        print(f"monitor start refused: {exc}", file=sys.stderr)
+        return 1
     finally:
-        log.close()
+        os.close(home_fd)
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         result = health(home, 0.25)
@@ -104,43 +126,62 @@ def start(home: Path) -> int:
     return 1
 
 
-def proven_owner(home: Path) -> int:
-    before = health(home)
-    if not before["running"]:
-        raise RuntimeError("monitor is not running")
-    socket_info = (home / "monitor.sock").lstat()
-    lock = json.loads((home / "monitor.lock").read_text())
-    if (int(lock["socket_dev"]), int(lock["socket_ino"])) != (socket_info.st_dev, socket_info.st_ino):
-        raise RuntimeError("lock does not prove ownership of the live socket")
-    pid = int(lock["pid"])
-    if pid <= 1:
-        raise RuntimeError("invalid monitor owner pid")
-    after = health(home)
-    second_info = (home / "monitor.sock").lstat()
-    if not after["running"] or (second_info.st_dev, second_info.st_ino) != (socket_info.st_dev, socket_info.st_ino):
-        raise RuntimeError("monitor ownership changed during proof")
-    return pid
+def proven_owner(home: Path) -> tuple[int, dict]:
+    _, home_fd = _open_home(home, create=False)
+    try:
+        lock_fd = os.open("monitor.lock", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                          dir_fd=home_fd)
+        info = os.fstat(lock_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077):
+            raise RuntimeError("monitor.lock is not an owner-private regular file")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise RuntimeError("monitor.lock is not actively held")
+        raw = os.read(lock_fd, 512)
+        lock = json.loads(raw)
+        socket_info = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
+        if not stat.S_ISSOCK(socket_info.st_mode) or socket_info.st_uid != os.geteuid():
+            raise RuntimeError("monitor.sock is not the owned socket")
+        before = health(home)
+        expected = (socket_info.st_dev, socket_info.st_ino)
+        if (not before["running"] or int(lock["pid"]) != before["pid"]
+                or (int(lock["socket_dev"]), int(lock["socket_ino"])) != expected):
+            raise RuntimeError("lock record does not identify the live endpoint owner")
+        second = os.stat("monitor.sock", dir_fd=home_fd, follow_symlinks=False)
+        if (second.st_dev, second.st_ino) != expected:
+            raise RuntimeError("monitor ownership changed during proof")
+        os.close(home_fd)
+        return lock_fd, before
+    except BaseException:
+        if 'lock_fd' in locals(): os.close(lock_fd)
+        os.close(home_fd)
+        raise
 
 
 def stop(home: Path) -> int:
+    lock_fd = None
     try:
-        pid = proven_owner(home)
+        lock_fd, _owner = proven_owner(home)
+        request = {"v": 1, "type": "monitor.stop", "request_id": "stop-" + uuid.uuid4().hex}
+        reply = exchange(home, request)
+        if reply != {"v": 1, "type": "ok", "request_id": request["request_id"]}:
+            raise RuntimeError("endpoint did not acknowledge shutdown")
     except Exception as exc:
         print(f"monitor stop refused: {exc}", file=sys.stderr)
         return 1
-    os.kill(pid, signal.SIGTERM)
+    finally:
+        if lock_fd is not None: os.close(lock_fd)
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            print("monitor stopped")
-            return 0
         if not health(home, 0.2)["running"]:
             print("monitor stopped")
             return 0
         time.sleep(0.05)
-    print("monitor did not stop after SIGTERM", file=sys.stderr)
+    print("monitor endpoint remained healthy after shutdown request", file=sys.stderr)
     return 1
 
 

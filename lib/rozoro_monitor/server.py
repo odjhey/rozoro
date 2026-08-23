@@ -57,6 +57,7 @@ class MonitorServer:
         self._capacity.set()
         self._socket_identity: tuple[int, int] | None = None
         self._clients = 0
+        self.shutdown_requested = asyncio.Event()
         self._spool_backlog = 0
         self._spool_errors = 0
         self._last_spool_error: str | None = None
@@ -237,8 +238,8 @@ class MonitorServer:
                         errors.append(f"incomplete spool evidence retained: {name}")
                         continue
                     try:
-                        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                                     dir_fd=spool_fd)
+                        fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK
+                                     | getattr(os, "O_NOFOLLOW", 0), dir_fd=spool_fd)
                         try:
                             file_info = os.fstat(fd)
                             if (not stat.S_ISREG(file_info.st_mode) or file_info.st_uid != os.geteuid()
@@ -260,8 +261,8 @@ class MonitorServer:
                 for _, name, original, message in sorted(valid, key=lambda item: (item[0], item[1])):
                     try:
                         self._store.accept_event(message)  # returns only after COMMIT
-                        check_fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                                           dir_fd=spool_fd)
+                        check_fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK
+                                           | getattr(os, "O_NOFOLLOW", 0), dir_fd=spool_fd)
                         try:
                             current = os.read(check_fd, protocol.MAX_FRAME_BYTES + 1)
                         finally:
@@ -352,8 +353,8 @@ class MonitorServer:
             if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif message_type in {"health", "watchtower.register", "notification.delivered",
-                              "reconcile", "ack-generation"}:
+        elif message_type in {"health", "monitor.stop", "watchtower.register",
+                              "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -396,6 +397,7 @@ class MonitorServer:
         try:
             while True:
                 frame = b""
+                request_shutdown = False
                 try:
                     read = await self._read_frame(reader)
                     if read is None:
@@ -408,8 +410,11 @@ class MonitorServer:
                                  "running": True, "socket": str(self.socket_path),
                                  "clients": self._clients, **self._store.health_snapshot(),
                                  "spool_backlog": self._spool_backlog,
-                                 "spool_errors": self._spool_errors,
+                                 "spool_errors": self._spool_errors, "pid": os.getpid(),
                                  "last_spool_error": self._last_spool_error}
+                    elif message["type"] == "monitor.stop":
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                        request_shutdown = True
                     elif "event_id" in message and protocol.requires_producer_seq(message["type"]):
                         assert self._store is not None
                         try:
@@ -430,6 +435,9 @@ class MonitorServer:
                 except (MemoryError, RecursionError):
                     reply = self._frame_error("internal-error")
                 await self._send(writer, reply)
+                if request_shutdown:
+                    self.shutdown_requested.set()
+                    return
                 if reply.get("code") == "read-timeout":
                     return
         except (BrokenPipeError, ConnectionResetError, ConnectionError, TimeoutError):
