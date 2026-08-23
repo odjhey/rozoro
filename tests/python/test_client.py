@@ -284,18 +284,27 @@ class ClientTests(unittest.TestCase):
         with mock.patch.object(client.os, "fsync", side_effect=recording_fsync):
             _, fd = client._open_home(home)
         os.close(fd)
-        anchor = trusted
-        while anchor.parent != anchor and client._is_trusted_path(anchor.parent):
-            anchor = anchor.parent
-        expected_paths = []
-        current = anchor
-        for name in home.relative_to(anchor).parts:
-            expected_paths.append(current)
-            current = current / name
-        expected = [(parent.stat().st_dev, parent.stat().st_ino) for parent in expected_paths]
-        self.assertEqual(expected, synced)
+        expected_paths = [trusted, trusted / "level-one", trusted / "level-one" / "level-two"]
+        expected_tail = [(parent.stat().st_dev, parent.stat().st_ino) for parent in expected_paths]
+        self.assertEqual(expected_tail, synced[-3:])
         for component in (trusted / "level-one", trusted / "level-one" / "level-two", home):
             self.assertEqual(0o700, stat.S_IMODE(component.stat().st_mode))
+
+    def test_multilevel_home_creation_under_ordinary_owner_ancestors_succeeds(self):
+        trusted = Path(self.temp.name) / "passthrough"
+        trusted.mkdir(mode=0o700)
+        first = trusted / "a"
+        first.mkdir(mode=0o755)
+        second = first / "b"
+        second.mkdir(mode=0o755)
+        home = second / ".rozoro"
+
+        _, fd = client._open_home(home)
+        os.close(fd)
+
+        self.assertEqual(0o755, stat.S_IMODE(first.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(second.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(home.stat().st_mode))
 
     def test_multilevel_home_ancestor_fsync_failure_closes_all_fds(self):
         trusted = Path(self.temp.name) / "trusted-failure"

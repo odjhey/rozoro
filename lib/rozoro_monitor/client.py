@@ -43,6 +43,14 @@ def _is_trusted_path(path: Path) -> bool:
     return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not stat.S_IMODE(info.st_mode) & 0o022
 
 
+def _is_strictly_private_path(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not stat.S_IMODE(info.st_mode) & 0o077
+
+
 def _create_home_from_trusted_ancestor(path: Path) -> int:
     """Create or repair components durably, holding dirfds throughout.
 
@@ -54,14 +62,21 @@ def _create_home_from_trusted_ancestor(path: Path) -> int:
     if ".." in path.parts:
         raise UnsafePathError(f"refusing parent traversal in ROZORO_HOME: {path}")
 
+    # Climb to the first existing, trusted ancestor. It is a pass-through
+    # trust boundary and may be an ordinary owner-controlled directory (e.g.
+    # 0755); everything below it is client-managed and must be strictly
+    # private, so it must not be swept into the strict per-component check.
     ancestor = path
     while not _is_trusted_path(ancestor):
         if ancestor.parent == ancestor:
             raise UnsafePathError(f"no existing trusted ancestor for ROZORO_HOME: {path}")
         ancestor = ancestor.parent
-    # Climb to the highest contiguous user-owned, non-writable ancestor. Its
-    # own link predates client-managed descendants and is our trust boundary.
-    while ancestor.parent != ancestor and _is_trusted_path(ancestor.parent):
+    # Keep climbing through already-existing, strictly private ancestors: a
+    # 0700 directory always passes the strict per-component check below, so
+    # re-sweeping it is safe and lets retries repair an uncertain link left
+    # by an earlier failed fsync higher up the client-managed chain. Stop at
+    # the first ancestor that is merely a lenient pass-through boundary.
+    while _is_strictly_private_path(ancestor) and ancestor.parent != ancestor and _is_trusted_path(ancestor.parent):
         ancestor = ancestor.parent
     relative = path.relative_to(ancestor).parts
 
