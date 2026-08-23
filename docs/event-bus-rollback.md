@@ -19,7 +19,9 @@ reset only its event-bus database:
 Reset removes `monitor.db` and its SQLite sidecars. It preserves authoritative
 `tasks/` folders and handoff reports, from which later projection phases can
 rebuild state. A populated v4 generation ledger is rejected during v5 startup
-because v4 did not persist complete generation membership, and a populated v5
-generation ledger is rejected during v6 startup because v5 snapshots omit the
-immutable compatibility report fields above and cannot be losslessly
+because v4 did not persist complete generation membership. During v6 startup,
+any previously-persisted v4- or v5-origin database that still carries
+`task_projections` rows — including generation-zero rows predating generation
+tracking — is rejected too, because none of them carry the immutable
+compatibility report fields above and `compat_complete` cannot be truthfully
 backfilled; reset is required rather than manufacturing history.
