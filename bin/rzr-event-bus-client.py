@@ -105,8 +105,10 @@ class AuthorityBoundary:
             if value>protocol.MAX_INTEGER: raise ValueError
             return value
         except (UnicodeError,ValueError) as exc: raise BridgeError(f"malformed legacy ACK ledger for {driver}") from exc
+    def drivers(self):
+        return [n for n in os.listdir(self.root_fd) if n!=".authority.lock"]
     def activate(self, driver: str|None=None):
-        names=[driver] if driver else [n for n in os.listdir(self.root_fd) if n!=".authority.lock"]
+        names=[driver] if driver else self.drivers()
         for name in names:
             try: dfd=os.open(name,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=self.root_fd)
             except FileNotFoundError: continue
@@ -195,10 +197,14 @@ def main():
             boundary.disable(a.driver); print(a.driver)
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
-            boundary.activate()
+            for driver in boundary.drivers():
+              authority=flow.request(req("driver.authority",driver_id=driver))["authority"]
+              if authority=="active": boundary.activate(driver)
             print(json.dumps(flow.request(req("task.status",task_id=a.task)),sort_keys=True,separators=(",",":")))
           else:
             if not a.driver: ap.error("--driver is required")
+            authority=flow.request(req("driver.authority",driver_id=a.driver))["authority"]
+            if authority!="active": raise BridgeError(f"driver {a.driver} has {authority} daemon authority; reconcile through explicit fallback")
             boundary.activate(a.driver)
             snap=flow.request(req("reconcile.pending",driver_id=a.driver)); through=snap["through"]
             projected=[compat(r) for r in snap["reports"]]

@@ -184,20 +184,41 @@ PY
   assert_failure
 }
 
-@test "authority-disable requires flags and atomically tombstones daemon adapter before legacy resumes" {
-  seed_task; start_monitor
+@test "authority-disable retries after lost response and tombstone prevents mixed-driver marker recreation" {
+  seed_task
+  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
+import os
+from rozoro_monitor.store import EventStore
+s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')); s.register_driver('driver-2','adapter-2','pi'); s.close()
+PY
+  mkdir -p "$ROZORO_HOME/watchtowers/driver-2"; chmod 700 "$ROZORO_HOME/watchtowers/driver-2"
+  printf '%s\n' '{"driver_id":"driver-2","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-2/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-2/target.json"
+  start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json; assert_success
   [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
   assert_failure; assert_output_contains 'event-bus authoritative'
+  # Send driver.disable and intentionally lose the response before marker unlink.
+  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
+import os,socket,time,sqlite3
+from rozoro_monitor.protocol import encode
+s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.sock'))
+s.sendall(encode({'v':1,'type':'driver.disable','request_id':'lost-response','driver_id':'driver-1'}).encode()); s.close()
+for _ in range(100):
+    if sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db')).execute("select count(*) from disabled_drivers where driver_id='driver-1'").fetchone()[0]: break
+    time.sleep(.02)
+else: raise SystemExit('disable commit did not land')
+PY
+  [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   run python3 "$REPO_ROOT/bin/rzr-event-bus-client.py" authority-disable --driver driver-1
   assert_failure; assert_output_contains 'requires ROZORO_EVENT_BUS=1'
+  # Retry the same disable idempotently, then unlink the legacy-block marker.
   run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 ROZORO_EVENT_BUS_DISABLE=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
   assert_success; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   [ "$(python3 - <<'PY'
 import os,sqlite3
 c=sqlite3.connect(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
-print(c.execute('select count(*) from disabled_drivers').fetchone()[0],c.execute('select count(*) from watchtower_registrations').fetchone()[0],c.execute('select count(*) from watchtower_deliveries').fetchone()[0])
+print(c.execute("select count(*) from disabled_drivers where driver_id='driver-1'").fetchone()[0],c.execute("select count(*) from watchtower_registrations where driver_id='driver-1'").fetchone()[0],c.execute("select count(*) from watchtower_deliveries where driver_id='driver-1'").fetchone()[0])
 PY
 )" = '1 0 0' ]
   run env PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
@@ -208,6 +229,12 @@ try: s.register_driver('driver-1','adapter-race','pi')
 finally: s.close()
 PY
   assert_failure
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
+  assert_success
+  [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
+  [ -f "$ROZORO_HOME/watchtowers/driver-2/.event-bus-authority" ]
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_failure; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
   run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
   assert_success
 }

@@ -146,6 +146,8 @@ class DeliveryLedgerTests(unittest.TestCase):
             store.confirm_delivery("driver-1", "watch-1", self.epoch, 1)
             store.ack_generation("driver-1", "watch-1", self.epoch, 1)
             store.disable_driver_authority("driver-1")
+            store.disable_driver_authority("driver-1")  # uncertain first response is retry-idempotent
+            self.assertEqual(store.driver_authority("driver-1"), "disabled")
             store.accept_event(event(2))
             self.assertEqual(store._connection.execute(
                 "SELECT COUNT(*) FROM watchtower_deliveries WHERE driver_id='driver-1'"

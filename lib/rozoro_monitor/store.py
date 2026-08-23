@@ -771,9 +771,31 @@ class EventStore:
             ).fetchone()
             return None if row is None else dict(row)
 
+    def driver_authority(self, driver_id: str) -> str:
+        """Return durable authority without changing registration epochs or cursors."""
+        with self._lock:
+            if self._connection.execute("SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)).fetchone():
+                return "disabled"
+            if self._connection.execute("SELECT 1 FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)).fetchone():
+                return "active"
+            return "unknown"
+
     def disable_driver_authority(self, driver_id: str) -> None:
-        """Atomically require a clean ledger, tombstone the driver, and unregister its adapter."""
+        """Atomically tombstone a clean driver; retry succeeds after uncertain response loss."""
         with self._lock, self._immediate() as connection:
+            disabled = connection.execute(
+                "SELECT 1 FROM disabled_drivers WHERE driver_id=?", (driver_id,)
+            ).fetchone()
+            if disabled is not None:
+                registration = connection.execute(
+                    "SELECT 1 FROM watchtower_registrations WHERE driver_id=?", (driver_id,)
+                ).fetchone()
+                delivery = connection.execute(
+                    "SELECT 1 FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)
+                ).fetchone()
+                if registration is not None or delivery is not None:
+                    raise ValueError("disabled driver retains inconsistent active authority")
+                return
             row = connection.execute(
                 "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
                 (driver_id,),
