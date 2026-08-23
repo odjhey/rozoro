@@ -12,8 +12,9 @@ const api:any = {
 };
 extension(api);
 const prompt=await readFile(sysfile,"utf8");
-const ctx:any={getSystemPrompt:()=>prompt,sessionManager:{getSessionId:()=>sessionId},ui:{setStatus(){},notify(){}}};
+const ctx:any={getSystemPrompt:()=>prompt,sessionManager:{getSessionId:()=>sessionId},ui:{setStatus(){},notify(message:string){console.error(message)}}};
 const emit=async(name:string,...args:any[])=>{for(const fn of handlers.get(name)??[]) await fn(...args)};
-await emit("session_start",{},ctx); await new Promise(r=>setTimeout(r,400));
-await emit("agent_start"); await emit("agent_settled"); await new Promise(r=>setTimeout(r,400));
+const settleMs = Number(process.env.ROZORO_PI_PROCESS_SETTLE_MS || 400);
+await emit("session_start",{},ctx); await new Promise(r=>setTimeout(r,settleMs));
+await emit("agent_start"); await emit("agent_settled"); await new Promise(r=>setTimeout(r,settleMs));
 await emit("session_shutdown");

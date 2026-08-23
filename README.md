@@ -296,8 +296,8 @@ where the bundled skill and checkout-local dispatcher remain available:
 From the Rozoro checkout:
 
 ```sh
-# Pi watchtower (recommended)
-pi \
+# Pi watchtower (recommended). Keep the immutable role signal on exact resume.
+ROZORO_WATCHTOWER=1 pi \
   --approve \
   --append-system-prompt "$PWD/templates/watchtower.md"
 
@@ -313,10 +313,15 @@ plain development sessions. The resident daemon delivers issue #25's monitor
 scope; see [`docs/claude-watchtower-live-gate.md`](docs/claude-watchtower-live-gate.md).
 
 Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
-command supplies the control-tower prompt and approves the project-local
-extension for this run; the driver calls the dispatcher from the checkout.
+invocation supplies both `ROZORO_WATCHTOWER=1` (an immutable startup/reload role
+signal) and the control-tower prompt, then approves the project-local extension
+for this run. Preserve that environment signal when exactly resuming the control
+session; unsupported or missing identity intentionally leaves the adapter inactive.
+The driver calls the dispatcher from the checkout.
 
 The Pi launch loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
+Its Pi 0.84.2/Herdr startup and reload process regression is available with
+`RZR_LIVE_PI_RELOAD=1 tests/live/pi-watchtower-reload.sh` (no model call).
 It is a thin reconnecting daemon client: notifications become one fixed
 `reconcile` follow-up and are confirmed only after Pi accepts that follow-up.
 It owns no watcher child, reducer, ledger, task inventory, or filesystem watcher.
