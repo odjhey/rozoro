@@ -2,14 +2,13 @@
 
 This is the concise navigation record for the accepted event-bus plan. The
 architecture and contracts remain in [`plan.md`](plan.md); release operations
-remain in [`../../../event-bus-cutover.md`](../../../event-bus-cutover.md).
+remain in [`../../event-bus-cutover.md`](../../event-bus-cutover.md).
 
 ## Chronology
 
 Planning task `rozorod-event-bus-planning--01M0MX7HZN0TNQ2D3WSAEMNRR3`
 converted the accepted design into eighteen bounded PRs and gates G0-G5. The
-implementation PRs 1-15 then landed on `master` in this order; PR 16 remains
-open on its release branch:
+implementation PRs 1-16 landed on `master` in this order:
 
 | PR | Landed SHA | Slice | Coding task | Review task(s) |
 |---|---|---|---|---|
@@ -28,12 +27,27 @@ open on its release branch:
 | [#61](https://github.com/odjhey/rozoro/pull/61) | `cb4360c` | 13 Claude producer | `eventbus-13-claude-producer--01M0Q2JPB1EM9SW4JS1KHK7XFD` | `eventbus-13-claude-review--01M0Q36TZ2CTWY5FXDPXRRBA5F` |
 | [#60](https://github.com/odjhey/rozoro/pull/60) | `9484094` | 14 Pi adapter | `eventbus-14-pi-adapter--01M0Q2JPB1E514JH64YG7S62JV` | `eventbus-14-pi-review--01M0Q3279ZAMPD93FWH7NB4KCK` |
 | [#62](https://github.com/odjhey/rozoro/pull/62) | `20e9cb0` | 15 Claude watchtower/G3 | `eventbus-15-claude-watchtower-live--01M0Q5XHHEA7BK6P1KVAPSH3EM` | `eventbus-15-g3-review--01M0Q98KC643AFMA5W9YB47YK9` |
-| [#63](https://github.com/odjhey/rozoro/pull/63) | current branch head | 16 production cutover/G4/G5 | `eventbus-16-cutover-docs--01M0QEYE3390YGWTN713R3SB4Y` | `eventbus-16-release-review--01M0QH6N3Q3X4C7FHJNTDMT09B` |
+| [#63](https://github.com/odjhey/rozoro/pull/63) | `f9a9a825` | 16 production cutover/G4/G5 | `eventbus-16-cutover-docs--01M0QEYE3390YGWTN713R3SB4Y` | `eventbus-16-release-review--01M0QH6N3Q3X4C7FHJNTDMT09B` |
 
-PR #63 remains open and unmerged. Pi Sol high release review was requested at
-successive corrected heads and found additional G4/G5 blockers; the cutover task
-is addressing the latest findings before requesting final re-review. Issue #25
-remains open until the corrected cutover merges.
+PR #63 passed final G4/G5 review, squash-merged as `f9a9a825`, and its
+post-merge macOS syntax and full container jobs passed. Issue
+[#25](https://github.com/odjhey/rozoro/issues/25) was closed: `rozorod` now owns
+that resident-monitor scope, so no second monitor will be built.
+
+The long final cycle was investigated independently by
+`eventbus-16-fable-investigation--01M0RASRDDBF6R6FDP0MWZK0S1`. Its handoff
+reconstructed the timeline and concluded that the elapsed time was legitimate
+review, blocker repair, repeated live/process validation, and release gating—not
+environmental blockage.
+
+Post-cutover preparation is recorded by
+`eventbus-postcutover-upgrade-prep--01M0RD7J4Q26180B4DB54ZMBPT`. It created
+`safety/pre-eventbus-cutover-b5966c2`, advanced the root checkout to exact merged
+`f9a9a825`, validated the daemon/rollback path in an isolated home, and removed
+only proven orphan test daemons. The live control watchtower was deliberately
+left untouched. Its pending quiet-window operation is a clean exact-session
+restart on the merged checkout, which will switch that same watchtower to daemon
+authority and then verify health/reconcile; this is not a new session or PR.
 
 After a stable Pi+Claude soak, the accepted sequence continues with PR 17
 (`eventbus/17-codex-adapter`) and PR 18 (`eventbus/18-copilot-adapter`). They are
