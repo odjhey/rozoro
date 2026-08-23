@@ -1,3 +1,4 @@
 #!/usr/bin/env sh
-[ "${1:-}" = --version ] && { echo "2.1.240 (Claude Code)"; exit 0; }
+[ -z "${FAKE_CLAUDE_LOG:-}" ] || printf '%s\n' "$*" >> "$FAKE_CLAUDE_LOG"
+[ "${1:-}" = --version ] && { echo "${FAKE_CLAUDE_VERSION:-2.1.240} (Claude Code)"; exit 0; }
 exit 0

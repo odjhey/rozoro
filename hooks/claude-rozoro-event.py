@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import select
-import socket
-import subprocess
 import sys
 import time
 import uuid
@@ -27,11 +24,33 @@ CAPABILITY = "2.1.240"
 EVENTS = {"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"}
 
 
+_CLAUDE_BINARY: str | None = None
+_CAPABILITY_PROOF: str | None = None
+
+
+def _claude_version() -> str | None:
+    """Verify a private launch-time proof against the pinned executable inode."""
+    binary, proof = _CLAUDE_BINARY, _CAPABILITY_PROOF
+    if not binary or not proof or not os.path.isabs(binary) or not os.path.isabs(proof):
+        return None
+    try:
+        info = os.stat(proof, follow_symlinks=False)
+        if not __import__("stat").S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            return None
+        value = json.loads(Path(proof).read_text())
+        actual = os.stat(os.path.realpath(binary))
+        if value.get("binary") != os.path.realpath(binary) or [actual.st_dev, actual.st_ino] != value.get("identity"):
+            return None
+        return value.get("version") if isinstance(value.get("version"), str) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     if os.environ.get("ROZORO_EVENT_BUS") != "1":
         return None
     role = os.environ.get("ROZORO_ROLE")
-    if role not in {"crew", "watchtower"} or os.environ.get("ROZORO_CLAUDE_CAPABILITY") != CAPABILITY:
+    if role not in {"crew", "watchtower"} or _claude_version() != CAPABILITY:
         return None
     expected_session = os.environ.get("ROZORO_SESSION_ID", "")
     actual_session = payload.get("session_id")
@@ -95,84 +114,12 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
-NOTIFICATION_READ_BUDGET = 0.1
-
-
-def _watchtower_actuate(base: dict[str, Any], payload: dict[str, Any], timeout: float) -> None:
-    """Register durably and claim/deliver only at a certified clear Stop.
-
-    The daemon binds watchtower registration to the connection that carried
-    watchtower.register, so registration, the pending poll, and the delivery
-    confirmation must travel one persistent connection.
-    """
-    driver = base["driver_id"]
-    path = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser() / "monitor.sock"
-    deadline = time.monotonic() + min(timeout, 0.65)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(str(path))
-        stream = client.makefile("rb", buffering=0)
-
-        def send(message: dict[str, Any]) -> None:
-            frame = dict(message, v=1, request_id=uuid.uuid4().hex)
-            client.sendall((json.dumps(frame, separators=(",", ":")) + "\n").encode())
-
-        def receive(bound: float) -> dict[str, Any] | None:
-            remaining = min(bound, deadline - time.monotonic())
-            if remaining <= 0:
-                return None
-            readable, _, _ = select.select([client], [], [], remaining)
-            if not readable:
-                return None
-            line = stream.readline()
-            return json.loads(line) if line else None
-
-        send({"type": "watchtower.register", "session_id": base["session_id"],
-              "harness": "claude", "driver_id": driver})
-        registered = receive(timeout)
-        if not isinstance(registered, dict) or registered.get("type") != "ok":
-            return
-        snapshot = payload.get("background_tasks")
-        if payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active") is not False:
-            return
-        if not isinstance(snapshot, list) or snapshot:  # missing/malformed/nonempty fails closed
-            return
-        notification = None
-        # A normal generation first opens the daemon's 350ms collection window.
-        # Keep the same registered connection/coalescer and poll within this
-        # hook's single deadline; reconnecting would restart the window forever.
-        while deadline - time.monotonic() > NOTIFICATION_READ_BUDGET:
-            send({"type": "notification.pending", "driver_id": driver})
-            reply = receive(timeout)
-            if not isinstance(reply, dict) or reply.get("type") != "ok":
-                return
-            notification = receive(NOTIFICATION_READ_BUDGET)
-            if isinstance(notification, dict) and notification.get("type") == "notification":
-                break
-            notification = None
-        if notification is None:
-            return
-        generation = notification.get("generation")
-        if not isinstance(generation, int):
-            return
-        pane = os.environ.get("ROZORO_HERDR_PANE_ID", "")
-        remaining = deadline - time.monotonic()
-        if not pane or remaining <= 0:
-            return
-        fixed = "Rozoro notification pending; run ./bin/rozoro reconcile."
-        completed = subprocess.run(["herdr", "agent", "prompt", pane, fixed], timeout=remaining,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, check=False)
-        if completed.returncode != 0:
-            return
-        send({"type": "notification.delivered", "driver_id": driver, "generation": generation})
-        try:
-            receive(timeout)
-        except OSError:
-            pass
-
-
 def main() -> int:
+    global _CLAUDE_BINARY, _CAPABILITY_PROOF
+    if (len(sys.argv) != 5 or sys.argv[1] != "--claude-binary" or sys.argv[3] != "--capability-proof"
+            or not os.path.isabs(sys.argv[2]) or not os.path.isabs(sys.argv[4])):
+        return 0
+    _CLAUDE_BINARY, _CAPABILITY_PROOF = sys.argv[2], sys.argv[4]
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
@@ -196,15 +143,7 @@ def main() -> int:
                 client.send(event)
             except ClientError:
                 continue
-        if events and events[0].get("role") == "watchtower":
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                try:
-                    _watchtower_actuate(events[0], payload, remaining)
-                except (OSError, ValueError, TimeoutError, subprocess.SubprocessError,
-                        json.JSONDecodeError):
-                    pass
-    except (ClientError, ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (ClientError, ValueError, OSError, json.JSONDecodeError):
         # Hooks must not alter unrelated Claude behavior. Invalid/uncertified
         # input emits no lifecycle claim rather than guessing.
         return 0

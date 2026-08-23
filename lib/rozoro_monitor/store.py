@@ -882,6 +882,15 @@ class EventStore:
             connection.execute("DELETE FROM watchtower_registrations WHERE driver_id=?", (driver_id,))
             connection.execute("DELETE FROM watchtower_deliveries WHERE driver_id=?", (driver_id,))
 
+    def watchtower_availability(self, driver_id: str, session_id: str) -> str:
+        """Return only harness-certified availability for the active identity."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT availability,registered FROM sessions WHERE driver_id=? AND session_id=? AND role='watchtower'",
+                (driver_id, session_id),
+            ).fetchone()
+            return "unknown" if row is None or not row["registered"] else str(row["availability"])
+
     def driver_snapshot(self, driver_id: str) -> dict[str, int]:
         """Return one driver's exact generation cursors for CLI reconciliation."""
         with self._lock:

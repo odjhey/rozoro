@@ -327,23 +327,41 @@ rzr_claude_event_capability() {
 # already validated Herdr pane and stable driver identity; this never edits user
 # or project settings and remains opt-in.
 rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <session-id> <herdr-pane>
-  local target="$1" driver="$2" session="$3" pane="$4"
-  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$pane" <<'PY' || return 1
-import json, os, secrets, shlex, stat, sys
-path, hook, home, driver, session, pane = sys.argv[1:]
+  local target="$1" driver="$2" session="$3" pane="$4" binary
+  binary="$(command -v claude)" || return 1
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$pane" "$binary" <<'PY' || return 1
+import json, os, secrets, shlex, stat, subprocess, sys
+path, hook, home, driver, session, pane, binary = sys.argv[1:]
 parent, name = os.path.split(path); fd=os.open(parent,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
 try:
     info=os.fstat(fd)
     if info.st_uid!=os.geteuid() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)&0o077: raise SystemExit("watchtower settings directory must be owner-private")
     old=os.stat(name,dir_fd=fd,follow_symlinks=False) if os.path.lexists(path) else None
     if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid()): raise SystemExit("refusing unsafe watchtower settings destination")
-    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_HERDR_PANE_ID={pane}","ROZORO_CLAUDE_CAPABILITY=2.1.240",f"ROZORO_HOME={home}","python3",hook])
+    version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
+    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    try:
+        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
+        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+    finally:
+        try: os.unlink(proof+".tmp")
+        except FileNotFoundError: pass
+    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
-    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
-    try: os.write(out,data); os.fsync(out)
-    finally: os.close(out)
-    os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
+    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"
+    try:
+        out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        try:
+            view=memoryview(data)
+            while view: view=view[os.write(out,view):]
+            os.fsync(out)
+        finally: os.close(out)
+        os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
+    finally:
+        try: os.unlink(tmp,dir_fd=fd)
+        except FileNotFoundError: pass
 finally: os.close(fd)
 PY
 }
@@ -353,9 +371,10 @@ PY
 rzr_claude_event_settings() {  # <task-id> <exact-session-id>
   local task_id="$1" session_id="$2" target
   target="$(rzr_task_dir "$task_id")/claude-event-settings.json"
-  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" <<'PY' || return 1
-import json, os, secrets, shlex, stat, sys
-path, hook, home, task, session = sys.argv[1:]
+  local binary; binary="$(command -v claude)" || return 1
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" "$binary" <<'PY' || return 1
+import json, os, secrets, shlex, stat, subprocess, sys
+path, hook, home, task, session, binary = sys.argv[1:]
 parent, name = os.path.split(path)
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 dirfd = os.open(parent, flags)
@@ -372,11 +391,20 @@ try:
         final = None
     if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid()):
         raise SystemExit("refusing unsafe Claude settings destination")
+    version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
+    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    try:
+        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
+        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+    finally:
+        try: os.unlink(proof+".tmp")
+        except FileNotFoundError: pass
     command = shlex.join([
         "env", "ROZORO_EVENT_BUS=1", "ROZORO_ROLE=crew",
         f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
-        "ROZORO_CLAUDE_CAPABILITY=2.1.240", f"ROZORO_HOME={home}",
-        "python3", hook,
+        f"ROZORO_HOME={home}", "python3", hook, "--claude-binary", binary,
+        "--capability-proof", proof,
     ])
     entry = [{"hooks": [{"type": "command", "command": command, "timeout": 2}]}]
     settings = {"hooks": {event: entry for event in (

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "claude_code_version": "2.1.240",
+  "installation": "isolated npm @anthropic-ai/claude-code@2.1.240",
+  "authority": "event-bus opt-in only",
+  "native_live_probe": {
+    "command": "PATH=<isolated-2.1.240>/node_modules/.bin:$PATH ./tests/live/claude-hook-capability-probe.sh",
+    "hooks": ["SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"],
+    "stop_background_types": [["subagent"], []],
+    "waiting_background_proven": true,
+    "final_clear_stop_count": 1,
+    "guarded_continuation_turns": 2
+  },
+  "watchtower_process_gate": {
+    "test": "tests.python.test_claude_watchtower_poller",
+    "busy_and_waiting_background_injections": 0,
+    "quiescent_late_generation": 7,
+    "fixed_payload": "Rozoro notification pending; run ./bin/rozoro reconcile.",
+    "successful_confirmations": [7],
+    "reconnect_unconfirmed_generation": 4,
+    "refused_confirmations": 0
+  },
+  "daemon_restart_spool_live": {
+    "producer": "real hook executable authenticated to isolated Claude 2.1.240 binary inode",
+    "daemon_initially_down": true,
+    "spooled_events": 2,
+    "replayed_events": 2,
+    "unique_event_ids": 2,
+    "final_watchtower_availability": "quiescent",
+    "duplicate_events": 0
+  },
+  "privacy": "Raw model prose, local paths, prompts, commands, UUIDs, and transcripts were deleted; this reviewed fixture retains only lifecycle types/counts and deterministic fixed payload evidence."
+}

@@ -1,32 +1,36 @@
 # Claude watchtower live gate
 
-Status: blocked closed by installed-version mismatch
+Status: G3 evidence recorded for exact Claude Code 2.1.240
 
-PR 15 was developed against the merged, redacted Claude Code **2.1.240**
-capability evidence in `docs/claude-hook-capability.md`. At validation time the
-installed CLI reported **2.1.241**. The opt-in settings generator and hook retain
-an exact `2.1.240` capability guard, so 2.1.241 cannot register availability or
-actuate a wake by accident.
+The host-installed Claude remains 2.1.241 and fails closed. G3 used an isolated
+npm installation of `@anthropic-ai/claude-code@2.1.240`. The launch generator
+executes that binary's `--version`, records its resolved path and device/inode in
+an owner-private capability proof, and pins both paths as hook command arguments.
+The hook accepts no capability environment assertion and rejects a changed
+binary/proof identity.
 
-A temporary isolated capability probe was run on 2.1.241 to detect drift. It
-observed the expected hook names, active then empty Stop snapshots, timeout, and
-guarded Stop continuation, but that probe is not accepted as a replacement for
-the reviewed 2.1.240 fixture. Its raw temporary output was deleted because it
-contained local paths/model prose.
+Redacted evidence is in
+`tests/fixtures/claude-watchtower-g3-2.1.240.json`. The cost-incurring native
+probe observed a real native subagent in the authoritative non-empty Stop
+snapshot followed by exactly one empty final Stop. Raw paths, prompts,
+transcripts, commands, UUIDs, and model prose were deleted after review.
 
-Consequently the four cost-incurring G3 scenarios were **not claimed passed** on
-an unsupported version: native subagent waiting-background, final exactly-once
-completion, busy watchtower deferred delivery, and daemon restart/spool replay
-remain a mandatory review gate on an installed 2.1.240 binary (or after a
-separate reviewed 2.1.241 capability fixture updates the certified guard).
+The persistent process gate additionally proved:
 
-Validated without live cutover:
+- generations arriving after a quiescent Stop are observed by the resident
+  same-driver/session poller;
+- busy and waiting-background availability never polls/injects;
+- the next certified quiescent state injects only
+  `Rozoro notification pending; run ./bin/rozoro reconcile.` and confirms that
+  exact generation only after Herdr succeeds;
+- refusal/disconnect leaves the offer unconfirmed, and reconnect registers a new
+  epoch for redelivery;
+- a real authenticated 2.1.240 hook invocation while `rozorod` was down spooled
+  both Stop events; daemon restart replayed two unique identities and restored
+  quiescent state without duplicates.
 
-- 192 Python tests, including watchtower identity and fail-closed actuator tests;
-- the full 137-test container suite;
-- exact fixed payload and delivery confirmation only after a successful Herdr
-  prompt process;
-- missing/malformed/non-empty background snapshots, continuation callbacks, a
-  missing owned pane, timeout, and actuator refusal retain the pending offer;
-- event-bus remains opt-in and legacy generation/delivery is fenced by existing
-  one-owner authority markers.
+The event-bus path remains opt-in. `./bin/rozoro claude-watchtower` owns launch
+and `--resume <session>` exact resume, validates the Herdr pane after Claude is
+ready, retains a session-stable driver identity, and activates the existing
+legacy/event-bus authority fence only after daemon registration. No Pi/default
+cutover is included.
