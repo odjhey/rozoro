@@ -1,33 +1,40 @@
 {
-  "schema": 1,
+  "schema": 2,
   "claude_code_version": "2.1.240",
   "installation": "isolated npm @anthropic-ai/claude-code@2.1.240",
-  "authority": "event-bus opt-in only",
-  "native_live_probe": {
-    "command": "PATH=<isolated-2.1.240>/node_modules/.bin:$PATH ./tests/live/claude-hook-capability-probe.sh",
-    "hooks": ["SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"],
-    "stop_background_types": [["subagent"], []],
-    "waiting_background_proven": true,
-    "final_clear_stop_count": 1,
-    "guarded_continuation_turns": 2
+  "components": {"claude":"real","herdr":"0.8.2 real session","rozorod":"real AF_UNIX/SQLite daemon","hook":"production settings command","poller":"production process"},
+  "scenarios": {
+    "native_subagent_waiting_background": {
+      "authoritative_snapshot_counts": [1,0],
+      "waiting_background_observed": true,
+      "herdr_foreground_settled_while_background_active": true
+    },
+    "final_stop_one_completion": {
+      "first_final_empty_snapshot_count": 1,
+      "actionable_generations": 1,
+      "delivered_generations": 1,
+      "fixed_wake_occurrences_in_real_claude_pane": 1
+    },
+    "busy_accumulation": {
+      "generation_while_waiting_background": 1,
+      "delivered_while_waiting_background": 0,
+      "delivered_after_quiescent": 1,
+      "payload": "Rozoro notification pending; run ./bin/rozoro reconcile."
+    },
+    "daemon_kill_spool_restart": {
+      "socket_was_down": true,
+      "hook_spool_replayed": true,
+      "persisted_events": 14,
+      "unique_event_ids": 14,
+      "duplicate_event_ids": 0,
+      "post_restart_availability": "quiescent",
+      "latest_generation": 1,
+      "delivered_generation": 1,
+      "exact_wake_count": 1
+    }
   },
-  "watchtower_process_gate": {
-    "test": "tests.python.test_claude_watchtower_poller",
-    "busy_and_waiting_background_injections": 0,
-    "quiescent_late_generation": 7,
-    "fixed_payload": "Rozoro notification pending; run ./bin/rozoro reconcile.",
-    "successful_confirmations": [7],
-    "reconnect_unconfirmed_generation": 4,
-    "refused_confirmations": 0
-  },
-  "daemon_restart_spool_live": {
-    "producer": "real hook executable authenticated to isolated Claude 2.1.240 binary inode",
-    "daemon_initially_down": true,
-    "spooled_events": 2,
-    "replayed_events": 2,
-    "unique_event_ids": 2,
-    "final_watchtower_availability": "quiescent",
-    "duplicate_events": 0
-  },
-  "privacy": "Raw model prose, local paths, prompts, commands, UUIDs, and transcripts were deleted; this reviewed fixture retains only lifecycle types/counts and deterministic fixed payload evidence."
+  "notes": [
+    "The wake turn itself produced the expected later empty Stop; it produced no synthetic actionable generation.",
+    "Raw model prose, prompts, commands, paths, UUIDs, transcripts, npm installation, daemon home, and pane were deleted after structural extraction."
+  ]
 }

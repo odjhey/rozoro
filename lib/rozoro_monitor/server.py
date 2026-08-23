@@ -529,7 +529,7 @@ class MonitorServer:
                         if message["type"] == "watchtower.availability":
                             reply = {"v": 1, "type": "watchtower.availability.result",
                                      "request_id": message["request_id"], "driver_id": driver_id,
-                                     "availability": self._store.watchtower_availability(driver_id, session_id)}
+                                     "availability": self._store.watchtower_availability(driver_id, session_id, epoch)}
                         elif message["type"] == "notification.pending":
                             if pending_coalescer is None:
                                 raise protocol.ProtocolError("invalid-field", "pending poll has no coalescer")

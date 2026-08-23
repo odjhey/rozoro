@@ -22,13 +22,15 @@ def frame(kind: str, **fields: Any) -> bytes:
 
 
 def run(home: Path, driver: str, session: str, pane: str, *, parent: int = 0,
-        poll: float = .1, rpc_timeout: float = .75) -> int:
+        poll: float = .1, rpc_timeout: float = .75, ready_file: Path | None = None) -> int:
     """Reconnect until certified session end/parent death; never infer quiescence."""
-    while True:
-        if parent:
-            try: os.kill(parent, 0)
-            except ProcessLookupError: return 0
-            except PermissionError: return 1
+    def owner_alive() -> bool:
+        if not parent: return True
+        try: os.kill(parent, 0); return True
+        except ProcessLookupError: return False
+        except PermissionError: return False
+
+    while owner_alive():
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.settimeout(rpc_timeout)
@@ -49,7 +51,11 @@ def run(home: Path, driver: str, session: str, pane: str, *, parent: int = 0,
                 reply, _ = request("watchtower.register", session_id=session,
                                    harness="claude", driver_id=driver)
                 if reply.get("type") != "ok": raise RuntimeError("registration refused")
-                while True:
+                if ready_file is not None:
+                    temporary = ready_file.with_name(ready_file.name + f".tmp.{os.getpid()}")
+                    temporary.write_text(str(os.getpid()) + "\n"); os.chmod(temporary, 0o600)
+                    os.replace(temporary, ready_file)
+                while owner_alive():
                     state, _ = request("watchtower.availability", driver_id=driver)
                     availability = state.get("availability")
                     if availability == "gone": return 0
@@ -70,9 +76,12 @@ def run(home: Path, driver: str, session: str, pane: str, *, parent: int = 0,
                                                    generation=generation)
                             if confirmed.get("type") != "ok": raise RuntimeError("confirmation refused")
                     time.sleep(poll)
+                return 0
         except (ConnectionError, OSError, TimeoutError, ValueError, RuntimeError,
                 json.JSONDecodeError, subprocess.SubprocessError):
+            if not owner_alive(): return 0
             time.sleep(min(.25, max(.02, poll)))
+    return 0
 
 
 def main() -> int:
@@ -83,9 +92,16 @@ def main() -> int:
     parser.add_argument("--pane", required=True)
     parser.add_argument("--parent", type=int, default=0)
     parser.add_argument("--poll", type=float, default=.1)
+    parser.add_argument("--ready-file", type=Path)
     args = parser.parse_args()
     if args.poll <= 0: parser.error("--poll must be positive")
-    return run(args.home, args.driver, args.session, args.pane, parent=args.parent, poll=args.poll)
+    try:
+        return run(args.home, args.driver, args.session, args.pane, parent=args.parent,
+                   poll=args.poll, ready_file=args.ready_file)
+    finally:
+        if args.ready_file is not None:
+            try: args.ready_file.unlink()
+            except FileNotFoundError: pass
 
 
 if __name__ == "__main__":

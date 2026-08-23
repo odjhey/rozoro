@@ -134,6 +134,7 @@ class DeliveryLedgerTests(unittest.TestCase):
                 lambda: store.confirm_delivery("driver-1", "watch-1", old_epoch, 1),
                 lambda: store.reconcile("driver-1", "watch-1", old_epoch, 1),
                 lambda: store.ack_generation("driver-1", "watch-1", old_epoch, 1),
+                lambda: store.watchtower_availability("driver-1", "watch-1", old_epoch),
             ):
                 with self.assertRaises(ValueError):
                     operation()

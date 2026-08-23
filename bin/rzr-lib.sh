@@ -326,12 +326,12 @@ rzr_claude_event_capability() {
 # Generate a private Claude watchtower settings overlay. The caller supplies the
 # already validated Herdr pane and stable driver identity; this never edits user
 # or project settings and remains opt-in.
-rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <session-id> <herdr-pane>
-  local target="$1" driver="$2" session="$3" pane="$4" binary
+rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <adapter-session> <native-session> <herdr-pane>
+  local target="$1" driver="$2" session="$3" native="$4" pane="$5" binary
   binary="$(command -v claude)" || return 1
-  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$pane" "$binary" <<'PY' || return 1
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$native" "$pane" "$binary" <<'PY' || return 1
 import json, os, secrets, shlex, stat, subprocess, sys
-path, hook, home, driver, session, pane, binary = sys.argv[1:]
+path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
 parent, name = os.path.split(path); fd=os.open(parent,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
 try:
     info=os.fstat(fd)
@@ -347,7 +347,7 @@ try:
     finally:
         try: os.unlink(proof+".tmp")
         except FileNotFoundError: pass
-    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
+    command=shlex.join(["env","ROZORO_EVENT_BUS=1","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
     tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"

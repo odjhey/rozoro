@@ -53,10 +53,11 @@ def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     if role not in {"crew", "watchtower"} or _claude_version() != CAPABILITY:
         return None
     expected_session = os.environ.get("ROZORO_SESSION_ID", "")
+    native_session = os.environ.get("ROZORO_NATIVE_SESSION_ID", expected_session)
     actual_session = payload.get("session_id")
     identity_name = "task_id" if role == "crew" else "driver_id"
     identity = os.environ.get("ROZORO_TASK_ID" if role == "crew" else "ROZORO_DRIVER_ID", "")
-    if not identity or not expected_session or actual_session != expected_session:
+    if not identity or not expected_session or actual_session != native_session:
         return None
     return {"v": 1, "session_id": expected_session, "harness": "claude", "role": role, identity_name: identity}
 
