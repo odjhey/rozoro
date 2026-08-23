@@ -481,7 +481,16 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   reconcile` to drain it first, and fails loudly (rather than silently
   falling back) if the daemon socket is unreachable.
 - `ROZORO_EVENT_BUS_FALLBACK` — with `ROZORO_EVENT_BUS=1`, set to `1` to use
-  the legacy JSON/v2 path for `status`/`reconcile` instead of the daemon.
+  the legacy JSON/v2 read/reconcile path instead of the daemon. Once a clean
+  driver opts into the event bus, a private per-driver marker persistently
+  excludes legacy generation/delivery writers so both authorities cannot run.
+- `ROZORO_EVENT_BUS_DISABLE` — only with both flags above, set to `1` on an
+  explicit fallback `reconcile` to disable that driver's event-bus authority.
+  Disable is refused unless daemon generation, delivered, and ACK cursors are
+  equal; after success legacy writers may resume. Schema-5 databases containing
+  old generation snapshots must be reset with `rozoro monitor reset --force`
+  (task folders are preserved), because omitted immutable report fields cannot
+  be losslessly backfilled.
 
 ## Try it
 

@@ -3,7 +3,7 @@ load test_helper/common
 
 start_monitor() { chmod 700 "$ROZORO_HOME"; run "$REPO_ROOT/bin/rozoro" monitor start; assert_success; }
 seed_task() {
-  write_handoff task-1 '## turn 1 — done' 'verdict:       done' 'reason:        ' 'did:           tested' 'pending:       none' 'inputs-needed: none' 'artifacts:     none'
+  [ -f "$ROZORO_HOME/tasks/task-1/handoff.md" ] || write_handoff task-1 '## turn 1 — done' 'verdict:       done' 'reason:        ' 'did:           tested' 'pending:       none' 'inputs-needed: none' 'artifacts:     none'
   chmod 700 "$ROZORO_HOME"
   PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
 import os
@@ -12,6 +12,8 @@ s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
 base={'v':1,'session_id':'crew-1','harness':'pi','role':'crew','task_id':'task-1'}
 s.accept_event({**base,'type':'session.register','event_id':'evt-register','producer_seq':1})
 accepted=s.accept_event({**base,'type':'turn.stop','event_id':'evt-stop','producer_seq':2,'background_active':False})
+if os.environ.get('SEED_END'):
+    accepted=s.accept_event({**base,'type':'session.end','event_id':'evt-end','producer_seq':3})
 r=s.register_driver('driver-1','adapter-1','pi'); offer=s.offer_notification('driver-1','adapter-1',r['epoch'])
 s.confirm_delivery('driver-1','adapter-1',r['epoch'],offer['generation'])
 s.close()
@@ -43,13 +45,29 @@ PY
 
 @test "legacy pending ledger refuses opt-in and explicit fallback remains available" {
   seed_task
-  printf '%s\n' '{"generation":2,"delivered":1,"tasks":{}}' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"
+  printf '%s\n' '{"schema":1,"generation":2,"delivered":1,"tasks":{}}' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"
   printf '1\n' > "$ROZORO_HOME/watchtowers/driver-1/ack"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json" "$ROZORO_HOME/watchtowers/driver-1/ack"
   start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_failure; assert_output_contains 'Reconcile legacy state first'
   run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_success; [ "$(jq -r .availability_source <<<"$output")" = legacy-v2 ]
+}
+
+@test "exact confirmed delivery reconciles despite invalidated and duplicate unconfirmed redeliveries" {
+  seed_task
+  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
+import os
+from rozoro_monitor.store import EventStore
+s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
+epoch=s.register_driver('driver-1','adapter-2','pi')['epoch']
+s.offer_notification('driver-1','adapter-2',epoch)
+s._connection.execute("INSERT INTO delivery_offers(driver_id,registration_epoch,session_id,generation,confirmed) VALUES('driver-1',0,'stale',1,0)")
+s._connection.commit(); s.close()
+PY
+  start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success; [ "$(jq '.reports|length' <<<"$output")" = 1 ]
 }
 
 @test "reconcile refuses an unconfirmed offer and never manufactures delivery" {
@@ -95,10 +113,53 @@ PY
   [ "$(jq -r '.reports[0].reason' <<<"$output")" = '' ]
 }
 
+@test "latest handoff verdict stays distinct from FIFO actionable verdict" {
+  write_handoff task-1 '## turn 1 — action' 'verdict:       needs-action' 'reason:        decision' 'did:           stopped' 'pending:       answer' 'inputs-needed: choose' 'artifacts:     none' '## turn 2 — later done' 'verdict:       done' 'reason:        ' 'did:           done' 'pending:       none' 'inputs-needed: none' 'artifacts:     none'
+  seed_task; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success
+  [ "$(jq -r '.reports[0].verdict' <<<"$output")" = done ]
+  [ "$(jq -r '.reports[0].task_status' <<<"$output")" = open-items ]
+  [ "$(jq -r '.reports[0].action_reason' <<<"$output")" = needs-action ]
+}
+
+@test "pane availability gone does not imply snapshotted folder vanished" {
+  SEED_END=1 seed_task; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success; [ "$(jq -r '.reports[0].availability' <<<"$output")" = gone ]; [ "$(jq '.vanished|length' <<<"$output")" = 0 ]
+}
+
 @test "legacy boundary fails closed on malformed ledger evidence" {
   seed_task; printf '{bad' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json"; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
   assert_failure; assert_output_contains 'malformed legacy pending ledger'
+}
+
+@test "legacy boundary rejects cursor contradictions and oversized evidence" {
+  seed_task
+  printf '%s\n' '{"schema":1,"generation":1,"delivered":0,"tasks":{}}' > "$ROZORO_HOME/watchtowers/driver-1/pending.json"
+  printf '1\n' > "$ROZORO_HOME/watchtowers/driver-1/ack"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/pending.json" "$ROZORO_HOME/watchtowers/driver-1/ack"
+  start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
+  assert_failure; assert_output_contains '0<=ack<=delivered<=generation'
+  python3 - <<'PY'
+import os
+open(os.path.join(os.environ['ROZORO_HOME'],'watchtowers/driver-1/pending.json'),'wb').write(b'x'*(1048577))
+PY
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json
+  assert_failure; assert_output_contains 'oversized legacy ledger'
+}
+
+@test "persistent event-bus authority prevents dual legacy ownership until clean explicit disable" {
+  seed_task; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json; assert_success
+  [ -f "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
+  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
+  assert_failure; assert_output_contains 'event-bus authoritative'
+  run env ROZORO_EVENT_BUS=1 ROZORO_EVENT_BUS_FALLBACK=1 ROZORO_EVENT_BUS_DISABLE=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success; [ ! -e "$ROZORO_HOME/watchtowers/driver-1/.event-bus-authority" ]
+  run bash -c ". '$REPO_ROOT/bin/rzr-lib.sh'; rzr_ledger_bump '$ROZORO_HOME/watchtowers/driver-1' old done"
+  assert_success
 }
 
 @test "bridge rejects unsafe home and fake socket entries" {

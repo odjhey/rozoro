@@ -554,6 +554,8 @@ p = os.environ["RZR_LEDGER_PENDING"]
 authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(authority_fd, fcntl.LOCK_SH)
 os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy generation refused: driver is event-bus authoritative; explicitly disable authority before fallback")
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -594,6 +596,8 @@ import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
 authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(authority_fd, fcntl.LOCK_SH)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy delivery refused: driver is event-bus authoritative; explicitly disable authority before fallback")
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -624,6 +628,7 @@ PY
 # Coalescing gate: deliver iff generation > ack AND delivered <= ack.
 rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
   local dir="$1" g a d
+  [ ! -e "$dir/.event-bus-authority" ] || return 1
   g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
   [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
 }
@@ -632,14 +637,25 @@ rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
 rzr_ledger_ack() {  # <driver-dir> <generation>
   local dir="$1"; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
-import fcntl, os
-p=os.environ["RZR_LEDGER_ACK"]
+import fcntl, json, os
+p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"])
 authority_fd=os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"),os.O_CREAT|os.O_RDWR,0o600)
 fcntl.flock(authority_fd,fcntl.LOCK_SH)
 os.makedirs(os.path.dirname(p),mode=0o700,exist_ok=True)
-tmp=p+f".tmp.{os.getpid()}"; os.umask(0o077)
-with open(tmp,"w") as stream: stream.write(os.environ["RZR_LEDGER_VALUE"]+"\n"); stream.flush(); os.fsync(stream.fileno())
-os.replace(tmp,p); os.close(authority_fd)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy ACK refused: driver is event-bus authoritative; explicitly disable authority before fallback")
+pending=os.path.join(os.path.dirname(p),"pending.json")
+lock_fd=os.open(pending+".lock",os.O_CREAT|os.O_RDWR,0o600); fcntl.flock(lock_fd,fcntl.LOCK_EX)
+try: data=json.load(open(pending))
+except FileNotFoundError: data={"schema":1,"generation":0,"delivered":0,"tasks":{}}
+if value>int(data.get("generation",0)): raise SystemExit("legacy ACK exceeds generation")
+data["delivered"]=max(int(data.get("delivered",0)),value)
+os.umask(0o077); pending_tmp=pending+f".tmp.{os.getpid()}"
+with open(pending_tmp,"w") as stream: json.dump(data,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+os.replace(pending_tmp,pending)
+tmp=p+f".tmp.{os.getpid()}"
+with open(tmp,"w") as stream: stream.write(str(value)+"\n"); stream.flush(); os.fsync(stream.fileno())
+os.replace(tmp,p); os.close(lock_fd); os.close(authority_fd)
 PY
 }
 
