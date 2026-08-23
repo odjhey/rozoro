@@ -6,7 +6,7 @@
 {"v":1,"type":"turn.stop","event_id":"evt-006","producer_seq":6,"session_id":"session-1","harness":"claude","role":"crew","task_id":"task-1","turn_id":"turn-1","background_active":null}
 {"v":1,"type":"session.end","event_id":"evt-007","producer_seq":7,"session_id":"session-1","harness":"claude","role":"crew","task_id":"task-1"}
 {"v":1,"type":"health","request_id":"req-health"}
-{"v":1,"type":"health.result","request_id":"req-health","schema_version":3,"clients":1}
+{"v":1,"type":"health.result","request_id":"req-health","running":true,"socket":"/tmp/monitor.sock","schema_version":3,"last_durable_seq":0,"last_durable_time":null,"clients":1,"task_count":0,"driver_count":0,"generation":0,"delivered_generation":0,"acked_generation":0,"pending_count":0,"spool_backlog":0,"spool_errors":0,"last_spool_error":null}
 {"v":1,"type":"watchtower.register","request_id":"req-001","session_id":"watch-1","harness":"pi","driver_id":"driver-1"}
 {"v":1,"type":"notification","generation":54,"priority":"normal","task_count":4}
 {"v":1,"type":"notification.delivered","request_id":"req-002","driver_id":"driver-1","generation":54}
