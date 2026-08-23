@@ -60,9 +60,9 @@ const registerProductionTarget = async (home: string, pane: string): Promise<str
 	const code = await new Promise<number|null>((resolve) => child.once("exit", resolve)); assert.equal(code, 0); return stdout.trim();
 };
 
-const sendProducer = async (path: string) => {
+const sendProducer = async (path: string, task = "task-native", session = "crew-native") => {
 	const socket = createConnection(path); await new Promise<void>((resolve) => socket.once("connect", resolve));
-	socket.write(JSON.stringify({v:1,type:"session.register",event_id:`crew-${randomUUID()}`,producer_seq:1,session_id:"crew-native",harness:"claude",role:"crew",task_id:"task-native"}) + "\n");
+	socket.write(JSON.stringify({v:1,type:"session.register",event_id:`crew-${randomUUID()}`,producer_seq:1,session_id:session,harness:"claude",role:"crew",task_id:task}) + "\n");
 	await new Promise<void>((resolve) => socket.once("data", () => resolve())); socket.destroy();
 };
 
@@ -70,6 +70,20 @@ const closeServer = async (server: Server, sockets: Set<Socket>) => {
 	for (const socket of sockets) socket.destroy();
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 };
+
+test("native coalescer batches two completions straddling a 500ms adapter poll", async () => {
+	const home = await mkdtemp(join(tmpdir(), "rozoro-native-")); const path = join(home, "monitor.sock"); const driver = await registerProductionTarget(home, "cluster:p1");
+	const daemon = await startDaemon(home); let wakes = 0;
+	const client = new RozoroEventBusClient({socketPath:path,sessionId:"native-cluster",driverId:driver,pollMs:500,onNotification:()=>{wakes++;}});
+	client.start(); await new Promise((resolve) => setTimeout(resolve, 450));
+	await sendProducer(path, "task-cluster-a", "crew-cluster-a"); await new Promise((resolve) => setTimeout(resolve, 100));
+	await sendProducer(path, "task-cluster-b", "crew-cluster-b"); await waitFor(() => wakes === 1, 5000);
+	await new Promise((resolve) => setTimeout(resolve, 600)); assert.equal(wakes, 1);
+	const reconcile = spawn(join(process.cwd(), "bin/rozoro"), ["reconcile", "--json"], {env:{...process.env,ROZORO_HOME:home,ROZORO_EVENT_BUS:"1",HERDR_PANE_ID:"cluster:p1"}});
+	let stdout = ""; reconcile.stdout?.on("data", (chunk) => { stdout += chunk; }); const code = await new Promise<number|null>((resolve) => reconcile.once("exit", resolve));
+	assert.equal(code, 0); assert.deepEqual(JSON.parse(stdout).vanished.sort(), ["task-cluster-a", "task-cluster-b"]);
+	client.close(); await stopDaemon(daemon); await rm(home, {recursive:true,force:true});
+});
 
 test("native daemon offers a post-registration generation once without epoch churn", async () => {
 	const home = await mkdtemp(join(tmpdir(), "rozoro-native-")); const path = join(home, "monitor.sock"); const daemon = await startDaemon(home); let wakes = 0;

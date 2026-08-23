@@ -82,6 +82,7 @@ class Coalescer:
         self._collection: _Collection | None = None
         self._collection_lock = threading.Lock()
         self._in_flight_generation: int | None = None
+        self._externally_offered_generation: int | None = None
         # A non-reentrant claim suppresses both recursive actuator callbacks and
         # simultaneous event-loop/thread polls without blocking either caller.
         self._delivery_claim = threading.Lock()
@@ -90,6 +91,35 @@ class Coalescer:
     def deadline(self) -> float | None:
         with self._collection_lock:
             return None if self._collection is None else self._collection.deadline
+
+    def offer_pending(self) -> Notification | None:
+        """Create one externally-confirmed offer only after collection eligibility.
+
+        Socket adapters call this from a same-epoch pending poll, then explicitly
+        confirm the exact generation after their native delivery succeeds.
+        """
+        now = self.clock()
+        frontier = self.store.notification_frontier(self.driver_id, self.session_id, self.epoch)
+        if frontier is None:
+            with self._collection_lock:
+                self._collection = None
+                self._externally_offered_generation = None
+            return None
+        generation, priority, immediate = frontier
+        with self._collection_lock:
+            if self._externally_offered_generation == generation:
+                return None
+            if self._collection is None:
+                self._collection = _Collection(generation, now + self.collection_window)
+            elif generation > self._collection.generation:
+                self._collection.generation = generation
+            if not immediate and priority != "urgent" and now < self._collection.deadline:
+                return None
+            offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
+            if offer is None or offer["generation"] != generation:
+                return None
+            self._externally_offered_generation = generation
+            return Notification(**offer)
 
     def poll(self) -> DeliveryResult | None:
         now = self.clock()
