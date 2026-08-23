@@ -177,6 +177,7 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
                        "herdr_task_count": _NONNEGATIVE}),
     "monitor.stop": ({"request_id": _ID}, {}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
+    "notification.pending": ({"request_id": _ID, "driver_id": _ID}, {}),
     "notification": ({"generation": _POSITIVE, "priority": _PRIORITY, "task_count": _NONNEGATIVE}, {}),
     "notification.delivered": ({"request_id": _ID, "driver_id": _ID, "generation": _POSITIVE}, {}),
     "reconcile": ({"request_id": _ID, "driver_id": _ID, "through": _POSITIVE}, {}),

@@ -13,10 +13,11 @@ export type AdapterOptions = {
 	onNotification: (generation: number) => void | Promise<void>;
 	onStatus?: (status: string) => void;
 	reconnectMs?: number;
+	pollMs?: number;
 };
 
 type Frame = Record<string, unknown>;
-type Pending = { frame: Frame; kind: "event" | "delivery" };
+type Pending = { frame: Frame; kind: "event" | "delivery" | "poll" };
 type SocketIdentity = { dev: number; ino: number };
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/;
 const own = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -39,6 +40,7 @@ export class RozoroEventBusClient {
 	private bufferedBytes = 0;
 	private stopped = true;
 	private reconnectTimer?: ReturnType<typeof setTimeout>;
+	private pollTimer?: ReturnType<typeof setInterval>;
 	private connecting = false;
 	private registered = false;
 	private registrationRequest = "";
@@ -116,6 +118,8 @@ export class RozoroEventBusClient {
 		this.registrationRequest = "";
 		this.chunks = [];
 		this.bufferedBytes = 0;
+		if (this.pollTimer) clearInterval(this.pollTimer);
+		this.pollTimer = undefined;
 		this.delivering = undefined;
 		this.notifications = [];
 		this.deliveredThisEpoch.clear();
@@ -136,6 +140,13 @@ export class RozoroEventBusClient {
 	}
 
 	private write(frame: Frame): void { this.socket?.write(`${JSON.stringify(frame)}\n`); }
+
+	private poll(): void {
+		if (!this.registered || this.pending?.kind === "poll" || this.queue.some((item) => item.kind === "poll")) return;
+		this.queue.push({ frame: { v: 1, type: "notification.pending", request_id: `pi-poll-${randomUUID()}`,
+			driver_id: this.driverId }, kind: "poll" });
+		this.flush();
+	}
 
 	private flush(): void {
 		if (!this.registered || this.pending || !this.socket?.writable || this.queue.length === 0) return;
@@ -183,6 +194,8 @@ export class RozoroEventBusClient {
 			this.epoch++;
 			this.options.onStatus?.("event bus: connected");
 			if (!this.queue.some((item) => item.frame.event_id === this.sessionRegistration.frame.event_id)) this.queue.unshift(this.sessionRegistration);
+			this.pollTimer = setInterval(() => this.poll(), this.options.pollMs ?? 500);
+			this.pollTimer.unref();
 			this.flush();
 			return true;
 		}
@@ -227,7 +240,9 @@ export class RozoroEventBusClient {
 		if (this.stopped) return;
 		this.stopped = true;
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+		if (this.pollTimer) clearInterval(this.pollTimer);
 		this.reconnectTimer = undefined;
+		this.pollTimer = undefined;
 		const socket = this.socket; this.socket = undefined;
 		if (socket) { socket.removeAllListeners(); socket.destroy(); }
 		this.queue = []; this.pending = undefined; this.notifications = []; this.delivering = undefined; this.chunks = []; this.bufferedBytes = 0;

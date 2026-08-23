@@ -26,7 +26,7 @@ async function fakeServer(path: string, frames: Record<string, unknown>[]): Prom
 			for (;;) {
 				const nl = buffer.indexOf("\n"); if (nl < 0) break;
 				const frame = JSON.parse(buffer.slice(0, nl)); buffer = buffer.slice(nl + 1); frames.push(frame);
-				if (frame.type === "watchtower.register") socket.write(`${JSON.stringify({v:1,type:"ok",request_id:frame.request_id})}\n`);
+				if (frame.type === "watchtower.register" || frame.type === "notification.pending") socket.write(`${JSON.stringify({v:1,type:"ok",request_id:frame.request_id})}\n`);
 				else if (["session.register","turn.start","turn.stop"].includes(frame.type)) socket.write(`${JSON.stringify({v:1,type:"ack",event_id:frame.event_id,durable_seq:frames.length})}\n`);
 				else if (frame.type === "notification.delivered") socket.write(`${JSON.stringify({v:1,type:"ok",request_id:frame.request_id})}\n`);
 			}
@@ -51,6 +51,15 @@ const startDaemon = async (home: string): Promise<ChildProcess> => {
 const stopDaemon = async (child: ChildProcess) => {
 	child.kill("SIGTERM"); await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 };
+const registerProductionTarget = async (home: string, pane: string): Promise<string> => {
+	const fakeRoot = join(home, "fake-herdr"); await mkdir(fakeRoot, {recursive:true});
+	await writeFile(join(fakeRoot, `status.${pane}`), "idle\n"); await writeFile(join(fakeRoot, `kind.${pane}`), "pi\n"); await writeFile(join(fakeRoot, `ready.${pane}`), "true\n");
+	const child = spawn(join(process.cwd(), "bin/rozoro"), ["register", "--harness", "pi", "--backend", "herdr"],
+		{env:{...process.env,PATH:`${join(process.cwd(), "tests/fakes")}:${process.env.PATH}`,ROZORO_HOME:home,HERDR_PANE_ID:pane,FAKE_HERDR_ROOT:fakeRoot,FAKE_HERDR_SOCKET:"fake"}});
+	let stdout = ""; child.stdout?.on("data", (chunk) => { stdout += chunk; });
+	const code = await new Promise<number|null>((resolve) => child.once("exit", resolve)); assert.equal(code, 0); return stdout.trim();
+};
+
 const sendProducer = async (path: string) => {
 	const socket = createConnection(path); await new Promise<void>((resolve) => socket.once("connect", resolve));
 	socket.write(JSON.stringify({v:1,type:"session.register",event_id:`crew-${randomUUID()}`,producer_seq:1,session_id:"crew-native",harness:"claude",role:"crew",task_id:"task-native"}) + "\n");
@@ -62,18 +71,28 @@ const closeServer = async (server: Server, sockets: Set<Socket>) => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 };
 
+test("native daemon offers a post-registration generation once without epoch churn", async () => {
+	const home = await mkdtemp(join(tmpdir(), "rozoro-native-")); const path = join(home, "monitor.sock"); const daemon = await startDaemon(home); let wakes = 0;
+	const client = new RozoroEventBusClient({socketPath:path,sessionId:"native-late",driverId:"driver-late",pollMs:30,onNotification:()=>{wakes++;}});
+	client.start(); await new Promise((resolve) => setTimeout(resolve, 100)); await sendProducer(path);
+	await waitFor(() => wakes === 1, 5000); await new Promise((resolve) => setTimeout(resolve, 150)); assert.equal(wakes, 1);
+	client.close(); await stopDaemon(daemon); await rm(home, {recursive:true,force:true});
+});
+
 test("native daemon preserves delivered-unacked wake across restart and fixed reconcile identity", async () => {
 	const home = await mkdtemp(join(tmpdir(), "rozoro-native-")); const path = join(home, "monitor.sock");
-	const driver = herdrDriverId("w7:p12"); const target = join(home, "watchtowers", driver);
-	await mkdir(target, {recursive:true,mode:0o700}); await writeFile(join(target, "target.json"), JSON.stringify({schema:1,driver_id:driver,harness:"pi"}) + "\n", {mode:0o600});
+	const driver = herdrDriverId("w7:p12"); assert.equal(await registerProductionTarget(home, "w7:p12"), driver);
 	let daemon = await startDaemon(home); await sendProducer(path); const wakes: string[] = [];
 	const client = new RozoroEventBusClient({socketPath:path,sessionId:"native-pi-session",driverId:driver,reconnectMs:20,onNotification:()=>{wakes.push(WAKE_CONTENT);}});
-	client.start(); await waitFor(() => wakes.length === 1); await stopDaemon(daemon); daemon = await startDaemon(home);
-	await waitFor(() => wakes.length === 2, 5000); await new Promise((resolve) => setTimeout(resolve, 100)); assert.equal(wakes.length, 2);
-	const reconcile = spawn(join(process.cwd(), "bin/rozoro"), ["reconcile", "--json"], {env:{...process.env,ROZORO_HOME:home,ROZORO_EVENT_BUS:"1",HERDR_PANE_ID:"w7:p12"}});
-	let stdout = ""; reconcile.stdout?.on("data", (chunk) => { stdout += chunk; });
-	const code = await new Promise<number|null>((resolve) => reconcile.once("exit", resolve)); assert.equal(code, 0); assert.equal(JSON.parse(stdout).driver, driver);
-	client.close(); await stopDaemon(daemon); await rm(home, {recursive:true,force:true});
+	try {
+		client.start(); await waitFor(() => wakes.length === 1); await stopDaemon(daemon); daemon = await startDaemon(home);
+		await waitFor(() => wakes.length === 2, 5000); await new Promise((resolve) => setTimeout(resolve, 100)); assert.equal(wakes.length, 2);
+		const reconcile = spawn(join(process.cwd(), "bin/rozoro"), ["reconcile", "--json"], {env:{...process.env,ROZORO_HOME:home,ROZORO_EVENT_BUS:"1",HERDR_PANE_ID:"w7:p12"}});
+		let stdout = "", stderr = ""; reconcile.stdout?.on("data", (chunk) => { stdout += chunk; }); reconcile.stderr?.on("data", (chunk) => { stderr += chunk; });
+		const code = await new Promise<number|null>((resolve) => reconcile.once("exit", resolve)); assert.equal(code, 0, stderr); assert.equal(JSON.parse(stdout).driver, driver);
+	} finally {
+		client.close(); if (daemon.exitCode === null) await stopDaemon(daemon); await rm(home, {recursive:true,force:true});
+	}
 });
 
 test("uses prose-free registration, publishes only certified Pi lifecycle, and confirms after fixed wake", async () => {

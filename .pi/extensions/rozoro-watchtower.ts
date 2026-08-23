@@ -167,7 +167,11 @@ export default function (pi: ExtensionAPI) {
 			const sessionId = ctx.sessionManager.getSessionId();
 			const paneId = process.env.HERDR_PANE_ID;
 			if (!paneId) throw new Error("Rozoro event-bus Pi watchtower requires HERDR_PANE_ID");
-			const driverId = herdrDriverId(paneId);
+			const expectedDriverId = herdrDriverId(paneId);
+			const registration = await pi.exec(join(repoRoot, "bin", "rozoro"), ["register", "--harness", "pi", "--backend", "herdr"]);
+			if (registration.code !== 0) throw new Error(`Rozoro watchtower target registration failed: ${registration.stderr.trim()}`);
+			const driverId = registration.stdout.trim();
+			if (driverId !== expectedDriverId) throw new Error("Rozoro watchtower target identity does not match the resident Pi pane");
 			busClient = new RozoroEventBusClient({
 				socketPath: join(rozoroHome, "monitor.sock"), sessionId, driverId,
 				onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),

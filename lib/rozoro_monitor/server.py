@@ -405,7 +405,7 @@ class MonitorServer:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
         elif message_type in {"health", "task.status", "driver.snapshot", "driver.disable", "driver.authority", "reconcile.pending", "reconcile.ack",
-                              "monitor.stop", "watchtower.register", "notification.delivered", "reconcile", "ack-generation"}:
+                              "monitor.stop", "watchtower.register", "notification.pending", "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -518,12 +518,17 @@ class MonitorServer:
                         reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                         if offered is not None:
                             notification = {"v": 1, "type": "notification", **offered}
-                    elif message["type"] in {"notification.delivered", "reconcile", "ack-generation"}:
+                    elif message["type"] in {"notification.pending", "notification.delivered", "reconcile", "ack-generation"}:
                         assert self._store is not None
                         if registered_driver is None or registered_driver[0] != message["driver_id"]:
                             raise protocol.ProtocolError("invalid-field", "request is not bound to this driver session")
                         driver_id, session_id, epoch = registered_driver
-                        if message["type"] == "notification.delivered":
+                        if message["type"] == "notification.pending":
+                            offered = self._store.offer_notification(driver_id, session_id, epoch)
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                            if offered is not None:
+                                notification = {"v": 1, "type": "notification", **offered}
+                        elif message["type"] == "notification.delivered":
                             self._store.confirm_delivery(driver_id, session_id, epoch, message["generation"])
                             reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                         elif message["type"] == "reconcile":

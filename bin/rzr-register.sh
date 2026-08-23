@@ -72,7 +72,8 @@ esac
 
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
 DIR="$(rzr_driver_dir "$DRIVER_ID")"
-mkdir -p "$DIR"; chmod 700 "$DIR" 2>/dev/null || true
+mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)"
+mkdir -p "$DIR"; chmod 700 "$DIR"
 
 RZR_REG_OUT="$DIR/target.json" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
