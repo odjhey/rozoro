@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
-from rozoro_monitor.client import ClientError, ProducerClient  # noqa: E402
+from rozoro_monitor.client import ClientError, ProducerClient, prepare_event  # noqa: E402
 
 CAPABILITY = "2.1.240"
 EVENTS = {"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"}
@@ -79,7 +80,10 @@ def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     fields: dict[str, Any] = {"background_active": bool(snapshot) if valid_snapshot else None}
     if isinstance(prompt_id, str) and prompt_id:
         fields["turn_id"] = prompt_id
-    events.append(_event(base, "turn.stop", **fields))
+    # Stop the foreground first, then apply the authoritative count last. A
+    # true boolean carries presence only and would otherwise de-certify the
+    # exact snapshot baseline in the frozen reducer.
+    events.insert(0, _event(base, "turn.stop", **fields))
     return events
 
 
@@ -91,12 +95,21 @@ def main() -> int:
         events = map_payload(payload)
         if not events:
             return 0
-        client = ProducerClient(timeout=float(os.environ.get("ROZORO_HOOK_TIMEOUT", "1.5")))
-        for event in events:
+        budget = max(0.0, min(float(os.environ.get("ROZORO_HOOK_TIMEOUT", "0.75")), 1.0))
+        deadline = time.monotonic() + budget
+        # Reserve every envelope before attempting transport. Thus the second
+        # Stop event cannot be lost or wait for another full socket timeout if
+        # the first event's ACK is delayed/lost.
+        prepared = [prepare_event(event) for event in events]
+        client = ProducerClient(timeout=budget or 0.001)
+        for event in prepared:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            client.timeout = remaining
             try:
                 client.send(event)
             except ClientError:
-                # send() reserves the exact event in the durable spool first.
                 continue
     except (ClientError, ValueError, OSError, json.JSONDecodeError):
         # Hooks must not alter unrelated Claude behavior. Invalid/uncertified

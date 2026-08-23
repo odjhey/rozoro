@@ -328,25 +328,54 @@ rzr_claude_event_capability() {
 rzr_claude_event_settings() {  # <task-id> <exact-session-id>
   local task_id="$1" session_id="$2" target
   target="$(rzr_task_dir "$task_id")/claude-event-settings.json"
-  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" <<'PY'
-import json, shlex, sys
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" <<'PY' || return 1
+import json, os, secrets, shlex, stat, sys
 path, hook, home, task, session = sys.argv[1:]
-command = shlex.join([
-    "env", "ROZORO_EVENT_BUS=1", "ROZORO_ROLE=crew",
-    f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
-    "ROZORO_CLAUDE_CAPABILITY=2.1.240", f"ROZORO_HOME={home}",
-    "python3", hook,
-])
-entry = [{"hooks": [{"type": "command", "command": command, "timeout": 5}]}]
-settings = {"hooks": {name: entry for name in (
-    "SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"
-)}}
-with open(path + ".tmp", "w", encoding="utf-8") as stream:
-    json.dump(settings, stream, sort_keys=True, separators=(",", ":"))
-    stream.write("\n")
-import os
-os.chmod(path + ".tmp", 0o600)
-os.replace(path + ".tmp", path)
+parent, name = os.path.split(path)
+flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+dirfd = os.open(parent, flags)
+try:
+    info = os.fstat(dirfd)
+    if info.st_uid != os.geteuid() or not stat.S_ISDIR(info.st_mode):
+        raise SystemExit("refusing unowned Claude settings directory")
+    os.fchmod(dirfd, 0o700)
+    if stat.S_IMODE(os.fstat(dirfd).st_mode) != 0o700:
+        raise SystemExit("Claude settings directory is not private")
+    try:
+        final = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+    except FileNotFoundError:
+        final = None
+    if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid()):
+        raise SystemExit("refusing unsafe Claude settings destination")
+    command = shlex.join([
+        "env", "ROZORO_EVENT_BUS=1", "ROZORO_ROLE=crew",
+        f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
+        "ROZORO_CLAUDE_CAPABILITY=2.1.240", f"ROZORO_HOME={home}",
+        "python3", hook,
+    ])
+    entry = [{"hooks": [{"type": "command", "command": command, "timeout": 2}]}]
+    settings = {"hooks": {event: entry for event in (
+        "SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"
+    )}}
+    data = (json.dumps(settings, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    temporary = ".claude-settings-" + secrets.token_hex(12) + ".tmp"
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+        os.fsync(dirfd)
+    finally:
+        try: os.unlink(temporary, dir_fd=dirfd)
+        except FileNotFoundError: pass
+finally:
+    os.close(dirfd)
 PY
   printf '%s' "$target"
 }

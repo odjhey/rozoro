@@ -40,13 +40,23 @@ load test_helper/common
   [ -n "$session" ]
   [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = true ]
   settings="$ROZORO_HOME/tasks/task/claude-event-settings.json"
-  [ "$(stat -c '%a' "$settings")" = 600 ]
+  [ "$(file_perm "$settings")" = 600 ]
   [ "$(jq '.hooks | keys | length' "$settings")" -eq 6 ]
   command="$(jq -r '.hooks.Stop[0].hooks[0].command' "$settings")"
   [[ "$command" == *"ROZORO_TASK_ID=task"* ]]
   [[ "$command" == *"ROZORO_SESSION_ID=$session"* ]]
   assert_file_contains "$FAKE_HERDR_LOG" $'--session-id\t'"$session"
   assert_file_contains "$FAKE_HERDR_LOG" $'--settings\t'"$settings"
+}
+
+@test "Claude generated settings refuse final and predictable-temp symlinks" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  ln -s "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  ln -s "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json.tmp"
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT"
+  assert_failure
+  [ -L "$ROZORO_HOME/tasks/task/claude-event-settings.json" ]
+  [ "$(cat "$SENTINEL")" = untouched ]
 }
 
 @test "Claude default launch has no event hooks or identity behavior change" {

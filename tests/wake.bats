@@ -35,13 +35,16 @@ register_claude_driver() {
   [ "$(jq -r '.delivery_state' "$ledger")" = delivered ]
 }
 
-@test "event-bus opted-in crew is excluded from legacy wake authority" {
+@test "teardown race cannot restore legacy wake authority for opted-in crew" {
   register_claude_driver idle
   write_meta task 'pane=p1' 'tab=t1' 'event_bus=true'
   fake_status p1 working
-  start_event_server events 'p1,w1,done,claude'
-  run rzr-watch.sh --once --wake task
-  assert_success
+  start_event_server delayed 'p1,w1,done,claude' 'p1,w1,gone,claude'
+  rzr-watch.sh --wake task > "$TEST_ROOT/watch.out" 2>&1 & watcher=$!
+  register_pid "$watcher"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$FAKE_HERDR_ROOT/request.json" ] && break; sleep 0.03; done
+  rm -f "$ROZORO_HOME/state/task.meta"
+  wait "$watcher"
   ! grep -F $'CALL\tagent\tprompt\tdriver-pane' "$FAKE_HERDR_LOG"
   ledger="$ROZORO_HOME/watchtowers/$driver/pending.json"
   [ ! -e "$ledger" ]

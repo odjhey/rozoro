@@ -122,6 +122,10 @@ case "$HARNESS" in
     # Event-bus hooks bind to an exact preallocated Claude conversation.
     [ "$EVENT_BUS" = true ] && SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
 esac
+EVENT_SETTINGS=""
+if [ "$EVENT_BUS" = true ]; then
+  EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$SESSION_ID")" || exit 1
+fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
   { cat "$HANDOFF"
@@ -189,10 +193,7 @@ do_spawn() {
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
     < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID" "$FAST")
-  if [ "$EVENT_BUS" = true ]; then
-    local event_settings; event_settings="$(rzr_claude_event_settings "$ID" "$SESSION_ID")"
-    agent_args+=(--settings "$event_settings")
-  fi
+  [ -z "$EVENT_SETTINGS" ] || agent_args+=(--settings "$EVENT_SETTINGS")
   local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 

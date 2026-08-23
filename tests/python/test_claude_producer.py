@@ -1,9 +1,12 @@
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,12 +55,26 @@ class ClaudeProducerTests(unittest.TestCase):
     def test_stop_snapshots_certify_active_active_clear_and_missing_is_unknown(self):
         stops = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"]
         with identity():
-            decisions = [HOOK.map_payload(item)[-1]["background_active"] for item in stops]
+            decisions = [next(event["background_active"] for event in HOOK.map_payload(item)
+                              if event["type"] == "turn.stop") for item in stops]
             drifted = dict(stops[-1]); drifted.pop("background_tasks")
             unknown = HOOK.map_payload(drifted)
         self.assertEqual(decisions, [True, True, False])
         self.assertIsNone(unknown[-1]["background_active"])
         self.assertNotIn("background.snapshot", [event["type"] for event in unknown])
+
+    def test_authoritative_active_snapshot_remains_exact_and_certified(self):
+        from rozoro_monitor.reducer import LifecycleState, reduce_event
+        active = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"][0]
+        with identity():
+            events = HOOK.map_payload(active)
+        self.assertEqual([event["type"] for event in events], ["turn.stop", "background.snapshot"])
+        state = LifecycleState()
+        for seq, event in enumerate(events, 1):
+            state = reduce_event(state, dict(event, producer_seq=seq)).state
+        self.assertTrue(state.background_certified)
+        self.assertEqual(state.active_count, 1)
+        self.assertEqual(state.availability, "waiting-background")
 
     def test_unrelated_or_wrong_session_is_noop(self):
         payload = FIXTURE["payloads"][0]
@@ -95,6 +112,37 @@ class ClaudeProducerTests(unittest.TestCase):
             encoded = json.dumps(events)
             self.assertNotIn("<redacted>", encoded)
             self.assertNotIn("last_assistant_message", encoded)
+
+    def test_stop_uses_one_hook_wide_delivery_budget(self):
+        payload = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"][-1]
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            sock = home / "monitor.sock"
+            ready = threading.Event()
+
+            def delayed_ack():
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    server.bind(str(sock)); server.listen(1); ready.set()
+                    connection, _ = server.accept()
+                    with connection:
+                        connection.recv(65536)
+                        time.sleep(1)
+
+            thread = threading.Thread(target=delayed_ack, daemon=True); thread.start(); ready.wait(1)
+            env = os.environ.copy()
+            env.update({"ROZORO_HOME": str(home), "ROZORO_EVENT_BUS": "1", "ROZORO_ROLE": "crew",
+                        "ROZORO_TASK_ID": "task-1", "ROZORO_SESSION_ID": payload["session_id"],
+                        "ROZORO_CLAUDE_CAPABILITY": "2.1.240", "ROZORO_HOOK_TIMEOUT": "0.2"})
+            started = time.monotonic()
+            result = subprocess.run([str(ROOT / "hooks/claude-rozoro-event.py")], input=json.dumps(payload),
+                                    text=True, env=env, capture_output=True, timeout=2)
+            elapsed = time.monotonic() - started
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertLess(elapsed, 0.65)
+            events = [json.loads(path.read_text()) for path in (home / "spool").glob("*.json")]
+            self.assertEqual(len(events), 2)
+            self.assertEqual(sorted(event["producer_seq"] for event in events), [1, 2])
 
 
 if __name__ == "__main__":
