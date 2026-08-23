@@ -140,6 +140,15 @@ class Coalescer:
                         self._collection = None
                 return None
             notification = Notification(**offer)
+            if notification.generation != generation:
+                # Eligibility was claimed only for the observed frontier. ACK
+                # may retire N before selection and expose N+1; never spend N's
+                # immediate eligibility on that newer exact offer.
+                self.store.withdraw_unconfirmed_offer(
+                    self.driver_id, self.session_id, self.epoch,
+                    notification.generation,
+                )
+                return None
             try:
                 result = self.actuator.deliver(notification)
             except Exception as exc:

@@ -232,6 +232,53 @@ class CoalescerTests(unittest.TestCase):
             self.assertEqual(actuator.calls, 2)
             self.assertEqual([item.generation for item in actuator.notifications], [1, 3])
 
+    def test_claimed_n_cannot_actuate_n_plus_one_selected_after_concurrent_ack(self):
+        with EventStore(self.db) as store:
+            old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
+            store.accept_event(event(1))
+            store.offer_notification("driver", "old-watch", old_epoch)
+            store.confirm_delivery("driver", "old-watch", old_epoch, 1)
+            store.accept_event(event(2))
+
+            actuator = Actuator()
+            coalescer = self.ready(store, actuator, "watch")
+            entered = threading.Event()
+            release = threading.Event()
+            original_offer = store.offer_notification
+
+            def paused_before_selection(*args, **kwargs):
+                entered.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("offer selection was not released")
+                return original_offer(*args, **kwargs)
+
+            store.offer_notification = paused_before_selection
+            owner = []
+            worker = threading.Thread(target=lambda: owner.append(coalescer.poll()))
+            worker.start()
+            self.assertTrue(entered.wait(timeout=5))
+
+            # N retires before selection, so the concurrent poll opens N+1's
+            # fresh collection while the N owner still holds the claim.
+            store.ack_generation("driver", "watch", coalescer.epoch, 1)
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(coalescer.deadline, 10.350)
+            release.set(); worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(owner, [None])
+            self.assertEqual(actuator.notifications, [])
+
+            # Selection returned N+1, but stale immediate eligibility was not
+            # used and its temporary exact offer was withdrawn. It remains
+            # quiet until the already-open N+1 boundary.
+            store.offer_notification = original_offer
+            self.clock.advance(.349)
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(actuator.notifications, [])
+            self.clock.advance(.001)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual([item.generation for item in actuator.notifications], [2])
+
     def test_claim_publishes_frontier_before_paused_retry_offer_returns(self):
         with EventStore(self.db) as store:
             old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]

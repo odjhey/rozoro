@@ -906,6 +906,23 @@ class EventStore:
             return {"generation": generation, "priority": "urgent" if priority else "normal",
                     "task_count": int(count)}
 
+    def withdraw_unconfirmed_offer(self, driver_id: str, session_id: str, epoch: int,
+                                   generation: int) -> None:
+        """Withdraw only this epoch/session's exact unconfirmed offer.
+
+        Used when selection advances beyond the frontier whose coalescer
+        eligibility was claimed. Confirmed or mismatched offers fail closed.
+        """
+        with self._lock, self._immediate() as connection:
+            self._require_registration(connection, driver_id, session_id, epoch)
+            deleted = connection.execute(
+                """DELETE FROM delivery_offers WHERE driver_id=? AND registration_epoch=?
+                   AND session_id=? AND generation=? AND confirmed=0""",
+                (driver_id, epoch, session_id, generation),
+            )
+            if deleted.rowcount != 1:
+                raise ValueError("generation does not match the exact unconfirmed offer")
+
     def record_delivery_outcome(self, driver_id: str, session_id: str, epoch: int,
                                 generation: int, state: str, error: str | None = None) -> None:
         """Record deferred/error diagnostics without consuming the exact offer."""
