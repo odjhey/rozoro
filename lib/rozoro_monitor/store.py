@@ -360,13 +360,15 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
 def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
     """Map projections exactly onto protocol v1's frozen report tuple matrix."""
     report_state = report.get("state")
+    # Certified host disappearance is the immediate lifecycle action even when
+    # the independent handoff is missing or malformed.
+    if state.availability == "gone":
+        return "gone"
     if report_state == "missing":
         return "missing-report"
     if report_state == "malformed":
         return "malformed-report"
     verdict = report.get("verdict")
-    if state.availability == "gone":
-        return "gone"
     if verdict == "done":
         return "quiescent" if state.availability == "quiescent" else "none"
     if verdict == "waiting":
@@ -774,12 +776,14 @@ class EventStore:
             ).fetchone()
             return None if row is None else dict(row)
 
-    def reconcile_herdr_liveness(self, task_id: str, *, pane_exists: bool) -> None:
-        """Apply defensive host facts without treating Herdr idle as semantic truth.
+    def reconcile_herdr_liveness(
+        self, task_id: str, *, pane_exists: bool | None,
+        adapter_connected: bool | None = None,
+    ) -> None:
+        """Atomically apply certified host/adapter facts and dedupe action edges.
 
-        A missing pane is ``gone``. A live pane cannot certify a disconnected
-        adapter's foreground or background axes, so a previously gone session
-        returns as ``unknown``. This method never generates completion work.
+        ``None`` means no observation and preserves exact native state. Herdr
+        live/idle never proves adapter disconnect or background clear.
         """
         with self._lock, self._immediate() as connection:
             rows = connection.execute(
@@ -788,10 +792,13 @@ class EventStore:
             ).fetchall()
             for row in rows:
                 state = _state_from_json(row["reducer_state_json"])
-                if pane_exists:
-                    state = set_adapter_connected(observe_gone(state, False), False)
-                else:
-                    state = observe_gone(state, True)
+                before = connection.execute(
+                    "SELECT actionable_reason,projection_json FROM task_projections WHERE task_id=?", (task_id,)
+                ).fetchone()
+                if pane_exists is not None:
+                    state = observe_gone(state, not pane_exists)
+                if adapter_connected is not None:
+                    state = set_adapter_connected(state, adapter_connected)
                 connection.execute(
                     """UPDATE sessions SET foreground=?,background=?,background_count=?,availability=?,
                        reducer_state_json=?,last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -806,12 +813,22 @@ class EventStore:
                     detail = json.loads(projection[0])
                     detail.update({"foreground": state.foreground, "background": state.background,
                                    "background_count": state.active_count,
-                                   "availability": state.availability,
-                                   "herdr_pane_exists": pane_exists})
+                                   "availability": state.availability})
+                    if pane_exists is not None:
+                        detail["herdr_pane_exists"] = pane_exists
+                    report = detail.get("report") or {"state": "missing"}
+                    reason = _actionable_reason(state, report)
                     connection.execute(
-                        "UPDATE task_projections SET availability=?,projection_json=? WHERE task_id=?",
-                        (state.availability, json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id),
+                        "UPDATE task_projections SET availability=?,actionable_reason=?,projection_json=? WHERE task_id=?",
+                        (state.availability, reason, json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id),
                     )
+                    # Host/silence transitions are durable actionable edges,
+                    # deduped by the prior projection reason and availability.
+                    old_detail = {} if before is None else json.loads(before["projection_json"])
+                    if reason != "none" and (before is None or before["actionable_reason"] != reason
+                            or old_detail.get("availability") != state.availability):
+                        StoreTransaction(connection).bump_actionable(ActionableChange(
+                            task_id, reason, "urgent" if reason in {"gone", "blocked", "failed", "needs-action"} else "normal"))
 
     def driver_authority(self, driver_id: str) -> str:
         """Return durable authority without changing registration epochs or cursors."""

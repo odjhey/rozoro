@@ -1,229 +1,234 @@
-"""Resident Herdr membership and defensive liveness reconciliation.
-
-Filesystem notifications are only hints.  The inventory is the set of valid
-``state/*.meta`` names, and every changed set is installed by subscribing first
-and then reading pane levels, closing the edge/level race.
-"""
+"""Resident, gap-safe Herdr membership and defensive liveness."""
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-import socket
+import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping, Protocol
 
+MAX_META_BYTES = 64 * 1024
+_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
 
 @dataclass(frozen=True)
 class Member:
     task_id: str
-    pane_id: str | None
-
+    pane_id: str
 
 @dataclass(frozen=True)
 class PaneLevel:
     pane_id: str
     status: str
-    exists: bool
+    exists: bool | None                 # None means observation failed/unknown
     revision: int | None = None
 
+@dataclass(frozen=True)
+class Inventory:
+    members: Mapping[str, Member]
+    errors: tuple[str, ...] = ()
 
 class Subscription(Protocol):
-    async def start(self) -> None: ...       # returns after subscription_started
+    async def start(self) -> None: ...
     async def events(self): ...
     async def close(self) -> None: ...
-
 
 SubscriberFactory = Callable[[tuple[str, ...]], Subscription]
 LevelReader = Callable[[str], Awaitable[PaneLevel]]
 Reconciler = Callable[[str, PaneLevel], Awaitable[None]]
 
+def inventory(state_dir: str | os.PathLike[str]) -> Inventory:
+    """Boundedly read private, no-follow regular metadata entries.
 
-def inventory(state_dir: str | os.PathLike[str]) -> dict[str, Member]:
-    """Read actual task IDs. Contents matter only for the task's pane mapping."""
-    result: dict[str, Member] = {}
-    for path in sorted(Path(state_dir).glob("*.meta")):
-        if not path.is_file() or not path.stem or "/" in path.stem:
-            continue
-        pane = None
-        try:
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("pane="):
-                    pane = line[5:] or None
-                    break
-        except OSError:
-            continue
-        result[path.stem] = Member(path.stem, pane)
-    return result
-
+    Invalid/torn entries are errors, never evidence that a previously known
+    task or pane disappeared.
+    """
+    members: dict[str, Member] = {}; errors: list[str] = []
+    directory = Path(state_dir)
+    try:
+        dfd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        return Inventory({}, (f"state directory: {exc}",))
+    try:
+        dinfo = os.fstat(dfd)
+        if dinfo.st_uid != os.geteuid() or stat.S_IMODE(dinfo.st_mode) & 0o077:
+            return Inventory({}, ("state directory is not owner-private",))
+        for name in sorted(os.listdir(dfd)):
+            if not name.endswith(".meta"):
+                continue
+            task_id = name[:-5]
+            if not _ID.fullmatch(task_id):
+                errors.append(f"invalid task id: {name}"); continue
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                        raise ValueError("not an owner-controlled regular file")
+                    raw = os.read(fd, MAX_META_BYTES + 1)
+                    if len(raw) > MAX_META_BYTES: raise ValueError("oversized")
+                finally: os.close(fd)
+                text = raw.decode("utf-8")
+                fields: dict[str, str] = {}
+                for line in text.splitlines():
+                    if not line or "=" not in line: raise ValueError("malformed line")
+                    key, value = line.split("=", 1)
+                    if not key or key in fields: raise ValueError("malformed fields")
+                    fields[key] = value
+                pane = fields.get("pane", "")
+                if not pane or len(pane) > 128 or any(c.isspace() for c in pane): raise ValueError("invalid pane")
+                members[task_id] = Member(task_id, pane)
+            except (OSError, UnicodeError, ValueError) as exc:
+                errors.append(f"{name}: {exc}")
+    finally: os.close(dfd)
+    return Inventory(members, tuple(errors))
 
 class MembershipMonitor:
-    """Own one Herdr stream and repair membership periodically.
-
-    ``hint()`` is cheap and debounced. Same-ID rewrites never rebuild the
-    subscription; changed pane contents are picked up by the periodic level
-    scan without disturbing unrelated crews.
-    """
-    def __init__(self, state_dir: str | os.PathLike[str], subscriber: SubscriberFactory,
-                 level_reader: LevelReader, reconcile: Reconciler, *,
-                 scan_interval: float = 30.0, debounce: float = .15):
-        if scan_interval <= 0 or debounce < 0:
-            raise ValueError("invalid membership timing")
-        self.state_dir = Path(state_dir)
-        self.subscriber = subscriber
-        self.level_reader = level_reader
-        self.reconcile = reconcile
-        self.scan_interval = scan_interval
-        self.debounce = debounce
-        self.members: dict[str, Member] = {}
-        self._subscription: Subscription | None = None
-        self._consumer: asyncio.Task | None = None
-        self._runner: asyncio.Task | None = None
-        self._wake = asyncio.Event()
-        self._closed = False
-        self.connected = False
-        self.last_error: str | None = None
-
-    def hint(self) -> None:
-        self._wake.set()
-
-    async def start(self) -> None:
-        await self.scan(force=True)
-        self._runner = asyncio.create_task(self._run())
-
-    async def _run(self) -> None:
+    def __init__(self, state_dir, subscriber: SubscriberFactory, level_reader: LevelReader,
+                 reconcile: Reconciler, *, scan_interval=30.0, hint_interval=.20,
+                 debounce=.15, drain_interval=.05):
+        if min(scan_interval, hint_interval) <= 0 or min(debounce, drain_interval) < 0: raise ValueError("invalid timing")
+        self.state_dir=Path(state_dir); self.subscriber=subscriber; self.level_reader=level_reader; self.reconcile=reconcile
+        self.scan_interval=scan_interval; self.hint_interval=hint_interval; self.debounce=debounce; self.drain_interval=drain_interval
+        self.members: dict[str,Member]={}; self._subscription=None; self._consumer=None; self._runner=None; self._hints=None
+        self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
+        self._force_rebuild=False; self._dir_signature=None
+    def hint(self): self._wake.set()
+    async def start(self):
+        try: await self.scan(force=True)
+        except Exception as exc: self.last_error=str(exc)[:128]
+        self._runner=asyncio.create_task(self._run()); self._hints=asyncio.create_task(self._watch_hints())
+    def _signature(self):
+        try:
+            st=self.state_dir.stat(); return (st.st_mtime_ns, st.st_ctime_ns)
+        except OSError: return None
+    async def _watch_hints(self):
+        """Directory metadata changes are debounced hints; full scans decide truth."""
+        try:
+            self._dir_signature=self._signature()
+            while True:
+                await asyncio.sleep(self.hint_interval)
+                value=self._signature()
+                if value != self._dir_signature: self._dir_signature=value; self.hint()
+        except asyncio.CancelledError: pass
+    async def _run(self):
         try:
             while True:
                 try:
-                    await asyncio.wait_for(self._wake.wait(), self.scan_interval)
-                    self._wake.clear()
-                    await asyncio.sleep(self.debounce)
-                except TimeoutError:
-                    pass
-                await self.scan()
-        except asyncio.CancelledError:
-            pass
-
-    async def scan(self, *, force: bool = False) -> bool:
-        found = inventory(self.state_dir)
-        # Membership is task identity, deliberately not metadata bytes/pane value.
-        if not force and found.keys() == self.members.keys():
-            # Membership identity is the filename. Ignore same-ID content
-            # rewrites entirely, including a transient/torn pane field, and
-            # keep the established subscription and routing map untouched.
-            await self._levels(self.members)
-            return False
-        await self._replace(found)
-        return True
-
-    async def _replace(self, found: Mapping[str, Member]) -> None:
-        panes = tuple(sorted({m.pane_id for m in found.values() if m.pane_id}))
-        new = self.subscriber(panes)
-        new_consumer = None
-        previous_members = self.members
+                    await asyncio.wait_for(self._wake.wait(),self.scan_interval); self._wake.clear(); await asyncio.sleep(self.debounce)
+                except TimeoutError: pass
+                try: await self.scan(force=self._force_rebuild)
+                except Exception as exc: self.connected=False; self.last_error=str(exc)[:128]
+        except asyncio.CancelledError: pass
+    async def scan(self, *, force=False):
+        result=inventory(self.state_dir); self.last_scan_errors=result.errors
+        if result.errors: self.last_error=result.errors[-1][:128]
+        # Keep known entries omitted by malformed/torn reads. They are unknown,
+        # not gone; valid removals remain removals.
+        found=dict(result.members)
+        for task, member in self.members.items():
+            if task not in found and any(error.startswith(task+".meta:") for error in result.errors): found[task]=member
+        changed=set(found) != set(self.members) or any(found[k].pane_id != self.members[k].pane_id for k in set(found)&set(self.members))
+        if force or self._force_rebuild or changed:
+            await self._replace(found); self._force_rebuild=False; return True
+        await self._levels(self.members); return False
+    async def _replace(self, found):
+        panes=tuple(sorted({m.pane_id for m in found.values()})); new=self.subscriber(panes); consumer=None; previous=self.members
         try:
-            await new.start()                 # synchronization point
-            self.members = dict(found)        # event routing is live before levels
-            new_consumer = asyncio.create_task(self._consume(new))
-            await self._levels(found)         # closes subscribe/snapshot gap
-        except Exception as exc:
-            self.members = previous_members
-            if new_consumer:
-                new_consumer.cancel()
-            await new.close()
-            self.connected = False
-            self.last_error = str(exc)[:128]
-            raise
-        old, old_consumer = self._subscription, self._consumer
-        self._subscription, self._consumer = new, new_consumer
-        self.connected = True
-        self.last_error = None
-        if old_consumer:
-            old_consumer.cancel()
-            await asyncio.gather(old_consumer, return_exceptions=True)
+            await new.start(); self.members=dict(found); consumer=asyncio.create_task(self._consume(new)); await self._levels(found)
+        except Exception:
+            self.members=previous
+            if consumer: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
+            await new.close(); raise
+        old,old_consumer=self._subscription,self._consumer
+        self._subscription,self._consumer=new,consumer; self.connected=True
+        if not self.last_scan_errors: self.last_error=None
+        # Both streams stay routed during the bounded drain. Old queued edges
+        # are consumed before its transport is closed and task is cancelled.
         if old:
-            await old.close()
-
-    async def _levels(self, members: Mapping[str, Member]) -> None:
+            await asyncio.sleep(self.drain_interval); await old.close()
+        if old_consumer:
+            try: await asyncio.wait_for(old_consumer,self.drain_interval)
+            except TimeoutError: old_consumer.cancel(); await asyncio.gather(old_consumer,return_exceptions=True)
+            except Exception: pass  # the replacement was commonly caused by this stream failure
+    async def _levels(self,members):
         for member in members.values():
-            if member.pane_id is None:
-                await self.reconcile(member.task_id, PaneLevel("", "unknown", False))
-                continue
-            try:
-                level = await self.level_reader(member.pane_id)
+            try: level=await self.level_reader(member.pane_id)
             except Exception as exc:
-                level = PaneLevel(member.pane_id, "unknown", False)
-                self.last_error = str(exc)[:128]
-            await self.reconcile(member.task_id, level)
-
-    async def _consume(self, subscription: Subscription) -> None:
+                self.last_error=str(exc)[:128]; level=PaneLevel(member.pane_id,"unknown",None)
+            await self.reconcile(member.task_id,level)
+    async def _consume(self,sub):
         try:
-            async for level in subscription.events():
+            async for level in sub.events():
                 for member in tuple(self.members.values()):
-                    if member.pane_id == level.pane_id:
-                        await self.reconcile(member.task_id, level)
-        except asyncio.CancelledError:
-            pass
+                    if member.pane_id==level.pane_id: await self.reconcile(member.task_id,level)
+            raise ConnectionError("Herdr subscription ended")
+        except asyncio.CancelledError: pass
         except Exception as exc:
-            self.connected = False
-            self.last_error = str(exc)[:128]
-            self.hint()
-
-    async def close(self) -> None:
-        self._closed = True
-        for task in (self._runner, self._consumer):
-            if task:
-                task.cancel()
-        await asyncio.gather(*(t for t in (self._runner, self._consumer) if t), return_exceptions=True)
-        if self._subscription:
-            await self._subscription.close()
-        self.connected = False
-
+            if sub is self._subscription:
+                self.connected=False; self.last_error=str(exc)[:128]; self._force_rebuild=True; self.hint()
+    def health(self):
+        return {"herdr_connected":self.connected,"herdr_last_error":self.last_error,
+                "herdr_inventory_errors":len(self.last_scan_errors),"herdr_task_count":len(self.members)}
+    async def close(self):
+        for task in (self._runner,self._hints):
+            if task: task.cancel()
+        await asyncio.gather(*(t for t in (self._runner,self._hints) if t),return_exceptions=True)
+        if self._subscription: await self._subscription.close()
+        if self._consumer: self._consumer.cancel(); await asyncio.gather(self._consumer,return_exceptions=True)
+        self.connected=False
 
 class EmptySubscription:
-    """A connected no-op stream used when resident membership is empty."""
-    async def start(self) -> None: pass
+    async def start(self): pass
     async def events(self):
-        if False:
-            yield None
         await asyncio.Future()
-    async def close(self) -> None: pass
-
+        if False: yield None
+    async def close(self): pass
 
 class UnixHerdrSubscription:
-    """Small stdlib implementation of Herdr's public events.subscribe API."""
-    def __init__(self, socket_path: str, panes: tuple[str, ...]):
-        self.socket_path, self.panes = socket_path, panes
-        self.reader = self.writer = None
-
-    async def start(self) -> None:
-        self.reader, self.writer = await asyncio.open_unix_connection(self.socket_path)
-        request = {"id": "rozorod-membership", "method": "events.subscribe", "params": {
-            "subscriptions": [{"type": "pane.agent_status_changed", "pane_id": p} for p in self.panes]}}
-        self.writer.write((json.dumps(request, separators=(",", ":")) + "\n").encode())
-        await self.writer.drain()
-        reply = json.loads((await asyncio.wait_for(self.reader.readline(), 5)).decode())
-        if (reply.get("result") or {}).get("type") != "subscription_started":
-            raise RuntimeError("Herdr rejected subscription")
-
+    def __init__(self,socket_path,panes,*,timeout=5.0): self.socket_path=socket_path; self.panes=panes; self.timeout=timeout; self.reader=None; self.writer=None
+    async def start(self):
+        self.reader,self.writer=await asyncio.wait_for(asyncio.open_unix_connection(self.socket_path),self.timeout)
+        request={"id":"rozorod-membership","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":p} for p in self.panes]}}
+        self.writer.write((json.dumps(request,separators=(",",":"))+"\n").encode()); await asyncio.wait_for(self.writer.drain(),self.timeout)
+        reply=json.loads((await asyncio.wait_for(self.reader.readline(),self.timeout)).decode())
+        if (reply.get("result") or {}).get("type")!="subscription_started": raise RuntimeError("Herdr rejected subscription")
     async def events(self):
         while self.reader:
-            line = await self.reader.readline()
-            if not line:
-                raise ConnectionError("Herdr subscription closed")
-            message = json.loads(line)
-            if message.get("event") != "pane.agent_status_changed":
-                continue
-            data = message.get("data") or {}
-            pane = data.get("pane_id")
+            line=await self.reader.readline()
+            if not line: raise ConnectionError("Herdr subscription closed")
+            msg=json.loads(line)
+            if msg.get("event")!="pane.agent_status_changed": continue
+            data=msg.get("data") or {}; pane=data.get("pane_id")
             if pane:
-                revision = data.get("state_change_seq", data.get("revision"))
-                yield PaneLevel(pane, data.get("agent_status") or "unknown", True,
-                                revision if isinstance(revision, int) else None)
-
-    async def close(self) -> None:
+                rev=data.get("state_change_seq",data.get("revision")); yield PaneLevel(pane,data.get("agent_status") or "unknown",True,rev if isinstance(rev,int) else None)
+    async def close(self):
         if self.writer:
-            self.writer.close()
-            await self.writer.wait_closed()
-            self.writer = None
+            self.writer.close(); await self.writer.wait_closed(); self.writer=None
+
+async def herdr_rpc(socket_path,method,params,*,timeout=3.0):
+    """One bounded RPC to the configured socket; never consults default CLI state."""
+    reader,writer=await asyncio.wait_for(asyncio.open_unix_connection(socket_path),timeout)
+    try:
+        writer.write((json.dumps({"id":"rozorod-level","method":method,"params":params},separators=(",",":"))+"\n").encode())
+        await asyncio.wait_for(writer.drain(),timeout)
+        line=await asyncio.wait_for(reader.readline(),timeout)
+        if not line: raise ConnectionError("Herdr RPC closed")
+        return json.loads(line)
+    finally:
+        writer.close(); await writer.wait_closed()
+
+async def read_pane_level(socket_path,pane_id,*,timeout=3.0):
+    try:
+        data=await herdr_rpc(socket_path,"agent.get",{"pane_id":pane_id},timeout=timeout)
+        result=data.get("result") or {}; agent=result.get("agent") or result
+        if agent.get("agent_status") is not None:
+            return PaneLevel(pane_id,agent.get("agent_status") or "unknown",True,agent.get("state_change_seq"))
+    except Exception: pass
+    try:
+        await herdr_rpc(socket_path,"pane.get",{"pane_id":pane_id},timeout=timeout)
+        return PaneLevel(pane_id,"unknown",True)
+    except Exception:
+        return PaneLevel(pane_id,"unknown",False)

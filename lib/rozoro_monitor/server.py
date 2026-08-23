@@ -17,7 +17,10 @@ from typing import Any
 from . import protocol
 from .client import _open_home
 from .store import EventStore
-from .herdr import EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription
+from .herdr import (
+    EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription,
+    read_pane_level,
+)
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
@@ -207,22 +210,24 @@ class MonitorServer:
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
             herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
-            state_dir = os.environ.get("ROZORO_STATE_DIR")
-            if herdr_socket and state_dir:
-                async def level_reader(pane_id: str) -> PaneLevel:
+            if not herdr_socket:
+                try:
+                    command = ["herdr", "session", "list", "--json"]
                     proc = await asyncio.create_subprocess_exec(
-                        "herdr", "agent", "get", pane_id,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                    stdout, _ = await proc.communicate()
-                    if proc.returncode == 0:
-                        data = json.loads(stdout)
-                        agent = (data.get("result") or {}).get("agent") or {}
-                        return PaneLevel(pane_id, agent.get("agent_status") or "unknown", True,
-                                         agent.get("state_change_seq"))
-                    pane = await asyncio.create_subprocess_exec(
-                        "herdr", "pane", "get", pane_id,
-                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                    return PaneLevel(pane_id, "unknown", await pane.wait() == 0)
+                        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
+                    sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
+                    wanted = os.environ.get("RZR_SESSION")
+                    selected = next((item for item in sessions if not wanted or item.get("name") == wanted), None)
+                    herdr_socket = None if selected is None else selected.get("socket_path")
+                except (OSError, ValueError, TimeoutError):
+                    herdr_socket = None
+            state_dir = os.environ.get("ROZORO_STATE_DIR", str(self.home / "state"))
+            if herdr_socket:
+                async def level_reader(pane_id: str) -> PaneLevel:
+                    return await read_pane_level(
+                        herdr_socket, pane_id,
+                        timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
 
                 async def reconcile(task_id: str, level: PaneLevel) -> None:
                     assert self._store is not None
@@ -233,6 +238,7 @@ class MonitorServer:
                                               if panes else EmptySubscription()),
                     level_reader, reconcile,
                     scan_interval=float(os.environ.get("ROZORO_HERDR_SCAN_INTERVAL", "30")),
+                    hint_interval=float(os.environ.get("ROZORO_HERDR_HINT_INTERVAL", ".2")),
                     debounce=float(os.environ.get("ROZORO_HERDR_DEBOUNCE", ".15")))
                 await self._herdr.start()
         except BaseException:
@@ -444,7 +450,12 @@ class MonitorServer:
                                  "clients": self._clients, **self._store.health_snapshot(),
                                  "spool_backlog": self._spool_backlog,
                                  "spool_errors": self._spool_errors, "pid": os.getpid(),
-                                 "last_spool_error": self._last_spool_error}
+                                 "last_spool_error": self._last_spool_error,
+                                 **(self._herdr.health() if self._herdr else {
+                                     "herdr_connected": False,
+                                     "herdr_last_error": "Herdr socket unavailable",
+                                     "herdr_inventory_errors": 0,
+                                     "herdr_task_count": 0})}
                     elif message["type"] == "task.status":
                         assert self._store is not None
                         projection = self._store.task_projection(message["task_id"])
