@@ -181,6 +181,45 @@ class CoalescerTests(unittest.TestCase):
             self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
             self.assertEqual(actuator.calls, 2)
 
+    def test_reconnect_redelivery_cleanup_preserves_concurrent_n_plus_one_deadline(self):
+        with EventStore(self.db) as store:
+            # N was delivered on an old connection; N+1 arrived while its wake
+            # remained outstanding.
+            old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
+            store.accept_event(event(1))
+            store.offer_notification("driver", "old-watch", old_epoch)
+            store.confirm_delivery("driver", "old-watch", old_epoch, 1)
+            store.accept_event(event(2))
+
+            actuator = BlockingActuator(DeliveryStatus.DELIVERED)
+            coalescer = self.ready(store, actuator, "watch")
+            redelivery = []
+            worker = threading.Thread(target=lambda: redelivery.append(coalescer.poll()))
+            worker.start()
+            self.assertTrue(actuator.entered.wait(timeout=5))
+
+            # Reconciliation can legitimately ACK N before reconnect redelivery
+            # confirmation. The losing poll opens N+1's collection at t=10.0,
+            # but must not duplicate N while its actuator is blocked.
+            store.ack_generation("driver", "watch", coalescer.epoch, 1)
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(actuator.calls, 1)
+            self.assertEqual(coalescer.deadline, 10.350)
+
+            self.clock.advance(.349)
+            actuator.release.set(); worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(redelivery[0].status, DeliveryStatus.DELIVERED)
+            self.assertEqual(coalescer.deadline, 10.350)
+            self.assertIsNone(coalescer.poll())
+            self.assertEqual(actuator.calls, 1)
+
+            # N+1 is eligible at its original 350 ms boundary, not 350 ms
+            # after N's cleanup/release.
+            self.clock.advance(.001)
+            self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
+            self.assertEqual(actuator.calls, 2)
+
     def test_invalid_result_and_exception_release_guard_for_exact_retry(self):
         with EventStore(self.db) as store:
             actuator = Actuator("invalid", RuntimeError("disconnect"), DeliveryStatus.DELIVERED)

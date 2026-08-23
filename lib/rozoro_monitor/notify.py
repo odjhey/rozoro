@@ -80,30 +80,43 @@ class Coalescer:
         self.clock = clock
         self.collection_window = collection_window
         self._collection: _Collection | None = None
+        self._collection_lock = threading.Lock()
+        self._in_flight_generation: int | None = None
         # A non-reentrant claim suppresses both recursive actuator callbacks and
         # simultaneous event-loop/thread polls without blocking either caller.
         self._delivery_claim = threading.Lock()
 
     @property
     def deadline(self) -> float | None:
-        return None if self._collection is None else self._collection.deadline
+        with self._collection_lock:
+            return None if self._collection is None else self._collection.deadline
 
     def poll(self) -> DeliveryResult | None:
         now = self.clock()
         frontier = self.store.notification_frontier(self.driver_id, self.session_id, self.epoch)
         if frontier is None:
-            self._collection = None
+            with self._collection_lock:
+                self._collection = None
             return None
 
         generation, priority, immediate = frontier
-        if self._collection is None:
-            self._collection = _Collection(generation, now + self.collection_window)
-        else:
-            self._collection.generation = generation
+        with self._collection_lock:
+            if self._collection is None:
+                self._collection = _Collection(generation, now + self.collection_window)
+            elif generation > self._collection.generation:
+                if (self._in_flight_generation is not None
+                        and generation > self._in_flight_generation):
+                    # N+1 exposed by a concurrent ACK gets its own first-seen
+                    # boundary while N remains in flight.
+                    self._collection = _Collection(generation, now + self.collection_window)
+                else:
+                    # Ordinary arrivals batch into the original window.
+                    self._collection.generation = generation
+            deadline = self._collection.deadline
 
         # Urgent facts flush an existing normal window immediately.  A durable
         # delivered-but-unacked wake still suppresses N+1 in Store.offer_notification.
-        if not immediate and priority != "urgent" and now < self._collection.deadline:
+        if not immediate and priority != "urgent" and now < deadline:
             return None
 
         if not self._delivery_claim.acquire(blocking=False):
@@ -113,9 +126,16 @@ class Coalescer:
         try:
             offer = self.store.offer_notification(self.driver_id, self.session_id, self.epoch)
             if offer is None:
-                self._collection = None
+                with self._collection_lock:
+                    # Do not erase a collection concurrently advanced beyond
+                    # the frontier observed by this poll.
+                    if (self._collection is not None
+                            and self._collection.generation <= generation):
+                        self._collection = None
                 return None
             notification = Notification(**offer)
+            with self._collection_lock:
+                self._in_flight_generation = notification.generation
             try:
                 result = self.actuator.deliver(notification)
             except Exception as exc:
@@ -128,7 +148,12 @@ class Coalescer:
                 self.store.confirm_delivery(
                     self.driver_id, self.session_id, self.epoch, notification.generation
                 )
-                self._collection = None
+                with self._collection_lock:
+                    # ACK/reconcile may expose and collect N+1 while this N
+                    # actuator is still in flight. Preserve N+1's first deadline.
+                    if (self._collection is not None
+                            and self._collection.generation <= notification.generation):
+                        self._collection = None
             else:
                 self.store.record_delivery_outcome(
                     self.driver_id, self.session_id, self.epoch, notification.generation,
@@ -140,4 +165,6 @@ class Coalescer:
         finally:
             # Includes delivered, deferred, error, invalid result, timeout,
             # disconnect, actuator exception, and durable-store exception paths.
+            with self._collection_lock:
+                self._in_flight_generation = None
             self._delivery_claim.release()
