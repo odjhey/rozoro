@@ -267,7 +267,7 @@ The driver's whole vocabulary is small:
 | **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--effort <e>] [--fast|--no-fast] [--prompt "<follow-up>"]` |
 | **Stop** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`; refuses on unlanded work in the crew's `cwd`, `--force` to discard anyway) |
-| *(sense, not trigger)* | `./bin/rozoro status <id>` (handoff verdict) · `./bin/rozoro watch` · `./bin/rozoro list` · `rzr_status_get` (disk `state/<id>.status`) |
+| *(sense, not trigger)* | `./bin/rozoro reconcile` (on the daemon's fixed wake) · `./bin/rozoro status <id>` (handoff verdict) · `./bin/rozoro list` · `./bin/rozoro monitor status --json` (daemon health). `./bin/rozoro watch` is diagnostics/legacy only |
 
 **DATA vs CONTROL, and why it's split.** A crew must receive two clearly
 distinct kinds of message, never conflated: DATA is free text the agent reads
@@ -280,9 +280,10 @@ loudly, never guessed at) and verify their own postcondition rather than
 trusting a herdr call's exit code alone.
 
 Keep the driver in the Rozoro checkout and call `./bin/rozoro`; point each fresh
-task at its own repository with `--cwd`. Read crew state from the on-disk
-`state/<id>.status` (the watcher keeps it current) rather than blocking on
-`./bin/rozoro watch`.
+task at its own repository with `--cwd`. For managed Pi and supported Claude the
+resident daemon owns crew state: on its fixed wake run `./bin/rozoro reconcile`
+then `./bin/rozoro status <id>` rather than blocking on `./bin/rozoro watch`
+(diagnostics/legacy only) or reading the legacy `state/<id>.status` snapshot.
 
 ### Launching the driver
 
