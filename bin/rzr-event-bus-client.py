@@ -200,9 +200,13 @@ def main():
             boundary.disable(a.driver); print(a.driver)
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
+            active_drivers=[]
             for driver in boundary.drivers():
               authority=flow.request(req("driver.authority",driver_id=driver))["authority"]
-              if authority=="active": boundary.require_clean(driver); boundary.activate(driver)
+              if authority=="active":
+                boundary.require_clean(driver)
+                active_drivers.append(driver)
+            for driver in active_drivers: boundary.activate(driver)
             print(json.dumps(flow.request(req("task.status",task_id=a.task)),sort_keys=True,separators=(",",":")))
           else:
             if not a.driver: ap.error("--driver is required")
