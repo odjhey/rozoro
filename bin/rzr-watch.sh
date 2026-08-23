@@ -119,7 +119,7 @@ SOCK=$(rzr_socket_path)
 # printing and for the --once break: it is PER-PROCESS, so a sibling watcher
 # advancing the shared on-disk status can never suppress this process's break
 # (see the event loop below).
-declare -a IDS=() PANES=() SEEN=()
+declare -a IDS=() PANES=() SEEN=() EVENT_BUS_FLAGS=()
 idx_for_pane() {  # <pane> -> index into IDS/PANES/SEEN, or fail
   local i=0
   while [ "$i" -lt "${#PANES[@]}" ]; do
@@ -135,6 +135,8 @@ idx_for_pane() {  # <pane> -> index into IDS/PANES/SEEN, or fail
 for id in "${WANT[@]}"; do
   rzr_task_exists "$id" || { echo "rzr: skip unknown task '$id'" >&2; continue; }
   IDS+=("$id"); PANES+=("$(rzr_pane_of "$id")"); SEEN+=("")
+  if [ "$(rzr_meta_get "$id" event_bus 2>/dev/null || true)" = true ]; then EVENT_BUS_FLAGS+=(true)
+  else EVENT_BUS_FLAGS+=(false); fi
 done
 [ "${#PANES[@]}" -gt 0 ] || rzr_die "no known tasks to watch"
 
@@ -174,7 +176,7 @@ IFS= read -r ack <&3 || rzr_die "event subscriber closed before acknowledging (s
 # in the event loop below; a pane that is live now and disappears later is a
 # real edge and stays tracked so its eventual "gone" is reported normally.
 i=0
-declare -a LIVE_IDS=() LIVE_PANES=() LIVE_SEEN=()
+declare -a LIVE_IDS=() LIVE_PANES=() LIVE_SEEN=() LIVE_EVENT_BUS_FLAGS=()
 while [ "$i" -lt "${#PANES[@]}" ]; do
   id="${IDS[$i]}"; p="${PANES[$i]}"; snapshot=$(rzr_agent_snapshot "$p")
   IFS=$'\t' read -r s seq <<EOF
@@ -186,13 +188,14 @@ EOF
   if [ "$JSON" -eq 1 ]; then printf '%s\n' "$projection"; else printf '%s\t%s\t%s\t(initial)\n' "$(date -u +%H:%M:%S)" "$id" "$s"; fi
   case "$s" in
     gone|shell) echo "rzr: '$id' has no agent to watch ($s); skipping" >&2 ;;
-    *) LIVE_IDS+=("$id"); LIVE_PANES+=("$p"); LIVE_SEEN+=("$s") ;;
+    *) LIVE_IDS+=("$id"); LIVE_PANES+=("$p"); LIVE_SEEN+=("$s"); LIVE_EVENT_BUS_FLAGS+=("${EVENT_BUS_FLAGS[$i]}") ;;
   esac
   i=$((i + 1))
 done
 IDS=(${LIVE_IDS[@]+"${LIVE_IDS[@]}"})
 PANES=(${LIVE_PANES[@]+"${LIVE_PANES[@]}"})
 SEEN=(${LIVE_SEEN[@]+"${LIVE_SEEN[@]}"})
+EVENT_BUS_FLAGS=(${LIVE_EVENT_BUS_FLAGS[@]+"${LIVE_EVENT_BUS_FLAGS[@]}"})
 [ "${#PANES[@]}" -gt 0 ] || rzr_die "no live tasks to watch"
 
 # Recover an undelivered generation from a previous watcher process. Subscribe
@@ -247,6 +250,9 @@ while IFS=$'\t' read -r pane _ st _ seq <&3; do
   # nudge a crew that had not started. `blocked` still wakes regardless of the
   # prior state: a stuck crew always needs attention.
   wake_this=$(printf '%s' "$projection" | jq -r 'if .action.required then 1 else 0 end')
+  # An explicitly opted-in Claude crew is shadow-produced by rozorod. The old
+  # watcher may still display it, but must never create a second wake generation.
+  [ "${EVENT_BUS_FLAGS[$i]}" = true ] && wake_this=0
   if [ -n "$WAKE_BACKEND" ] && [ "$wake_this" -eq 1 ]; then
     # Persist the generation BEFORE any delivery attempt, then let the ledger
     # coalesce a burst to one outstanding nudge and defer while the driver is
