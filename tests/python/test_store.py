@@ -387,37 +387,42 @@ class StoreTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(tuple(state), ("stopped", "clear", "quiescent", 2))
 
-    def test_dirfd_store_symlink_swap_cannot_redirect_actual_publish(self):
+    def test_sqlite_open_swap_is_detected_before_pragmas_or_migrations(self):
         self.home.mkdir(parents=True, mode=0o700)
-        directory_fd = os.open(self.home, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         external = Path(self.temp.name) / "external.db"
-        external.write_bytes(b"sentinel")
+        connection = sqlite3.connect(external)
+        connection.execute("CREATE TABLE sentinel(value TEXT)")
+        connection.execute("INSERT INTO sentinel VALUES('unchanged')")
+        connection.commit()
+        connection.close()
+        before = external.read_bytes()
+        real_connect = sqlite3.connect
+        def swap_then_connect(name, *args, **kwargs):
+            self.db.unlink()
+            self.db.symlink_to(external)
+            return real_connect(name, *args, **kwargs)
+        with mock.patch("lib.rozoro_monitor.store.sqlite3.connect", side_effect=swap_then_connect):
+            with self.assertRaisesRegex(RuntimeError, "changed during SQLite open"):
+                EventStore(self.db)
+        self.assertEqual(external.read_bytes(), before)
+        self.assertTrue(self.db.is_symlink())
+        self.assertEqual(list(self.home.glob(".*.tmp")), [])
+
+    def test_two_store_connections_serialize_writers_and_unique_sequences(self):
+        first = EventStore(self.db)
+        second = EventStore(self.db)
         try:
-            with EventStore("monitor.db", dir_fd=directory_fd) as store:
-                real_rename = os.rename
-                swapped = False
-                def swap_then_rename(source, destination, **kwargs):
-                    nonlocal swapped
-                    if not swapped:
-                        swapped = True
-                        try:
-                            os.unlink(destination, dir_fd=directory_fd)
-                        except FileNotFoundError:
-                            pass
-                        os.symlink(external, destination, dir_fd=directory_fd)
-                    return real_rename(source, destination, **kwargs)
-                with mock.patch("lib.rozoro_monitor.store.os.rename", side_effect=swap_then_rename):
-                    store.accept_event(event())
-            self.assertEqual(external.read_bytes(), b"sentinel")
-            info = os.stat("monitor.db", dir_fd=directory_fd, follow_symlinks=False)
-            self.assertTrue(stat.S_ISREG(info.st_mode))
-            reopened = EventStore("monitor.db", dir_fd=directory_fd)
-            try:
-                self.assertEqual(reopened._connection.execute("SELECT count(*) FROM events").fetchone()[0], 1)
-            finally:
-                reopened.close()
+            def ingest(number):
+                store = first if number % 2 else second
+                return store.accept_event(event(f"event-{number}", number))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(ingest, range(1, 21)))
+            self.assertEqual({result.durable_seq for result in results}, set(range(1, 21)))
+            self.assertEqual(first._connection.execute("SELECT count(*) FROM events").fetchone()[0], 20)
+            self.assertEqual(first._connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
         finally:
-            os.close(directory_fd)
+            first.close()
+            second.close()
 
     def test_permissions_are_repaired_to_user_only(self):
         self.home.mkdir(parents=True, mode=0o777)

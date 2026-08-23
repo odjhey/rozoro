@@ -45,6 +45,7 @@ class MonitorServer:
         self._home_identity = self._fd_identity(self._home_fd)
         self._lock_fd: int | None = None
         self._previous_owner_dead = False
+        self._previous_socket_identity: tuple[int, int] | None = None
         self._store: EventStore | None = None
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
@@ -107,9 +108,15 @@ class MonitorServer:
             except BlockingIOError as exc:
                 raise AlreadyRunningError("another rozorod owns monitor.lock") from exc
             os.lseek(fd, 0, os.SEEK_SET)
-            previous = os.read(fd, 64).strip()
-            if previous.isdigit():
-                previous_pid = int(previous)
+            try:
+                previous = json.loads(os.read(fd, 512))
+                previous_pid = int(previous["pid"])
+                self._previous_socket_identity = (
+                    int(previous["socket_dev"]), int(previous["socket_ino"])
+                )
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                previous_pid = None
+            if previous_pid is not None:
                 try:
                     os.kill(previous_pid, 0)
                 except ProcessLookupError:
@@ -122,10 +129,13 @@ class MonitorServer:
             raise
 
     def _record_owner(self) -> None:
-        assert self._lock_fd is not None
+        assert self._lock_fd is not None and self._socket_identity is not None
+        record = json.dumps({"pid": os.getpid(), "socket_dev": self._socket_identity[0],
+                             "socket_ino": self._socket_identity[1]},
+                            sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
         os.ftruncate(self._lock_fd, 0)
         os.lseek(self._lock_fd, 0, os.SEEK_SET)
-        os.write(self._lock_fd, f"{os.getpid()}\n".encode("ascii"))
+        os.write(self._lock_fd, record)
         os.fsync(self._lock_fd)
 
     def _socket_definitively_stale(self) -> bool:
@@ -145,7 +155,9 @@ class MonitorServer:
         if socket_info is not None:
             if not stat.S_ISSOCK(socket_info.st_mode):
                 raise UnsafeStateError("monitor.sock exists but is not a socket")
-            if not self._previous_owner_dead or not self._socket_definitively_stale():
+            identity = (socket_info.st_dev, socket_info.st_ino)
+            if (not self._previous_owner_dead or self._previous_socket_identity != identity
+                    or not self._socket_definitively_stale()):
                 raise AlreadyRunningError("refusing live or indeterminate monitor.sock")
             # Lock is held and the exact no-follow entry was proven to be a stale socket.
             os.unlink("monitor.sock", dir_fd=self._home_fd)
@@ -169,12 +181,11 @@ class MonitorServer:
         try:
             self._assert_home_anchor()
             self._prepare_entries()
-            self._record_owner()
             # sqlite3 and AF_UNIX bind expose pathname-only APIs. Anchor both
             # synchronously, restore cwd, and only then yield to asyncio.
             listener: socket.socket | None = None
             with self._anchored_cwd():
-                self._store = EventStore("monitor.db", dir_fd=self._home_fd)
+                self._store = EventStore("monitor.db")
                 db_info = self._entry("monitor.db")
                 if db_info is None or not stat.S_ISREG(db_info.st_mode):
                     raise UnsafeStateError("database creation escaped private home")
@@ -196,6 +207,7 @@ class MonitorServer:
                 raise UnsafeStateError("socket creation escaped private home")
             os.chmod("monitor.sock", 0o600, dir_fd=self._home_fd, follow_symlinks=False)
             self._socket_identity = (info.st_dev, info.st_ino)
+            self._record_owner()
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
         except BaseException:

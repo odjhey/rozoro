@@ -276,92 +276,85 @@ def _default_reducer(tx: StoreTransaction, event: Mapping[str, Any], durable_seq
 class EventStore:
     """One connection and lock: the daemon's only SQLite write path."""
 
-    def __init__(self, path: str | os.PathLike[str], *, dir_fd: int | None = None):
+    def __init__(self, path: str | os.PathLike[str]):
         self.path = Path(path)
-        self._dir_fd = os.dup(dir_fd) if dir_fd is not None else None
-        self._durable_name = os.fspath(path) if dir_fd is not None else None
-        if self._dir_fd is None:
-            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            os.chmod(self.path.parent, 0o700)
-            existed = self.path.exists()
-            if not existed:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
-                os.close(fd)
-            os.chmod(self.path, 0o600)
-            database: str | Path = self.path
-        else:
-            if self.path.name != os.fspath(path) or self.path.name in {".", ".."}:
-                raise ValueError("dirfd-backed database requires one filename")
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory_fd = os.open(
+            self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        database_fd = -1
+        sidecar_fds: list[int] = []
+        try:
+            os.fchmod(directory_fd, 0o700)
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            database_fd = os.open(self.path.name, flags, 0o600, dir_fd=directory_fd)
+            database_info = os.fstat(database_fd)
+            if not stat.S_ISREG(database_info.st_mode) or database_info.st_uid != os.geteuid():
+                raise RuntimeError("database must be an owner-controlled regular file")
+            os.fchmod(database_fd, 0o600)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    fd = os.open(self.path.name + suffix,
+                                 os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+                except FileNotFoundError:
+                    continue
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                    os.close(fd)
+                    raise RuntimeError(f"database sidecar {suffix} is unsafe")
+                os.fchmod(fd, 0o600)
+                sidecar_fds.append(fd)
+
+            # sqlite3 has no dirfd parameter. Anchor its actual open to the held
+            # no-follow directory, then verify it opened the pinned inode before
+            # issuing any PRAGMA or migration write.
+            previous_cwd = os.open(".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
-                fd = os.open(self._durable_name, flags, dir_fd=self._dir_fd)
-            except FileNotFoundError:
-                initial = None
-            else:
+                os.fchdir(directory_fd)
+                self._connection = sqlite3.connect(
+                    self.path.name, isolation_level=None, check_same_thread=False
+                )
+            finally:
+                os.fchdir(previous_cwd)
+                os.close(previous_cwd)
+            actual = os.stat(self.path.name, dir_fd=directory_fd, follow_symlinks=False)
+            if (actual.st_dev, actual.st_ino) != (database_info.st_dev, database_info.st_ino):
+                self._connection.close()
+                raise RuntimeError("database entry changed during SQLite open")
+
+            self._lock = threading.RLock()
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys=ON")
+            self._connection.execute("PRAGMA journal_mode=WAL")
+            try:
+                self._migrate()
+            except BaseException:
+                self._connection.close()
+                raise
+            for suffix in ("-wal", "-shm"):
+                try:
+                    fd = os.open(self.path.name + suffix,
+                                 os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+                except FileNotFoundError:
+                    continue
                 try:
                     info = os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
-                        raise RuntimeError("database must be an owner-private regular file")
-                    chunks = bytearray()
-                    while chunk := os.read(fd, 1024 * 1024):
-                        chunks.extend(chunk)
-                    initial = bytes(chunks)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                        raise RuntimeError(f"database sidecar {suffix} is unsafe")
+                    os.fchmod(fd, 0o600)
                 finally:
                     os.close(fd)
-            database = ":memory:"
-        self._lock = threading.RLock()
-        self._connection = sqlite3.connect(database, isolation_level=None, check_same_thread=False)
-        if self._dir_fd is not None and initial:
-            self._connection.deserialize(initial)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys=ON")
-        self._connection.execute("PRAGMA journal_mode=WAL" if self._dir_fd is None else "PRAGMA journal_mode=MEMORY")
-        try:
-            self._migrate()
-        except BaseException:
-            self._connection.close()
-            raise
-        # WAL sidecars inherit process umask; tighten any that already exist.
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(self.path) + suffix)
-            if sidecar.exists():
-                os.chmod(sidecar, 0o600)
+        finally:
+            for fd in sidecar_fds:
+                os.close(fd)
+            if database_fd >= 0:
+                os.close(database_fd)
+            os.close(directory_fd)
 
     def _commit(self) -> None:
         """Commit seam kept explicit for fault-injection durability tests."""
         self._connection.commit()
-        if self._dir_fd is not None:
-            self._persist_dirfd()
-
-    def _persist_dirfd(self) -> None:
-        """Publish a complete SQLite image with no-follow openat + renameat."""
-        assert self._dir_fd is not None and self._durable_name is not None
-        data = self._connection.serialize()
-        temporary = f".{self._durable_name}.{os.getpid()}.{os.urandom(8).hex()}.tmp"
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(temporary, flags, 0o600, dir_fd=self._dir_fd)
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(fd, view):]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        try:
-            existing = None
-            try:
-                existing = os.stat(self._durable_name, dir_fd=self._dir_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            if existing is not None and not stat.S_ISREG(existing.st_mode):
-                raise RuntimeError("refusing to replace non-regular database entry")
-            os.rename(temporary, self._durable_name, src_dir_fd=self._dir_fd, dst_dir_fd=self._dir_fd)
-            os.fsync(self._dir_fd)
-        finally:
-            try:
-                os.unlink(temporary, dir_fd=self._dir_fd)
-            except FileNotFoundError:
-                pass
 
     @contextmanager
     def _immediate(self) -> Iterator[sqlite3.Connection]:
@@ -530,9 +523,6 @@ class EventStore:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
-            if self._dir_fd is not None:
-                os.close(self._dir_fd)
-                self._dir_fd = None
 
     def __enter__(self) -> "EventStore":
         return self

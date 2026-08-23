@@ -223,11 +223,20 @@ class ServerProcessTests(unittest.TestCase):
         self.assertFalse(self.socket_path.exists())
 
         killed = self.start()
+        accepted = self.exchange(event(91))
+        self.assertEqual(accepted["type"], "ack")
+        database = sqlite3.connect(self.home / "monitor.db")
+        try:
+            self.assertEqual(database.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        finally:
+            database.close()
         killed.kill()
         killed.wait(timeout=5)
         self.assertTrue(self.socket_path.exists())
         restarted = self.start()
         self.assertEqual(self.health()["type"], "health.result")
+        retried = self.exchange(event(91))
+        self.assertEqual(retried["durable_seq"], accepted["durable_seq"])
         database = sqlite3.connect(self.home / "monitor.db")
         try:
             self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0],
@@ -242,7 +251,10 @@ class ServerProcessTests(unittest.TestCase):
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(str(self.socket_path))
         stale.close()
-        (self.home / "monitor.lock").write_text("99999999\n")
+        stale_info = self.socket_path.lstat()
+        (self.home / "monitor.lock").write_text(json.dumps(
+            {"pid": 99999999, "socket_dev": stale_info.st_dev, "socket_ino": stale_info.st_ino}
+        ) + "\n")
         os.chmod(self.home / "monitor.lock", 0o600)
         process = self.start()
         self.assertEqual(stat.S_IMODE(self.home.stat().st_mode), 0o700)
@@ -256,7 +268,7 @@ class ServerProcessTests(unittest.TestCase):
         process.wait(timeout=5)
 
     def test_symlink_and_non_socket_entries_never_touch_external_targets(self):
-        for entry in ("monitor.lock", "monitor.db", "monitor.sock"):
+        for entry in ("monitor.lock", "monitor.db", "monitor.db-wal", "monitor.db-shm", "monitor.sock"):
             with self.subTest(entry=entry):
                 case_home = Path(self.temp.name) / f"home-{entry}"
                 case_home.mkdir(mode=0o700)
@@ -320,6 +332,21 @@ class ServerProcessTests(unittest.TestCase):
             for filler in fillers:
                 filler.close()
             listener.close()
+
+    def test_dead_pid_record_for_different_socket_inode_cannot_authorize_unlink(self):
+        self.home.mkdir(mode=0o700)
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(self.socket_path))
+        stale.close()
+        info = self.socket_path.lstat()
+        (self.home / "monitor.lock").write_text(json.dumps(
+            {"pid": 99999999, "socket_dev": info.st_dev, "socket_ino": info.st_ino + 1}
+        ) + "\n")
+        os.chmod(self.home / "monitor.lock", 0o600)
+        process = self.start(wait=False)
+        self.assertEqual(process.wait(timeout=5), 2)
+        self.assertEqual((self.socket_path.lstat().st_dev, self.socket_path.lstat().st_ino),
+                         (info.st_dev, info.st_ino))
 
     def test_connectable_socket_is_never_unlinked_when_lock_is_available(self):
         self.home.mkdir(mode=0o700)
