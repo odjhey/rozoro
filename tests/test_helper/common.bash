@@ -49,7 +49,11 @@ daemon_pid_matches_home() {
   else
     command="$(ps -p "$pid" -o command= 2>/dev/null)" || return 1
   fi
-  case "$command" in *rozorod.py*"--home $home"*) return 0 ;; *) return 1 ;; esac
+  case "$command" in
+    *rozorod.py*"--home $home") return 0 ;;
+    *rozorod.py*"--home $home "*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 register_daemon_from_lock() {

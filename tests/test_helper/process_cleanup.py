@@ -2,6 +2,7 @@
 import atexit
 import json
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -24,7 +25,7 @@ def _command(pid: int) -> str:
 
 def _is_owned(pid: int, home: Path) -> bool:
     command = _command(pid)
-    return "rozorod.py" in command and f"--home {home}" in command
+    return "rozorod.py" in command and re.search(rf"--home {re.escape(str(home))}(?:\s|$)", command) is not None
 
 
 def register(process: subprocess.Popen, home: Path) -> subprocess.Popen:

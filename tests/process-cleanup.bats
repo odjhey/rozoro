@@ -3,10 +3,15 @@ TOOL_PATH="$PATH"
 load test_helper/common
 
 wait_for_file() { for _ in $(seq 1 200); do [ -s "$1" ] && return; sleep .02; done; return 1; }
+assert_no_process() { run kill -0 "$1"; [ "$status" -ne 0 ]; }
+_scan_processes() { ps -eo command= | grep -F 'rozorod.py --home' | grep -F -- "$1"; }
+_scan_artifacts() { find "$1" -type s -o -name monitor.lock -o -name 'monitor.db*' | grep .; }
 assert_isolated_clean() {
   root="$1"
-  ! ps -eo command= | grep -F 'rozorod.py --home' | grep -F -- "$root" >/dev/null
-  ! find "$root" -type s -o -name monitor.lock -o -name 'monitor.db*' | grep . >/dev/null
+  run _scan_processes "$root"
+  [ "$status" -ne 0 ] || { printf 'leaked rozorod.py process under %s:\n%s\n' "$root" "$output" >&2; return 1; }
+  run _scan_artifacts "$root"
+  [ "$status" -ne 0 ] || { printf 'leftover daemon artifacts under %s:\n%s\n' "$root" "$output" >&2; return 1; }
 }
 
 @test "SIGINT and SIGTERM reap exact Python direct and detached daemon owners" {
@@ -16,7 +21,7 @@ assert_isolated_clean() {
     wait_for_file "$out"; home="$(cat "$out")"; daemon_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$home/monitor.lock")"
     kill -"$2" "$runner"; wait "$runner" 2>/dev/null || true
     for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
-    ! kill -0 "$daemon_pid" 2>/dev/null
+    assert_no_process "$daemon_pid"
     assert_isolated_clean "$root"
   done
 }
@@ -33,7 +38,7 @@ assert_isolated_clean() {
   PATH="$TOOL_PATH" node --experimental-strip-types "$REPO_ROOT/tests/fixtures/daemon-owner.ts" "$home" "$out" & runner=$!
   wait_for_file "$out"; daemon_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$home/monitor.lock")"
   kill -TERM "$runner"; wait "$runner" 2>/dev/null || true
-  ! kill -0 "$daemon_pid" 2>/dev/null
+  assert_no_process "$daemon_pid"
   assert_isolated_clean "$root"
 }
 
@@ -45,6 +50,6 @@ assert_isolated_clean() {
   rm -f "$home/monitor.sock"
   kill -TERM "$runner"; wait "$runner" 2>/dev/null || true
   for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
-  ! kill -0 "$daemon_pid" 2>/dev/null
+  assert_no_process "$daemon_pid"
   assert_isolated_clean "$root"
 }
