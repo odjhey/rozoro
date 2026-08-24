@@ -195,6 +195,7 @@ do_resume() {
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--config "model_reasoning_effort=$EFFORT")
       [ "$FAST" = true ] && pass+=(--config service_tier=priority)
+      while IFS= read -r -d '' _a; do pass+=("$_a"); done < <(rzr_codex_hook_args "$ID")
       ;;
     copilot)
       pass=(--no-auto-update "--resume=$UUID" --autopilot --yolo --no-ask-user)
@@ -230,14 +231,6 @@ do_resume() {
     rzr_die "herdr agent start ($HARNESS resume) failed in pane $pane: $sout; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
-  if [ "$HARNESS" = codex ]; then
-    codex_store="${CODEX_HOME:-$HOME/.codex}/sessions"
-    "$RZR_BIN/rzr-codex-event-adapter.py" --task "$ID" --cwd "$CWD" --session "$UUID" \
-      --store "$codex_store" --socket "$ROZORO_HOME/monitor.sock" \
-      >>"$(rzr_task_dir "$ID")/codex-event-adapter.log" 2>&1 &
-    rzr_meta_set "$ID" event_adapter_pid "$!"
-  fi
-
   if [ -n "$PROMPT" ]; then
     rzr_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \
       || echo "rzr: warning: follow-up prompt not confirmed delivered to $ID" >&2

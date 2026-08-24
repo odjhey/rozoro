@@ -92,7 +92,9 @@ JSON
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'permission_mode=yolo'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
   expected=$'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tcodex\t--pane\tp1\t--\t--yolo\t--model\tgpt-5.6-sol\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
-  [ "$(grep -Fxc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+  [ "$(grep -Fc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--config\thooks.Stop='
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--dangerously-bypass-hook-trust'
 }
 
 @test "explicit no-fast overrides a fast preset without emitting a tier" {
@@ -374,7 +376,9 @@ JSON
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'fast=true'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
   expected=$'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tcodex\t--pane\tp1\t--\tresume\tuuid-codex\t--yolo\t--model\tgpt-5.6-sol\t--config\tmodel_reasoning_effort=high\t--config\tservice_tier=priority'
-  [ "$(grep -Fxc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+  [ "$(grep -Fc "$expected" "$FAKE_HERDR_LOG")" -eq 1 ]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--config\thooks.Stop='
+  assert_file_contains "$FAKE_HERDR_LOG" $'\t--dangerously-bypass-hook-trust'
 }
 
 @test "resume accepts a launched agent that becomes ready after agent_not_ready" {

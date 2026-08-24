@@ -196,7 +196,7 @@ do_spawn() {
   # NUL-separated (a rule value may contain newlines), read into an array here.
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
-    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID" "$FAST")
+    < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID" "$FAST" "$ID")
   [ -z "$EVENT_SETTINGS" ] || agent_args+=(--settings "$EVENT_SETTINGS")
   local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
@@ -220,14 +220,6 @@ do_spawn() {
     rzr_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
-
-  if [ "$HARNESS" = codex ]; then
-    codex_store="${CODEX_HOME:-$HOME/.codex}/sessions"
-    "$RZR_BIN/rzr-codex-event-adapter.py" --task "$ID" --cwd "$CWD" \
-      --store "$codex_store" --socket "$ROZORO_HOME/monitor.sock" \
-      >>"$FOLDER/codex-event-adapter.log" 2>&1 &
-    rzr_meta_set "$ID" event_adapter_pid "$!"
-  fi
 
   if [ -n "$PROMPT" ]; then
     rzr_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \

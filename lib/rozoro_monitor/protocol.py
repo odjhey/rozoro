@@ -119,6 +119,7 @@ _VERDICT = _enum("done", "waiting", "needs-action", "failed", "blocked")
 _REPORT_STATE = _enum("missing", "malformed", "valid")
 _ACTIONABLE_REASON = _enum(
     "none", "quiescent", "missing-report", "malformed-report", "waiting-background",
+    "native-turn-ended-report",
     "blocked", "failed", "needs-action", "gone", "unknown",
 )
 _REPORT_TUPLES = frozenset({
