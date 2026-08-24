@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 
 from lib.rozoro_monitor import protocol
+from tests.test_helper import process_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 DAEMON = ROOT / "bin" / "rozorod.py"
@@ -58,6 +59,7 @@ class ServerProcessTests(unittest.TestCase):
             env={**os.environ, **(env or {})}, preexec_fn=limit_files if nofile else None,
         )
         self.processes.append(process)
+        process_cleanup.register(process, self.home)
         if wait:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -289,6 +291,7 @@ class ServerProcessTests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 self.processes.append(process)
+                process_cleanup.register(process, case_home)
                 self.assertNotEqual(process.wait(timeout=5), 0)
                 self.assertEqual(external.read_text(), "sentinel")
                 self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
@@ -301,6 +304,7 @@ class ServerProcessTests(unittest.TestCase):
         process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(case_home)],
                                    cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.processes.append(process)
+        process_cleanup.register(process, case_home)
         self.assertNotEqual(process.wait(timeout=5), 0)
         self.assertEqual(regular.read_text(), "do-not-unlink")
 

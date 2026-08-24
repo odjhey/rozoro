@@ -8,6 +8,22 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import test from "node:test";
 import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
 
+const ownedDaemons = new Map<ChildProcess, string>();
+let cleaning = false;
+const cleanupDaemons = async () => {
+	if (cleaning) return; cleaning = true;
+	for (const child of ownedDaemons.keys()) {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+	}
+	await Promise.all([...ownedDaemons.keys()].map((child) => child.exitCode !== null || child.signalCode !== null
+		? Promise.resolve() : new Promise<void>((resolve) => child.once("exit", () => resolve()))));
+	for (const home of ownedDaemons.values()) await rm(home, {recursive:true, force:true});
+	ownedDaemons.clear();
+};
+for (const name of ["SIGINT", "SIGTERM"] as const) process.once(name, () => { void cleanupDaemons().finally(() => process.kill(process.pid, name)); });
+process.once("uncaughtException", (error) => { void cleanupDaemons().finally(() => { throw error; }); });
+process.once("unhandledRejection", (error) => { void cleanupDaemons().finally(() => { throw error; }); });
+
 const waitFor = async (predicate: () => boolean, timeout = 2000) => {
 	const end = Date.now() + timeout;
 	while (!predicate()) {
@@ -46,10 +62,14 @@ const startDaemon = async (home: string): Promise<ChildProcess> => {
 		if (Date.now() > end) throw new Error("daemon did not start");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
+	ownedDaemons.set(child, home);
 	return child;
 };
 const stopDaemon = async (child: ChildProcess) => {
-	child.kill("SIGTERM"); await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+	if (child.exitCode === null && child.signalCode === null) {
+		child.kill("SIGTERM"); await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+	}
+	ownedDaemons.delete(child);
 };
 const registerProductionTarget = async (home: string, pane: string): Promise<string> => {
 	const fakeRoot = join(home, "fake-herdr"); await mkdir(fakeRoot, {recursive:true});

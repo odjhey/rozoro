@@ -19,10 +19,18 @@ setup() {
   printf 'untouched\n' > "$SENTINEL"
   export SENTINEL
   TEST_PIDS=""
+  TEST_DAEMONS=""
 }
 
 teardown() {
-  if [ -S "${ROZORO_HOME:-}/monitor.sock" ]; then "$REPO_ROOT/bin/rzr-monitor.sh" stop >/dev/null 2>&1 || true; fi
+  register_daemon_from_lock "${ROZORO_HOME:-}" || true
+  for owned in $TEST_DAEMONS; do
+    pid="${owned%%:*}"; home="${owned#*:}"
+    daemon_pid_matches_home "$pid" "$home" || continue
+    kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do daemon_pid_matches_home "$pid" "$home" || break; sleep 0.05; done
+    daemon_pid_matches_home "$pid" "$home" && kill -9 "$pid" 2>/dev/null || true
+  done
   for pid in $TEST_PIDS; do
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -32,6 +40,25 @@ teardown() {
 }
 
 register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
+
+daemon_pid_matches_home() {
+  pid="$1" home="$2"
+  [ "$pid" -gt 1 ] 2>/dev/null || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    command="$(tr '\000' ' ' < "/proc/$pid/cmdline")"
+  else
+    command="$(ps -p "$pid" -o command= 2>/dev/null)" || return 1
+  fi
+  case "$command" in *rozorod.py*"--home $home"*) return 0 ;; *) return 1 ;; esac
+}
+
+register_daemon_from_lock() {
+  home="$1" lock="$1/monitor.lock"
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+  pid="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); p=v.get("pid"); print(p if type(p) is int else "")' "$lock")"
+  daemon_pid_matches_home "$pid" "$home" || return 1
+  case " $TEST_DAEMONS " in *" $pid:$home "*) ;; *) TEST_DAEMONS="$TEST_DAEMONS $pid:$home" ;; esac
+}
 
 # Octal permission bits of a file, portable across GNU and macOS. Try GNU
 # `stat -c` first: on BSD/macOS `-c` is rejected (clean non-zero) so we fall back

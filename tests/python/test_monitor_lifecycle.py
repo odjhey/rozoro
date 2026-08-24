@@ -14,6 +14,7 @@ from pathlib import Path
 from lib.rozoro_monitor import protocol
 from lib.rozoro_monitor.server import MonitorServer
 from lib.rozoro_monitor.store import EventStore
+from tests.test_helper import process_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 DAEMON = ROOT / "bin" / "rozorod.py"
@@ -56,6 +57,7 @@ class MonitorLifecycleTests(unittest.TestCase):
                                    cwd=ROOT, env=self.env(ROZORO_MONITOR_SPOOL_INTERVAL=interval),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.processes.append(process)
+        process_cleanup.register(process, self.home)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             result = self.cli("status", "--json")
