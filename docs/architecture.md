@@ -1,6 +1,6 @@
 # Product architecture
 
-Rozoro is intentionally small, but it owns several different kinds of truth. The architecture separates those truths so terms such as `idle`, `done`, `priority`, `task`, `session`, and `notification` do not collapse into one state machine.
+Rozoro is intentionally small, but the product needs several different kinds of truth. The architecture separates those truths so terms such as `idle`, `done`, `priority`, `task`, `session`, and `notification` do not collapse into one state machine. Where a capability is not yet shipped, these docs describe the contract without assuming Rozoro must own the implementation.
 
 ## Context map
 
@@ -15,8 +15,8 @@ Task lifecycle ────────────────┐
   │ task identity / brief     │
   │ handoff / exact resume    │
   ▼                           │
-Harness runtime               │
-  │ native lifecycle facts   │
+Harness/session runtime       │
+  │ structured lifecycle facts│
   ▼                           │
 Observation + delivery        │
   │ events → projections      │
@@ -48,7 +48,7 @@ Does not own:
 
 - business priority independent of the operator;
 - repository correctness;
-- harness-native lifecycle truth;
+- harness lifecycle truth;
 - durable event/delivery mechanics.
 
 The watchtower may embody workflow policy in its prompt/skills, but that policy is not a Rozoro core state machine.
@@ -68,19 +68,21 @@ Owns:
 
 A task is not a pane. A pane is one current host binding for a task/session.
 
-## 3. Harness runtime
+## 3. Harness/session runtime
 
-**Purpose:** translate harness-specific lifecycle evidence into conservative Rozoro semantics.
+**Purpose:** provide structured lifecycle evidence that can be normalized into conservative task/session semantics.
 
-Owns:
+The product semantics require:
 
 - harness session identity;
 - foreground activity;
-- owned background activity where the harness can certify it;
+- owned background activity where the lifecycle source can certify it;
 - derived availability such as `busy`, `waiting-background`, `quiescent`, or `unknown`;
-- adapter capability/confidence boundaries.
+- explicit capability/confidence boundaries.
 
-Harness-native evidence outranks terminal idleness for semantic completion. If a harness cannot certify a fact, Rozoro should prefer `unknown` to inference.
+Structured harness evidence outranks terminal idleness for semantic completion. If the available source cannot certify a fact, prefer `unknown` to inference.
+
+Today Pi and Claude have Rozoro-specific semantic paths. ACP/acpx and upstream harness contracts are under evaluation before more adapter surface is added. The contract matters; ownership of the adapter/runtime layer is not settled.
 
 ## 4. Observation, attention, and delivery
 
@@ -97,28 +99,30 @@ Already shipped:
 - delivery confirmation and exact generation reconciliation/ACK;
 - crash/reconnect recovery.
 
-Target refinement:
+Target capability:
 
-- first-class Watchtower Mailbox items with stable per-attention identity and independent handled state.
+- stable task-scoped attention-item identity with independent handled and superseded state.
 
-A generation is therefore a **delivery batch**. It must not become the durable identity of an operator work item.
+This capability is often called the **Watchtower Mailbox** in the product model. That name does not imply that Rozoro must build another mailbox subsystem; ACP/acpx and off-the-shelf local-first tools should be evaluated against the contract first.
+
+A generation is a **delivery batch**. It must not become the durable identity of an operator work item.
 
 ## 5. Terminal hosting
 
 **Purpose:** provide the execution substrate on which harness sessions live.
 
-Herdr owns:
+Herdr owns today:
 
 - tabs, panes, workspaces, and process/session hosting;
 - host-level liveness;
 - addressing and supported actuation operations.
 
-Herdr does not own:
+Herdr does not establish:
 
 - semantic turn completion;
 - repository-task verdicts;
 - watchtower priority;
-- mailbox/delivery state.
+- attention-item or delivery semantics.
 
 ## 6. External repository domain
 
@@ -143,6 +147,6 @@ Rozoro may transport prompts and lifecycle facts around that work, but it should
 - Event durability is not notification delivery.
 - Notification delivery is not generation ACK.
 - Generation ACK is not task open-item resolution.
-- Target mailbox-item handling is not task resolution.
+- Target attention-item handling is not task resolution.
 - Host teardown does not delete durable task identity/history.
 - Harness-native subagents remain inside their parent crew unless a separate crew task is deliberately created.
