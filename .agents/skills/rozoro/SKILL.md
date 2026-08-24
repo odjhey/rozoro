@@ -230,11 +230,12 @@ answer itself, but whether the answer already exists.
      to drop it. When unsure whether more is coming, leave it idle — an idle crew
      costs nothing; a prematurely reaped one costs a cold re-spawn.
    - **Apply conservative operator policy before teardown.** Rozoro core is
-     VCS-agnostic: it cannot certify acceptance, landed work, pending input, or
-     recent focus, and teardown never inspects or changes the cwd. Verify delivery
-     with repository-specific tools and avoid reaping while review, operator input,
-     or recent interaction may still need the live context. These are watchtower/
-     operator decisions, not teardown refusal semantics.
+     VCS-agnostic: teardown cannot certify acceptance or landed work and never
+     inspects or changes the cwd. Verify delivery with repository-specific tools,
+     and avoid reaping while review, operator input, or recent interaction may
+     still need the live context. This release adds no pending-input or
+     recent-focus enforcement; generic runtime safeguards remain a separate #67
+     concern and may complement this operator policy later.
 
    The `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
    even a reaped task is recoverable — but recovery is strictly worse than a crew
