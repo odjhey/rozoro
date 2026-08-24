@@ -1203,13 +1203,18 @@ class EventStore:
             )
             return True
 
-    def _snapshot_rows(self, connection: sqlite3.Connection, through: int) -> list[dict[str, Any]]:
+    def _snapshot_rows(self, connection: sqlite3.Connection, after: int,
+                       through: int) -> list[dict[str, Any]]:
+        """Return frozen frontier state only for tasks changed in ``(after, through]``."""
         rows = connection.execute(
             """SELECT s.* FROM generation_task_snapshots s
                JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
-                     WHERE generation<=? GROUP BY task_id) latest
+                     WHERE generation<=? AND task_id IN (
+                         SELECT DISTINCT task_id FROM pending_generation_tasks
+                         WHERE generation>? AND generation<=?
+                     ) GROUP BY task_id) latest
                  ON latest.task_id=s.task_id AND latest.generation=s.generation
-               ORDER BY s.generation,s.task_id""", (through,)
+               ORDER BY s.generation,s.task_id""", (through, after, through)
         ).fetchall()
         if any(not int(row["compat_complete"]) for row in rows):
             raise ValueError("generation snapshot lacks immutable compatibility fields")
@@ -1224,11 +1229,12 @@ class EventStore:
         with self._lock:
             self._require_registration(self._connection, driver_id, session_id, epoch)
             ledger = self._connection.execute(
-                "SELECT latest_generation FROM watchtower_deliveries WHERE driver_id=?", (driver_id,)
+                "SELECT latest_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
+                (driver_id,),
             ).fetchone()
             if ledger is None or through > ledger[0]:
                 raise ValueError("unavailable generation")
-            return self._snapshot_rows(self._connection, through)
+            return self._snapshot_rows(self._connection, int(ledger[1]), through)
 
     def reconcile_delivered(self, driver_id: str) -> tuple[int, list[dict[str, Any]]]:
         """Consume only the exact confirmed delivered-but-unacked offer, without changing cursors."""
@@ -1266,7 +1272,7 @@ class EventStore:
             ).fetchone()
             if older is not None:
                 raise ValueError("an older valid delivery offer remains unconfirmed")
-            return delivered, self._snapshot_rows(connection, delivered)
+            return delivered, self._snapshot_rows(connection, acked, delivered)
 
     def ack_delivered(self, driver_id: str, through: int) -> bool:
         """ACK an exact confirmed delivered cursor without registering or retiring offers."""
