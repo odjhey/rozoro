@@ -18,15 +18,17 @@ _owned: dict[int, dict] = {}
 _cleaning = False
 
 
-def _birth(pid: int) -> Optional[str]:
+def _birth(pid: int, token: Optional[str] = None) -> Optional[str]:
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().split()
-        return fields[21]
+        return "proc:" + fields[21]
     except (OSError, IndexError):
-        result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], text=True,
+        if not token:
+            return None
+        result = subprocess.run(["ps", "eww", "-p", str(pid), "-o", "command="], text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
-        value = result.stdout.strip()
-        return value or None
+        marker = f"ROZORO_TEST_PROCESS_TOKEN={token}"
+        return "token:" + token if marker in result.stdout else None
 
 
 def _canonical(path) -> str:
@@ -46,21 +48,27 @@ def _normalize_argv(argv) -> list[str]:
     return values
 
 
-def _record(pid: int, home: Path, argv: list[str], pgid: Optional[int] = None) -> dict:
-    birth = _birth(pid)
+def _record(pid: int, home: Path, argv: list[str], pgid: Optional[int] = None,
+            token: Optional[str] = None) -> dict:
+    birth = _birth(pid, token)
     if birth is None:
         raise RuntimeError(f"process {pid} exited before ownership registration")
     expected = _daemon_argv(home)
     if _normalize_argv(argv) != expected:
         raise RuntimeError(f"refusing non-daemon argv for pid {pid}")
     value = {"pid": pid, "birth": birth, "pgid": pgid if pgid is not None else os.getpgid(pid),
-             "home": expected[3], "argv": expected}
+             "home": expected[3], "argv": expected, "token": token}
     _owned[pid] = value
     return value
 
 
 def register(process: subprocess.Popen, home: Path) -> subprocess.Popen:
-    _record(process.pid, home, process.args)
+    expected = _daemon_argv(home)
+    if _normalize_argv(process.args) != expected:
+        raise RuntimeError(f"refusing non-daemon argv for pid {process.pid}")
+    _owned[process.pid] = {"pid": process.pid, "birth": "popen", "process": process,
+                           "pgid": os.getpgid(process.pid), "home": expected[3],
+                           "argv": expected, "token": None}
     return process
 
 
@@ -83,7 +91,7 @@ def register_spawn_file(path: Path) -> int:
     pid = value.get("pid")
     if type(pid) is not int:
         raise RuntimeError("invalid monitor spawn record")
-    recorded = _record(pid, Path(value.get("home", "")), value.get("argv", []), value.get("pgid"))
+    recorded = _record(pid, Path(value.get("home", "")), value.get("argv", []), value.get("pgid"), value.get("token"))
     if value.get("birth") != recorded["birth"]:
         _owned.pop(pid, None)
         raise RuntimeError("monitor spawn record no longer names the spawned process")
@@ -91,7 +99,9 @@ def register_spawn_file(path: Path) -> int:
 
 
 def _alive(value: dict) -> bool:
-    if _birth(value["pid"]) != value["birth"]:
+    if value.get("process") is not None:
+        return value["process"].poll() is None and os.getpgid(value["pid"]) == value["pgid"]
+    if _birth(value["pid"], value.get("token")) != value["birth"]:
         return False
     try:
         return os.getpgid(value["pid"]) == value["pgid"]
@@ -100,19 +110,30 @@ def _alive(value: dict) -> bool:
 
 
 def _terminate(value: dict) -> None:
-    if not _alive(value): return
     pid, pgid = value["pid"], value["pgid"]
+    leader_alive = _alive(value)
+    if not leader_alive:
+        if pgid != pid:
+            return
+        try:
+            os.getpgid(pid)
+            return  # PID exists with another identity: fail closed on reuse.
+        except ProcessLookupError:
+            try: os.killpg(pgid, 0)  # Existing group proves surviving descendants.
+            except (ProcessLookupError, PermissionError): return
     try:
         if pgid == pid: os.killpg(pgid, signal.SIGTERM)
         else: os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError): return
     deadline = time.monotonic() + 3
-    while _alive(value) and time.monotonic() < deadline: time.sleep(.02)
-    if _alive(value):
-        try:
-            if pgid == pid: os.killpg(pgid, signal.SIGKILL)
-            else: os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError): pass
+    while time.monotonic() < deadline:
+        try: os.killpg(pgid, 0) if pgid == pid else os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError): return
+        time.sleep(.02)
+    try:
+        if pgid == pid: os.killpg(pgid, signal.SIGKILL)
+        else: os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError): pass
 
 
 def cleanup() -> None:
@@ -122,11 +143,14 @@ def cleanup() -> None:
     try:
         registry = os.environ.get("ROZORO_TEST_PROCESS_REGISTRY")
         if registry:
-            for raw in _load_file(Path(registry)):
+            registry_path = Path(registry)
+            for raw in _load_file(registry_path):
                 try:
-                    value = _record(raw["pid"], Path(raw["home"]), raw["argv"], raw.get("pgid"))
+                    value = _record(raw["pid"], Path(raw["home"]), raw["argv"], raw.get("pgid"), raw.get("token"))
                     if raw.get("birth") != value["birth"]: _owned.pop(value["pid"], None)
                 except (KeyError, OSError, RuntimeError, TypeError): pass
+            try: registry_path.unlink()
+            except FileNotFoundError: pass
         values = list(_owned.values())
         for value in values: _terminate(value)
         _owned.clear()

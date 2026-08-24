@@ -75,6 +75,8 @@ with tempfile.TemporaryDirectory() as temporary:
     registry = Path(temporary) / "owned-processes.jsonl"
     registry.write_text("")
     os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(registry)
+    helper_path = str(ROOT / "tests/test_helper")
+    os.environ["PYTHONPATH"] = helper_path + os.pathsep + os.environ.get("PYTHONPATH", "")
     home.mkdir(mode=0o700)
     database = sqlite3.connect(home / "monitor.db")
     database.executescript(_MIGRATIONS[1])

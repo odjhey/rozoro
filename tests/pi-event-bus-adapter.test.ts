@@ -13,7 +13,7 @@ let cleaning = false;
 const cleanupDaemons = async () => {
 	if (cleaning) return; cleaning = true;
 	for (const child of ownedDaemons.keys()) {
-		if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+		try { process.kill(-(child.pid!), "SIGTERM"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
 	}
 	await Promise.all([...ownedDaemons.keys()].map((child) => child.exitCode !== null || child.signalCode !== null
 		? Promise.resolve() : new Promise<void>((resolve) => child.once("exit", () => resolve()))));
@@ -55,20 +55,19 @@ async function fakeServer(path: string, frames: Record<string, unknown>[]): Prom
 }
 
 const startDaemon = async (home: string): Promise<ChildProcess> => {
-	const child = spawn("python3", [join(process.cwd(), "bin/rzr-monitor.py"), "run"], {env:{...process.env,ROZORO_HOME:home},stdio:"ignore"});
+	const child = spawn("python3", [join(process.cwd(), "bin/rzr-monitor.py"), "run"], {env:{...process.env,ROZORO_HOME:home},stdio:"ignore",detached:true});
+	ownedDaemons.set(child, home);
 	const end = Date.now() + 5000;
 	for (;;) {
 		try { if ((await lstat(join(home, "monitor.sock"))).isSocket()) break; } catch { /* starting */ }
 		if (Date.now() > end) throw new Error("daemon did not start");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
-	ownedDaemons.set(child, home);
 	return child;
 };
 const stopDaemon = async (child: ChildProcess) => {
-	if (child.exitCode === null && child.signalCode === null) {
-		child.kill("SIGTERM"); await new Promise<void>((resolve) => child.once("exit", () => resolve()));
-	}
+	try { process.kill(-(child.pid!), "SIGTERM"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
+	if (child.exitCode === null && child.signalCode === null) await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 	ownedDaemons.delete(child);
 };
 const registerProductionTarget = async (home: string, pane: string): Promise<string> => {

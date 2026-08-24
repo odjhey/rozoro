@@ -41,6 +41,7 @@ class MonitorLifecycleTests(unittest.TestCase):
     def tearDown(self):
         os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(self.registry)
         process_cleanup.cleanup()
+        os.environ.pop("ROZORO_TEST_PROCESS_REGISTRY", None)
         for process in self.processes:
             if process.poll() is None: process.kill()
             process.wait(timeout=5)
@@ -49,8 +50,10 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.temp.cleanup()
 
     def env(self, **extra):
+        helper_path = str(ROOT / "tests/test_helper")
         return {**os.environ, "ROZORO_HOME": str(self.home),
-                "ROZORO_TEST_PROCESS_REGISTRY": str(self.registry), **extra}
+                "ROZORO_TEST_PROCESS_REGISTRY": str(self.registry),
+                "PYTHONPATH": helper_path + os.pathsep + os.environ.get("PYTHONPATH", ""), **extra}
 
     def cli(self, *args, check=False, **extra):
         return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=self.env(**extra),

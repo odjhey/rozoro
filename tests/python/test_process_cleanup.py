@@ -1,3 +1,5 @@
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -35,11 +37,32 @@ class ExactProcessCleanupTests(unittest.TestCase):
                 finally:
                     spoof.terminate(); spoof.wait(timeout=5)
 
+    def test_reused_pid_without_spawn_token_is_never_signaled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            registry = Path(temporary) / "owned.jsonl"
+            unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+            home = Path(temporary) / "claimed-home"
+            record = {"pid": unrelated.pid, "pgid": os.getpgid(unrelated.pid),
+                      "birth": "token:not-the-child", "token": "not-the-child",
+                      "home": str(home.resolve()),
+                      "argv": [str(Path(sys.executable).resolve()), str(DAEMON.resolve()),
+                               "--home", str(home.resolve())]}
+            registry.write_text(json.dumps(record) + "\n")
+            os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(registry)
+            try:
+                process_cleanup.cleanup()
+                self.assertIsNone(unrelated.poll())
+                self.assertFalse(registry.exists())
+            finally:
+                unrelated.terminate(); unrelated.wait(timeout=5)
+                os.environ.pop("ROZORO_TEST_PROCESS_REGISTRY", None)
+
     def test_parallel_owned_process_groups_are_independent(self):
         with tempfile.TemporaryDirectory(prefix="owned-parallel-") as temporary:
             processes = []
             for number in range(3):
                 home = Path(temporary) / f"home-{number}"
+                home.mkdir(mode=0o700)
                 process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(home)],
                                            start_new_session=True)
                 process_cleanup.register(process, home); processes.append(process)

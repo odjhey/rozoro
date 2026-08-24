@@ -11,6 +11,7 @@ setup() {
   export FAKE_HERDR_SOCKET="$TEST_ROOT/herdr.sock"
   export FAKE_CODEX_LOG="$TEST_ROOT/codex.log"
   export PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache"
+  export PYTHONPATH="$REPO_ROOT/tests/test_helper:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
   export PATH="$REPO_ROOT/tests/fakes:$REPO_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   mkdir -p "$HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks" "$FAKE_HERDR_ROOT" "$PYTHONPYCACHEPREFIX"
   chmod 700 "$ROZORO_HOME"
