@@ -298,6 +298,16 @@ rzr_copilot_capabilities() {
   done
 }
 
+# Return success when a version string falls in [2.1.240,2.2.0).
+rzr_claude_version_supported() {  # <raw-version>
+  local version="$1" major minor patch
+  [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
+  major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"; patch="${BASH_REMATCH[3]}"
+  [ "$major" -eq 2 ] || return 1
+  [ "$minor" -eq 1 ] || return 1
+  [ "$patch" -ge 240 ] || return 1
+}
+
 # Map a resolved profile to the launch args a harness expects AFTER the `--` in
 # `herdr agent start ... -- <arg>...`. Emits NUL-separated args (so a rule value
 # containing newlines survives being read back into an array; bash-3.2 safe via
@@ -314,13 +324,11 @@ rzr_copilot_capabilities() {
 # --append-system-prompt accepts either text or a file path. The 6th optional arg
 # is a preallocated harness session id (used by Pi and Copilot for exact linking).
 rzr_claude_event_capability() {
-  command -v claude >/dev/null 2>&1 || { echo "rzr: event-bus opt-in requires Claude Code 2.1.240" >&2; return 1; }
+  command -v claude >/dev/null 2>&1 || { echo "rzr: event-bus opt-in requires Claude Code >=2.1.240 <2.2.0" >&2; return 1; }
   local version
-  version="$(claude --version 2>/dev/null)" || return 1
-  case "$version" in
-    2.1.240|2.1.240\ *) return 0 ;;
-    *) echo "rzr: Claude event hooks are certified only for 2.1.240 (found: $version)" >&2; return 1 ;;
-  esac
+  version="$(claude --version 2>/dev/null | sed 's/ .*//')" || return 1
+  if rzr_claude_version_supported "$version"; then return 0; fi
+  echo "rzr: Claude event hooks are certified only for >=2.1.240 <2.2.0 (found: $version)" >&2; return 1
 }
 
 # Generate a private Claude watchtower settings overlay. The caller supplies the
@@ -339,7 +347,9 @@ try:
     old=os.stat(name,dir_fd=fd,follow_symlinks=False) if os.path.lexists(path) else None
     if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid()): raise SystemExit("refusing unsafe watchtower settings destination")
     version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
-    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    match=__import__("re").fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
+        raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
     try:
         with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
@@ -392,7 +402,9 @@ try:
     if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid()):
         raise SystemExit("refusing unsafe Claude settings destination")
     version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
-    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    match=__import__("re").fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
+        raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
     try:
         with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
