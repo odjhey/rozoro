@@ -32,6 +32,7 @@ export default function (pi: ExtensionAPI) {
 	let busClient: RozoroEventBusClient | undefined;
 	let startup: AbortController | undefined;
 	let pendingLifecycle: ("turn.start" | "turn.stop")[] = [];
+	let retainLifecycle = false;
 
 	const activateClient = (client: RozoroEventBusClient) => {
 		busClient = client;
@@ -109,6 +110,7 @@ export default function (pi: ExtensionAPI) {
 		pendingLifecycle = [];
 		const controller = new AbortController();
 		startup = controller;
+		retainLifecycle = true;
 		// Do not await Herdr readiness from session_start: Herdr cannot mark Pi
 		// interactive_ready until this lifecycle handler returns.
 		void initialize(ctx, controller.signal).catch((error) => {
@@ -116,12 +118,16 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.setStatus(STATUS_KEY, "inactive");
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
+		}).finally(() => {
+			if (startup !== controller) return;
+			retainLifecycle = false;
+			pendingLifecycle = [];
 		});
 	});
 
 	const publishLifecycle = (event: "turn.start" | "turn.stop") => {
 		if (busClient) busClient.publish(event);
-		else if (startup && !startup.signal.aborted) pendingLifecycle.push(event);
+		else if (retainLifecycle) pendingLifecycle.push(event);
 	};
 	pi.on("agent_start", () => publishLifecycle("turn.start"));
 	pi.on("agent_settled", () => publishLifecycle("turn.stop"));
@@ -131,6 +137,7 @@ export default function (pi: ExtensionAPI) {
 		startup = undefined;
 		busClient?.close();
 		busClient = undefined;
+		retainLifecycle = false;
 		pendingLifecycle = [];
 		process.removeListener("exit", cleanupOnProcessExit);
 	});
