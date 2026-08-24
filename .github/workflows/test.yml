@@ -23,6 +23,8 @@ jobs:
             case "$file" in *.py) continue ;; esac
             bash -n "$file"
           done
+      - name: Reject stock macOS Python 3.9 before monitor side effects
+        run: /usr/bin/python3 tests/monitor-python-rejection.py
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
