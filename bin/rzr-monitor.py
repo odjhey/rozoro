@@ -17,6 +17,7 @@ import argparse
 import fcntl
 import json
 import os
+import signal
 import socket
 import stat
 import subprocess
@@ -177,7 +178,15 @@ def start(home: Path) -> int:
             argv = [sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)]
             process = subprocess.Popen(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
                                        stdout=log, stderr=log, start_new_session=True, close_fds=True)
-            _test_record_spawn(process, argv, home)
+            try:
+                _test_record_spawn(process, argv, home)
+            except Exception:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
+                raise
         finally:
             log.close()
     except Exception as exc:

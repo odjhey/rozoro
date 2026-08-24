@@ -92,7 +92,12 @@ def register_spawn_file(path: Path) -> int:
 
 
 def _alive(value: dict) -> bool:
-    return _birth(value["pid"]) == value["birth"]
+    if _birth(value["pid"]) != value["birth"]:
+        return False
+    try:
+        return os.getpgid(value["pid"]) == value["pgid"]
+    except ProcessLookupError:
+        return False
 
 
 def _terminate(value: dict) -> None:
@@ -133,14 +138,6 @@ def cleanup() -> None:
     finally: _cleaning = False
 
 
-def guard(parent: int, registry: Path) -> None:
-    os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(registry)
-    while True:
-        try: os.kill(parent, 0)
-        except ProcessLookupError: cleanup(); return
-        time.sleep(.05)
-
-
 def _interrupt(signum, _frame):
     cleanup(); signal.signal(signum, signal.SIG_DFL); os.kill(os.getpid(), signum)
 
@@ -148,6 +145,3 @@ def _interrupt(signum, _frame):
 if os.environ.get("ROZORO_PROCESS_CLEANUP_NO_ATEXIT") != "1":
     atexit.register(cleanup)
     for _signal in (signal.SIGINT, signal.SIGTERM): signal.signal(_signal, _interrupt)
-
-if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "guard":
-    guard(int(sys.argv[2]), Path(sys.argv[3]))
