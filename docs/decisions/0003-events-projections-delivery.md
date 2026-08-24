@@ -42,7 +42,7 @@ The shipped `rozorod` event bus implements this separation and is the foundation
 - Notifications may be coalesced without losing the immutable tasks/reasons represented by a generation.
 - Current state can be rebuilt/reduced independently from wake delivery.
 - A generation is explicitly a **delivery batch**, not the durable identity of a watchtower work item.
-- The target Watchtower Mailbox can be added above this substrate without replacing the Event Log, projections, or delivery protocol.
+- The target stable attention-item capability can sit above this substrate without replacing the Event Log, projections, or delivery protocol. Whether Rozoro owns that implementation remains open.
 
 The intended non-equivalence is:
 
@@ -50,7 +50,7 @@ The intended non-equivalence is:
 event persisted
   != notification delivered
   != generation reconciled/ACKed
-  != mailbox item handled (target)
+  != attention item handled (target)
   != task open item resolved
   != operator acceptance
 ```
