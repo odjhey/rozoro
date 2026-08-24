@@ -144,7 +144,7 @@ class MonitorLifecycleTests(unittest.TestCase):
         linked_home.symlink_to(external_home, target_is_directory=True)
         result = subprocess.run([str(CLI), "monitor", "start"], cwd=ROOT,
                                 env={**os.environ, "ROZORO_HOME": str(linked_home)},
-                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((external_home / "monitor.log").exists())
 
@@ -210,7 +210,7 @@ class MonitorLifecycleTests(unittest.TestCase):
         def other_cli(*args):
             return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=env,
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  timeout=12)
+                                  timeout=12, check=False)
         status_result = other_cli("status", "--json")
         self.assertNotEqual(status_result.returncode, 0)
         self.assertFalse(json.loads(status_result.stdout)["running"])
