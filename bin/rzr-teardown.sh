@@ -2,13 +2,11 @@
 # rzr-teardown.sh - close a task's tab and remove its record.
 # Usage: rzr-teardown.sh <id> [--keep-tab] [--force]
 #   --keep-tab  remove the state record but leave the herdr tab open
-#   --force     tear down even if the crew's cwd has unlanded work
+#   --force     deprecated compatibility no-op
 #
 # Minimal and intentionally NOT clever: it closes the recorded tab and deletes
-# state/<id>.meta. The one thing it refuses by default is discarding a crew's
-# unlanded work - uncommitted/untracked changes or unpushed commits in the
-# task's recorded cwd (rzr_unlanded_reasons, rzr-lib.sh) - since that's silent
-# data loss, not a scratch-harness tradeoff. --force bypasses the check.
+# only live Rozoro state. Repository/worktree cleanup and delivery policy belong
+# to higher-level tools; teardown never inspects or mutates the recorded cwd.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
@@ -23,19 +21,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 rzr_task_exists "$ID" || rzr_die "no such task '$ID'"
-
-if [ "$FORCE" -eq 0 ]; then
-  CWD=$(rzr_meta_get "$ID" cwd || true)
-  if [ -n "$CWD" ]; then
-    REASONS=$(rzr_unlanded_reasons "$CWD")
-    if [ -n "$REASONS" ]; then
-      echo "rzr: refusing to tear down '$ID' - unlanded work in $CWD:" >&2
-      echo "$REASONS" | sed 's/^/rzr:   - /' >&2
-      echo "rzr: land it, or rerun with --force to discard anyway" >&2
-      exit 1
-    fi
-  fi
-fi
+[ "$FORCE" -eq 0 ] || echo "rzr: warning: --force is deprecated and unnecessary; teardown never inspects repository state" >&2
 
 TAB=$(rzr_meta_get "$ID" tab || true)
 if [ "$KEEP" -eq 0 ] && [ -n "$TAB" ]; then
