@@ -16,9 +16,13 @@ reset only its event-bus database:
 ./bin/rozoro monitor reset --force
 ```
 
-Reset removes `monitor.db` and its SQLite sidecars. It preserves authoritative
-`tasks/` folders and handoff reports, from which later projection phases can
-rebuild state. A populated v4 generation ledger is rejected during v5 startup
+Reset removes `monitor.db`, its SQLite sidecars, durable `producer-seq/`
+cursors, and queued `spool/` events as one coherent event-bus state boundary.
+Removing only the database would leave producer cursors ahead of the empty
+projection, while retaining spool events without their cursor state could
+replay an incomplete lifecycle. It preserves authoritative `tasks/` folders
+and handoff reports, from which later projection phases can rebuild state. A
+populated v4 generation ledger is rejected during v5 startup
 because v4 did not persist complete generation membership. During v6 startup,
 any previously-persisted v4- or v5-origin database that still carries
 `task_projections` rows — including generation-zero rows predating generation
