@@ -108,7 +108,9 @@ The first run pulls those immutable images; later builds reuse the container
 engine's cache. Tests run without network access against a read-only checkout,
 using only a temporary writable filesystem inside the disposable container. No
 host Bats, `jq`, or Python installation is required. CI runs the full suite this
-way on Linux and keeps a stock macOS Bash 3.2 syntax check.
+way on Linux; on macOS it checks stock Bash 3.2 syntax and exercises monitor
+migration and lifecycle behavior on both Python 3.10 and Homebrew's current
+Python.
 
 The automated suite covers shell/Python protocol parsing, event transport,
 watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr
