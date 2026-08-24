@@ -1,2 +1,8 @@
 commands:
   test: './tests/run.sh'
+
+# History: 32 of 33 pipeline fixes came from review, and nearly all findings
+# were classified auto-fix — parking each one cost minutes of idle gate time.
+# Allow one automatic fix round; anything unresolved still parks for a human.
+auto_fix:
+  review: 1

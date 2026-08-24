@@ -1,0 +1,11 @@
+extend-exclude = [".worktrees"]
+
+[lint]
+# Curated for signal over style. These rule families match the defect classes
+# no-mistakes review has repeatedly caught in this repo:
+#   E9  - syntax errors / undefined behavior
+#   F   - pyflakes (unused imports, undefined names)
+#   B   - bugbear (loop-variable capture, mutable defaults)
+#   BLE - blind `except Exception` swallowing KeyboardInterrupt/SystemExit
+#   PLW15 - subprocess.run without explicit check=, Popen preexec_fn
+select = ["E9", "F", "B", "BLE", "PLW15"]
