@@ -2,7 +2,6 @@ import concurrent.futures
 import errno
 import json
 import os
-import resource
 import signal
 import socket
 import sqlite3
@@ -50,13 +49,15 @@ class ServerProcessTests(unittest.TestCase):
         return self.home / "monitor.sock"
 
     def start(self, wait=True, env=None, nofile=None):
-        def limit_files():
-            if nofile is not None:
-                resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
+        argv = [sys.executable, str(DAEMON), "--home", str(self.home)]
+        if nofile is not None:
+            # preexec_fn is unsafe when the test process uses threads (PLW1509);
+            # apply the fd limit via a shell ulimit before exec instead of a fork callback.
+            argv = ["bash", "-c", 'ulimit -n "$1"; shift; exec "$@"', "bash", str(nofile), *argv]
         process = subprocess.Popen(
-            [sys.executable, str(DAEMON), "--home", str(self.home)],
+            argv,
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={**os.environ, **(env or {})}, preexec_fn=limit_files if nofile else None,
+            env={**os.environ, **(env or {})},
             start_new_session=True,
         )
         self.processes.append(process)
