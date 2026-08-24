@@ -251,7 +251,7 @@ Run the same containerized suite used by CI:
 ./tests/run.sh
 ```
 
-The runner uses Podman when available and falls back to Docker. Tests cover shell and Python protocol parsing, event transport, lifecycle and reconciliation behavior, and locking. Tests against a real Herdr server are still manual integration checks.
+The runner uses the first running container engine it finds, preferring Podman over Docker. Tests cover shell and Python protocol parsing, event transport, lifecycle and reconciliation behavior, and locking. Tests against a real Herdr server are still manual integration checks.
 
 ## Next experiment
 
