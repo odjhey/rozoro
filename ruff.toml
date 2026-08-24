@@ -1,11 +1,12 @@
+target-version = "py311"
 extend-exclude = [".worktrees"]
 
 [lint]
 # Curated for signal over style. These rule families match the defect classes
 # no-mistakes review has repeatedly caught in this repo:
-#   E9  - syntax errors / undefined behavior
+#   E9  - file I/O errors (syntax errors are always reported)
 #   F   - pyflakes (unused imports, undefined names)
 #   B   - bugbear (loop-variable capture, mutable defaults)
-#   BLE - blind `except Exception` swallowing KeyboardInterrupt/SystemExit
+#   BLE - blind broad exception catches (`Exception` or `BaseException`)
 #   PLW15 - subprocess.run without explicit check=, Popen preexec_fn
 select = ["E9", "F", "B", "BLE", "PLW15"]
