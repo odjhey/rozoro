@@ -14,23 +14,23 @@ Use these terms consistently in code, docs, prompts, issues, and reviews. Prefer
 | **Host binding** | Current Herdr tab/pane/process location for a live session. | task identity, native session |
 | **Native session** | Harness-owned resumable conversation identity. | host binding |
 | **Session link** | Durable Rozoro record needed to reopen the exact native session. | current pane |
-| **Event** | Normalized lifecycle fact accepted by `rozorod`. | notification |
+| **Event** | Normalized lifecycle fact accepted by the current Rozoro event path. | notification |
 | **Event Log** | Durable append-only history of accepted normalized events. | current state |
 | **Projection** | Reduced current truth derived from durable evidence. | event history |
 | **Availability** | Harness-neutral runtime state such as `busy`, `waiting-background`, `quiescent`, or `unknown`. | Herdr `idle`, task verdict |
-| **Quiescent** | Semantically safe settled state supported by adapter evidence. | terminal idle alone |
+| **Quiescent** | Semantically safe settled state supported by structured lifecycle evidence. | terminal idle alone |
 | **Actionable change** | Projection/report transition that warrants watchtower attention/delivery. | business priority |
 | **Technical severity** | Factual classification such as blocked/failed/needs-action/ready. | operator priority |
-| **Generation** | Immutable delivery batch used to coalesce and reconcile wake work. | mailbox item, task, open item |
+| **Generation** | Immutable delivery batch used to coalesce and reconcile wake work. | attention item, task, open item |
 | **Generation membership** | Tasks/actionable reasons captured in one generation. | independent per-item handling |
 | **Delivery offer** | One generation offered to a specific registered watchtower epoch. | successful handling |
 | **Reconcile** | Read the exact durable generation snapshot/current facts and advance generation ACK according to protocol. | task resolution |
-| **Generation ACK** | Durable acknowledgement that a delivery generation was reconciled. | task ACK, mailbox handled state |
+| **Generation ACK** | Durable acknowledgement that a delivery generation was reconciled. | task ACK, attention-item handled state |
 | **Task open item** | Unresolved report/handoff item belonging to a task. | wake generation |
 | **Task ACK** | Resolution/acknowledgement of surfaced task open-item state. | generation ACK |
-| **Watchtower Mailbox** | Target durable collection of task-scoped attention items for a watchtower. | general actor mailbox, prompt queue |
-| **Mailbox item** | Target stable identity for one task-scoped reason requiring attention. | generation membership row |
-| **Mailbox handled state** | Target per-item observed/handled status. | task resolution |
+| **Attention item** | Target stable identity for one task-scoped reason requiring watchtower attention. | generation membership row |
+| **Attention-item handled state** | Target per-item observed/handled status. | task resolution |
+| **Watchtower Mailbox** | Product shorthand for the capability to retain and independently handle task-scoped attention items. Implementation ownership is open. | necessarily a Rozoro-owned subsystem, general actor mailbox, prompt queue |
 | **Acceptance** | Operator decision that the result is satisfactory. | crew `done`, quiescence |
 | **Reap** | Remove live hosting while retaining durable task/session artifacts. | delete task history |
 | **Resume** | Reopen the exact durable native conversation into a new live host binding. | start a new task |
@@ -47,7 +47,7 @@ technical severity        != operator priority
 event persisted           != notification delivered
 notification delivered    != generation reconciled
 generation reconciled     != task open item resolved
-mailbox item handled      != task open item resolved
+attention item handled    != task open item resolved
 host binding              != native session
 task                      != PR / branch / worktree
 harness-native subagent   != Rozoro crew
@@ -57,4 +57,4 @@ harness-native subagent   != Rozoro crew
 
 The current SQLite schema uses `pending_generations`, `pending_generation_tasks`, `generation_task_snapshots`, `watchtower_deliveries`, and `delivery_offers`. Those names describe the shipped delivery substrate accurately.
 
-Do **not** casually rename generation membership to `mailbox item`: the target mailbox adds identity and independent handling semantics that generation membership does not yet provide.
+Do **not** casually rename generation membership to `attention item` or `mailbox item`: the target capability adds stable identity and independent handling semantics that generation membership does not yet provide. Whether that capability is implemented inside Rozoro or adapted from another component remains open.
