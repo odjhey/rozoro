@@ -25,6 +25,15 @@ load test_helper/common
   [ "$output" = $'    branches:\n      - master' ]
 }
 
+@test "CI concurrency cancels only superseded runs for the same PR or branch" {
+  workflow="$REPO_ROOT/.github/workflows/test.yml"
+
+  run grep -Fx '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' "$workflow"
+  assert_success
+  run grep -Fx "  cancel-in-progress: true" "$workflow"
+  assert_success
+}
+
 @test "Pi watchtower event-bus adapter is covered by Node tests" {
   run node --experimental-strip-types --test \
     "$REPO_ROOT/tests/pi-event-bus-adapter.test.ts" \
