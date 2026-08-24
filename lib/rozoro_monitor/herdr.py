@@ -38,6 +38,7 @@ class Subscription(Protocol):
 SubscriberFactory = Callable[[tuple[str, ...]], Subscription]
 LevelReader = Callable[[str], Awaitable[PaneLevel]]
 Reconciler = Callable[[str, PaneLevel], Awaitable[None]]
+MembershipChange = Callable[[str], Awaitable[None]]
 
 def inventory(state_dir: str | os.PathLike[str]) -> Inventory:
     """Boundedly read private, no-follow regular metadata entries.
@@ -87,16 +88,18 @@ def inventory(state_dir: str | os.PathLike[str]) -> Inventory:
 
 class MembershipMonitor:
     def __init__(self, state_dir, subscriber: SubscriberFactory, level_reader: LevelReader,
-                 reconcile: Reconciler, *, scan_interval=30.0, hint_interval=.20,
+                 reconcile: Reconciler, *, activate: MembershipChange | None = None,
+                 retire: MembershipChange | None = None,
+                 scan_interval=30.0, hint_interval=.20,
                  debounce=.15, drain_interval=.05):
         if min(scan_interval, hint_interval) <= 0 or min(debounce, drain_interval) < 0: raise ValueError("invalid timing")
-        self.state_dir=Path(state_dir); self.subscriber=subscriber; self.level_reader=level_reader; self.reconcile=reconcile
+        self.state_dir=Path(state_dir); self.subscriber=subscriber; self.level_reader=level_reader; self.reconcile=reconcile; self.activate=activate; self.retire=retire
         self.scan_interval=scan_interval; self.hint_interval=hint_interval; self.debounce=debounce; self.drain_interval=drain_interval
         self.members: dict[str,Member]={}; self._subscription=None; self._consumer=None; self._runner=None; self._hints=None
         self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
         self._force_rebuild=False; self._dir_signature=None
         self._active_token=None; self._pane_epoch: dict[str,int]={}; self._apply_lock=asyncio.Lock()
-        self._route_generation: dict[str,int]={}
+        self._route_generation: dict[str,int]={}; self._routes={}; self._owned_route_tokens=set()
     def hint(self): self._wake.set()
     async def start(self):
         try: await self.scan(force=True)
@@ -134,44 +137,68 @@ class MembershipMonitor:
             if task not in found and any(error.startswith(task+".meta:") for error in result.errors): found[task]=member
         changed=set(found) != set(self.members) or any(found[k].pane_id != self.members[k].pane_id for k in set(found)&set(self.members))
         if force or self._force_rebuild or changed:
-            await self._replace(found); self._force_rebuild=False; return True
+            rebuild=force or self._force_rebuild
+            self._force_rebuild=False
+            try: await self._replace(found,rebuild=rebuild)
+            except Exception:
+                if rebuild: self._force_rebuild=True
+                raise
+            return True
         levels_ok=await self._levels(self.members)
-        self.connected=bool(self.members) and levels_ok and self._consumer is not None and not self._consumer.done()
+        self.connected=bool(self.members) and levels_ok and all(not route[1].done() for route in self._routes.values())
         if self.connected and not self.last_scan_errors: self.last_error=None
         elif not self.members: self.last_error="no resident members; configured Herdr socket untested"
         return False
-    async def _replace(self, found):
-        panes=tuple(sorted({m.pane_id for m in found.values()})); new=self.subscriber(panes); consumer=None; previous=self.members
-        previous_token=self._active_token; previous_routes=dict(self._route_generation); token=object()
-        changed_tasks={task for task in set(previous)|set(found)
-                       if previous.get(task) != found.get(task)}
-        for task in changed_tasks:
-            self._route_generation[task]=self._route_generation.get(task,0)+1
-        routing={task:(member,self._route_generation.get(task,0)) for task,member in found.items()}
+    async def _replace(self, found, *, rebuild=False):
+        previous=dict(self.members); previous_generations=dict(self._route_generation)
+        changed=(set(previous)|set(found) if rebuild else
+                 {task for task in set(previous)|set(found) if previous.get(task) != found.get(task)})
+        staged={}; levels_ok=True
+        activated=[]
         try:
-            await new.start(); self.members=dict(found); self._active_token=token
-            consumer=asyncio.create_task(self._consume(new,token,routing))
-            levels_ok=await self._levels(found)
-            if consumer.done():
-                await consumer
-                raise ConnectionError("new Herdr stream died during level reconciliation")
+            if self.activate:
+                for task in sorted(set(found)-set(previous)):
+                    await self.activate(task); activated.append(task)
+            for task in sorted(changed & set(found)):
+                member=found[task]; generation=self._route_generation.get(task,0)+1
+                sub=self.subscriber((member.pane_id,)); await sub.start()
+                token=object(); routing={task:(member,generation)}
+                self._owned_route_tokens.add(token)
+                consumer=asyncio.create_task(self._consume(sub,token,routing))
+                staged[task]=(sub,consumer,token,generation)
+                self._route_generation[task]=generation
+                frontier=self._pane_epoch.get(member.pane_id,0)
+                level=await self.level_reader(member.pane_id)
+                if level.exists is None: levels_ok=False
+                await self._apply(task,level,expected_epoch=frontier,expected_route=generation)
+                if consumer.done(): await consumer; raise ConnectionError("new Herdr stream died during level reconciliation")
         except Exception:
-            self.members=previous; self._active_token=previous_token; self._route_generation=previous_routes
-            if consumer: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
-            await new.close(); raise
-        old,old_consumer=self._subscription,self._consumer
-        self._subscription,self._consumer=new,consumer
-        self.connected=bool(found) and levels_ok and not consumer.done()
+            self._route_generation=previous_generations
+            for sub,consumer,token,_ in staged.values():
+                self._owned_route_tokens.discard(token)
+                consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True); await sub.close()
+            if self.retire:
+                for task in reversed(activated): await self.retire(task)
+            raise
+        self.members=dict(found)
+        if self.retire:
+            for task in sorted(set(previous)-set(found)): await self.retire(task)
+        old_routes={task:self._routes.pop(task) for task in changed if task in self._routes}
+        self._routes.update(staged)
+        if staged:
+            last=staged[sorted(staged)[-1]]; self._subscription,self._consumer=last[0],last[1]
+        elif not self._routes:
+            self._subscription=self._consumer=None
+        self.connected=bool(found) and levels_ok and all(not route[1].done() for route in self._routes.values())
         if self.connected and not self.last_scan_errors: self.last_error=None
         elif not found: self.last_error="no resident members; configured Herdr socket untested"
-        # Both streams stay routed during the bounded drain. Old queued edges
-        # are consumed before its transport is closed and task is cancelled.
-        if old:
-            await asyncio.sleep(self.drain_interval); await old.close()
-        if old_consumer:
-            try: await asyncio.wait_for(old_consumer,self.drain_interval)
-            except TimeoutError: old_consumer.cancel(); await asyncio.gather(old_consumer,return_exceptions=True)
-            except Exception: pass  # the replacement was commonly caused by this stream failure
+        elif not levels_ok: self.last_error="Herdr level RPC unavailable"
+        for sub,consumer,token,_ in old_routes.values():
+            self._owned_route_tokens.discard(token)
+            await asyncio.sleep(self.drain_interval); await sub.close()
+            try: await asyncio.wait_for(consumer,self.drain_interval)
+            except TimeoutError: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
+            except Exception: pass
     async def _apply(self,task_id,level,*,expected_epoch=None,expected_route=None):
         async with self._apply_lock:
             if expected_epoch is not None and self._pane_epoch.get(level.pane_id,0) != expected_epoch:
@@ -206,7 +233,7 @@ class MembershipMonitor:
             raise ConnectionError("Herdr subscription ended")
         except asyncio.CancelledError: pass
         except Exception as exc:
-            if token is self._active_token:
+            if token in self._owned_route_tokens:
                 self.connected=False; self.last_error=str(exc)[:128]; self._force_rebuild=True; self.hint()
     def health(self):
         return {"herdr_connected":self.connected,"herdr_last_error":self.last_error,
@@ -215,8 +242,11 @@ class MembershipMonitor:
         for task in (self._runner,self._hints):
             if task: task.cancel()
         await asyncio.gather(*(t for t in (self._runner,self._hints) if t),return_exceptions=True)
-        if self._subscription: await self._subscription.close()
-        if self._consumer: self._consumer.cancel(); await asyncio.gather(self._consumer,return_exceptions=True)
+        self._owned_route_tokens.clear()
+        for sub,consumer,_,_ in self._routes.values():
+            await sub.close(); consumer.cancel()
+        await asyncio.gather(*(route[1] for route in self._routes.values()),return_exceptions=True)
+        self._routes.clear()
         self.connected=False
 
 class EmptySubscription:

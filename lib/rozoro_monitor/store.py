@@ -18,17 +18,18 @@ import sqlite3
 import stat
 import threading
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from .handoff import parse_task_report
+from .herdr import inventory
 from .reducer import (
     LifecycleState, PendingEvent, ReportState, observe_gone, reduce_event,
     set_adapter_connected,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,16 @@ _MIGRATIONS = {
             disabled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
     """,
+    7: """
+        ALTER TABLE task_membership ADD COLUMN retirement_reason TEXT;
+        CREATE TABLE producer_migration_quarantine (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            prior_state_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            migrated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT INTO daemon_metadata(key,value) VALUES('producer_custody_version','1');
+    """,
 }
 
 
@@ -268,6 +279,13 @@ class StoreTransaction:
         actionable_reason: str = "none", projection: Mapping[str, Any] | None = None,
     ) -> None:
         self._connection.execute(
+            """INSERT INTO task_membership(task_id,present,updated_event_seq)
+               VALUES(?,1,?) ON CONFLICT(task_id) DO UPDATE SET
+               updated_event_seq=excluded.updated_event_seq,
+               updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            (task_id, durable_seq),
+        )
+        self._connection.execute(
             """INSERT INTO task_projections(
                    task_id,availability,report_state,verdict,actionable_reason,last_event_seq,projection_json
                ) VALUES(?,?,?,?,?,?,?)
@@ -308,7 +326,7 @@ class StoreTransaction:
         # Freeze both membership and every projection at this generation. Later
         # joins never consult mutable task rows, so N+1 cannot leak into N.
         self._connection.execute(
-            "INSERT INTO generation_membership_snapshots(generation,task_id) SELECT ?,task_id FROM task_projections",
+            "INSERT INTO generation_membership_snapshots(generation,task_id) SELECT ?,task_id FROM task_membership WHERE present=1",
             (generation,),
         )
         self._connection.execute(
@@ -317,7 +335,8 @@ class StoreTransaction:
                    projection_generation,last_event_seq,projection_json,compat_complete)
                SELECT ?,task_id,availability,report_state,verdict,actionable_reason,
                       projection_generation,last_event_seq,projection_json,1
-               FROM task_projections""",
+               FROM task_projections
+               WHERE task_id IN (SELECT task_id FROM task_membership WHERE present=1)""",
             (generation,),
         )
         self._connection.execute(
@@ -335,7 +354,13 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
             "latest": None, "protocol_errors": [f"unreadable handoff: {type(exc).__name__}"],
         }
     latest = report["latest"]
-    state = "malformed" if report["protocol_errors"] else ("missing" if report["blocks"] == 0 else "valid")
+    # Historical parse errors are retained below, but current authority follows
+    # the latest append-only correction. Only a malformed latest block poisons
+    # current report state.
+    state = ("malformed" if report.get("trailing_malformed") else
+             "malformed" if report["protocol_errors"] and latest is None else
+             "missing" if report["blocks"] == 0 else
+             "valid" if latest is not None and latest.get("valid") else "malformed")
     latest_verdict = (None if latest is None else latest["fields"].get("verdict", "").casefold() or None)
     verdict = latest_verdict
     if state != "valid":
@@ -364,6 +389,18 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
         "artifacts": fields.get("artifacts", ""),
     }
     return state, verdict, summary
+
+
+def _actionable_fingerprint(row: Mapping[str, Any] | None) -> tuple[Any, ...] | None:
+    """Canonical semantic edge identity; deliberately excludes diagnostics."""
+    if row is None:
+        return None
+    detail = json.loads(row["projection_json"])
+    report = detail.get("report") or {}
+    fifo = tuple((item.get("index"), item.get("turn"), item.get("verdict"),
+                  item.get("inputs_needed")) for item in report.get("open_items", ()))
+    return (row["availability"], row["report_state"], row["verdict"],
+            row["actionable_reason"], fifo)
 
 
 def _actionable_reason(state: LifecycleState, report: Mapping[str, Any]) -> str:
@@ -441,9 +478,15 @@ class EventStore:
         finally:
             os.close(fd)
 
-    def __init__(self, path: str | os.PathLike[str], *, tasks_dir: str | os.PathLike[str] | None = None):
+    def __init__(self, path: str | os.PathLike[str], *, tasks_dir: str | os.PathLike[str] | None = None,
+                 state_dir: str | os.PathLike[str] | None = None, spool_backlog: int = 0,
+                 migration_herdr_inventory: Mapping[str, str] | None = None):
         self.path = Path(path).absolute()
         self.tasks_dir = Path(tasks_dir).absolute() if tasks_dir is not None else self.path.parent / "tasks"
+        self.state_dir = Path(state_dir).absolute() if state_dir is not None else self.path.parent / "state"
+        self._migration_spool_backlog = spool_backlog
+        self._migration_herdr_inventory = (None if migration_herdr_inventory is None
+                                           else dict(migration_herdr_inventory))
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory_fd = os.open(
             self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -619,6 +662,8 @@ class EventStore:
                 if version == 6:
                     self._validate_v5_compat_upgrade(connection, reject_task_projections=original_version >= 4)
                     connection.execute("UPDATE generation_task_snapshots SET compat_complete=1")
+                if version == 7:
+                    self._migrate_v7_correctness(connection, upgrading_v6=original_version == 6)
                 connection.execute(f"PRAGMA user_version={version}")
 
     @staticmethod
@@ -659,6 +704,86 @@ class EventStore:
                 "cannot upgrade schema 5 with generation snapshots lacking immutable report fields: "
                 "run `rozoro monitor reset --force`; task folders are preserved"
             )
+
+    def _migrate_v7_correctness(self, connection: sqlite3.Connection, *, upgrading_v6: bool) -> None:
+        """Evidence-preserving repair of schema-6 mutable state."""
+        if not upgrading_v6:
+            return
+        latest = int(connection.execute(
+            "SELECT value FROM daemon_metadata WHERE key='latest_generation'").fetchone()[0])
+        driver_count = int(connection.execute("SELECT COUNT(*) FROM watchtower_deliveries").fetchone()[0])
+        unsettled = connection.execute(
+            """SELECT driver_id FROM watchtower_deliveries
+               WHERE latest_generation<>delivered_generation
+                  OR delivered_generation<>acked_generation LIMIT 1""").fetchone()
+        unconfirmed = connection.execute(
+            "SELECT 1 FROM delivery_offers WHERE confirmed=0 LIMIT 1").fetchone()
+        if (unsettled is not None or unconfirmed is not None or self._migration_spool_backlog
+                or (latest > 0 and driver_count == 0)):
+            raise RuntimeError(
+                "schema 7 migration requires equal generation cursors, empty spool, and no unconfirmed offer")
+
+        observed = inventory(self.state_dir)
+        if observed.errors:
+            raise RuntimeError("schema 7 migration requires valid owner-private task metadata")
+        if self._migration_herdr_inventory is None:
+            raise RuntimeError("schema 7 migration requires a transactionally captured exact Herdr inventory")
+        metadata = {task: member.pane_id for task, member in observed.members.items()}
+        if metadata != self._migration_herdr_inventory:
+            raise RuntimeError("schema 7 migration metadata and exact Herdr inventory disagree")
+        active = set(metadata)
+        known = {str(row[0]) for row in connection.execute("SELECT task_id FROM task_projections")}
+        for task_id in sorted(known | active):
+            connection.execute(
+                """INSERT INTO task_membership(task_id,present,retirement_reason) VALUES(?,?,?)
+                   ON CONFLICT(task_id) DO UPDATE SET present=excluded.present,
+                   retirement_reason=excluded.retirement_reason,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+                (task_id, int(task_id in active), None if task_id in active else "metadata-absent"))
+
+        for row in connection.execute(
+            "SELECT session_id,reducer_state_json FROM sessions WHERE harness='pi'"
+        ).fetchall():
+            state = _state_from_json(row["reducer_state_json"])
+            if (state.producer_seq == 0 and state.sequence_gap and state.pending_events
+                    and min(item.producer_seq for item in state.pending_events) >= 1_000_000_000_000):
+                connection.execute(
+                    "INSERT INTO producer_migration_quarantine(session_id,prior_state_json,reason) VALUES(?,?,?)",
+                    (row["session_id"], row["reducer_state_json"], "timestamp-scale-noncontiguous-pi"))
+                repaired = set_adapter_connected(replace(
+                    state, pending_events=(), sequence_gap=False,
+                    foreground="unknown", background="unknown", availability="unknown"), False)
+                connection.execute(
+                    """UPDATE sessions SET foreground='unknown',background='unknown',background_count=NULL,
+                       availability='unknown',producer_seq=0,reducer_state_json=? WHERE session_id=?""",
+                    (_state_to_json(repaired), row["session_id"]))
+
+        # Re-read handoffs without writing them and repair only mutable report
+        # authority. Historical event/generation snapshots remain untouched.
+        for task_id in sorted(known):
+            session = connection.execute(
+                """SELECT reducer_state_json,latest_durable_seq,session_id FROM sessions
+                   WHERE task_id=? ORDER BY latest_durable_seq DESC LIMIT 1""", (task_id,)).fetchone()
+            if session is None:
+                continue
+            state = _state_from_json(session["reducer_state_json"])
+            report_state, verdict, report = _report_projection(self.tasks_dir / task_id)
+            old = connection.execute(
+                "SELECT projection_json FROM task_projections WHERE task_id=?", (task_id,)).fetchone()
+            detail = {} if old is None else json.loads(old[0])
+            detail.update({"task_id": task_id, "session_id": session["session_id"],
+                           "foreground": state.foreground, "background": state.background,
+                           "background_count": state.active_count, "availability": state.availability,
+                           "report": report})
+            if task_id not in active:
+                detail["membership"] = "retired"
+            availability = state.availability if task_id in active else "gone"
+            reason = _actionable_reason(replace(state, availability=availability), report)
+            connection.execute(
+                """UPDATE task_projections SET availability=?,report_state=?,verdict=?,
+                   actionable_reason=?,projection_json=? WHERE task_id=?""",
+                (availability, report_state, verdict, reason,
+                 json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id))
 
     def _replay_v3_projections(self, connection: sqlite3.Connection) -> None:
         """Validate v3 history, then derive registration and projections from it."""
@@ -730,12 +855,6 @@ class EventStore:
             )
             durable_seq = int(cursor.lastrowid)
             tx = StoreTransaction(connection)
-            before_projection = None
-            if reducer is _DEFAULT_REDUCER and event.get("task_id"):
-                before_projection = connection.execute(
-                    "SELECT availability,report_state,verdict,actionable_reason,projection_json FROM task_projections WHERE task_id=?",
-                    (event["task_id"],),
-                ).fetchone()
             if reducer is _DEFAULT_REDUCER:
                 reduced = _reduce_projection(tx, event, durable_seq, self.tasks_dir)
             else:
@@ -747,31 +866,23 @@ class EventStore:
                     "SELECT availability,report_state,verdict,actionable_reason,projection_json FROM task_projections WHERE task_id=?",
                     (event["task_id"],),
                 ).fetchone()
-                before_tuple = None if before_projection is None else tuple(before_projection)
-                after_tuple = None if after_projection is None else tuple(after_projection)
                 reason = None if after_projection is None else after_projection["actionable_reason"]
-                # Pi registration and the first running turn establish producer
-                # identity before the crew can write its handoff. A missing report
-                # while that turn is busy is not completed work and must not
-                # manufacture a watchtower wake.
-                pi_startup_missing_report = (
-                    event.get("harness") == "pi"
-                    and reason == "missing-report"
-                    and (
-                        event["type"] == "session.register"
-                        or (
-                            event["type"] == "turn.start"
-                            and after_projection is not None
-                            and after_projection["availability"] == "busy"
-                        )
-                    )
-                )
+                previous_action = connection.execute(
+                    """SELECT availability,report_state,verdict,actionable_reason,projection_json
+                       FROM generation_task_snapshots WHERE task_id=?
+                       ORDER BY generation DESC LIMIT 1""", (event["task_id"],)).fetchone()
+                before_fingerprint = _actionable_fingerprint(previous_action)
+                after_fingerprint = _actionable_fingerprint(after_projection)
+                # Empty/malformed reports become actionable only at a certified
+                # settlement boundary. Registration, start, and diagnostics are
+                # progress and never wake the watchtower.
+                settled = event["type"] in {"turn.stop", "session.end"}
                 change = (ActionableChange(
                               event["task_id"], reason,
                               "urgent" if reason in {"blocked", "failed", "needs-action"} else "normal",
                           )
-                          if not pi_startup_missing_report and reason is not None and reason != "none"
-                          and before_tuple != after_tuple else None)
+                          if settled and reason is not None and reason != "none"
+                          and before_fingerprint != after_fingerprint else None)
             else:
                 change = None
             generation = tx.bump_actionable(change) if change is not None else None
@@ -817,7 +928,6 @@ class EventStore:
             ).fetchall()
             for row in rows:
                 state = _state_from_json(row["reducer_state_json"])
-                was_adapter_connected = state.adapter_connected
                 before = connection.execute(
                     "SELECT actionable_reason,projection_json FROM task_projections WHERE task_id=?", (task_id,)
                 ).fetchone()
@@ -853,13 +963,39 @@ class EventStore:
                     old_detail = {} if before is None else json.loads(before["projection_json"])
                     projection_changed = (before is None or before["actionable_reason"] != reason
                                           or old_detail.get("availability") != state.availability)
-                    disconnected_edge = adapter_connected is False and was_adapter_connected
-                    if (reason != "none" and projection_changed) or disconnected_edge:
-                        edge_reason = "unknown" if disconnected_edge and reason == "none" else reason
+                    gone_edge = pane_exists is False and old_detail.get("availability") != "gone"
+                    disconnected_edge = (adapter_connected is False
+                                         and old_detail.get("availability") != state.availability)
+                    if (reason != "none" and projection_changed) or gone_edge or disconnected_edge:
+                        edge_reason = ("gone" if gone_edge else "unknown" if disconnected_edge else reason)
                         StoreTransaction(connection).bump_actionable(ActionableChange(
                             task_id, edge_reason,
                             "urgent" if edge_reason in {"gone", "blocked", "failed", "needs-action"} else "normal",
                             preserve_projection_reason=(edge_reason != reason)))
+
+    def activate_task_membership(self, task_id: str) -> None:
+        """Activate a task only from validated metadata membership."""
+        with self._lock, self._immediate() as connection:
+            connection.execute(
+                """INSERT INTO task_membership(task_id,present) VALUES(?,1)
+                   ON CONFLICT(task_id) DO UPDATE SET present=1,retirement_reason=NULL,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""", (task_id,))
+
+    def retire_task_membership(self, task_id: str) -> None:
+        """Retire controlled metadata removal without creating a wake."""
+        with self._lock, self._immediate() as connection:
+            connection.execute(
+                """INSERT INTO task_membership(task_id,present) VALUES(?,0)
+                   ON CONFLICT(task_id) DO UPDATE SET present=0,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""", (task_id,))
+            row = connection.execute(
+                "SELECT projection_json FROM task_projections WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if row is not None:
+                detail = json.loads(row[0]); detail["membership"] = "retired"
+                connection.execute(
+                    "UPDATE task_projections SET availability='gone',projection_json=? WHERE task_id=?",
+                    (json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id))
 
     def driver_authority(self, driver_id: str) -> str:
         """Return durable authority without changing registration epochs or cursors."""
@@ -946,6 +1082,8 @@ class EventStore:
             for driver in drivers:
                 driver["pending"] = bool(driver["pending"])
                 driver["delivered_unacked"] = bool(driver["delivered_unacked"])
+                if not driver["pending"] and not driver["delivered_unacked"]:
+                    driver["delivery_state"] = "settled"
                 driver["adapter_state"] = "disconnected" if driver["session_id"] is None else "registered"
                 driver["retrying"] = driver["delivery_state"] in {"deferred", "error"}
             return {
@@ -1188,10 +1326,12 @@ class EventStore:
     def _snapshot_rows(self, connection: sqlite3.Connection, through: int) -> list[dict[str, Any]]:
         rows = connection.execute(
             """SELECT s.* FROM generation_task_snapshots s
+               JOIN generation_membership_snapshots m
+                 ON m.generation=? AND m.task_id=s.task_id
                JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
                      WHERE generation<=? GROUP BY task_id) latest
                  ON latest.task_id=s.task_id AND latest.generation=s.generation
-               ORDER BY s.generation,s.task_id""", (through,)
+               ORDER BY s.generation,s.task_id""", (through, through)
         ).fetchall()
         if any(not int(row["compat_complete"]) for row in rows):
             raise ValueError("generation snapshot lacks immutable compatibility fields")

@@ -83,7 +83,9 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
         blocks.append({"index": index, "turn": declared, "heading": lines[start][3:].strip(),
                        "fields": fields, "valid": not block_errors, "errors": block_errors,
                        "legacy_index": legacy.index(start) + 1})
-    malformed = [lines[index] for index in legacy if not TURN.match(lines[index])]
+    malformed_indexes = [index for index in legacy if not TURN.match(lines[index])]
+    malformed = [lines[index] for index in malformed_indexes]
+    trailing_malformed = bool(malformed_indexes and (not starts or malformed_indexes[-1] > starts[-1][0]))
     if malformed:
         errors.append("noncanonical H2 heading(s): " + ", ".join(malformed))
     v2 = cursor(ack_v2)
@@ -104,6 +106,10 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
             acked = sum(1 for block in blocks if block["legacy_index"] <= old)
     open_items = []
     for block in blocks:
+        # Malformed text remains immutable diagnostic evidence, but it has no
+        # authority to manufacture an actionable FIFO item.
+        if not block["valid"]:
+            continue
         fields = block["fields"]
         needed = fields.get("inputs-needed", "").strip().lower()
         if block["index"] > acked and (fields.get("verdict", "").lower() in OPEN or needed not in NONE):
@@ -113,7 +119,7 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
     return {"blocks": len(blocks), "legacy_headings": len(legacy), "acked_through": acked,
             "acked_source": source, "latest": blocks[-1] if blocks else None,
             "block_details": blocks, "open_items": open_items, "unresolved": len(open_items),
-            "protocol_errors": errors}
+            "protocol_errors": errors, "trailing_malformed": trailing_malformed}
 
 
 def parse_task_report(task_dir: str | os.PathLike[str]) -> dict[str, Any]:

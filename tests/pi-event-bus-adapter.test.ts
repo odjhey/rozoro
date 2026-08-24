@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import fsSync from "node:fs";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import test from "node:test";
 import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
@@ -140,24 +142,65 @@ test("uses prose-free registration, publishes only certified Pi lifecycle, and c
 	client.close(); client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
 });
 
-test("durable producer sequence continues contiguously when a session id is resumed", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-")); const path = join(dir, "monitor.sock");
+test("durable Pi custody is contiguous and reload continues at the exact next sequence", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-custody-")); const path = join(dir, "monitor.sock");
 	const frames: Record<string, unknown>[] = []; const fake = await fakeServer(path, frames);
-	const cursor = join(dir, "producer-seq", "resumed.seq");
-	const lifecycle = () => frames.filter((f) => ["session.register","turn.start","turn.stop"].includes(f.type as string));
-	const settled = (value: string) => existsSync(cursor) && readFileSync(cursor, "ascii") === value;
-	const open = () => new RozoroEventBusClient({socketPath:path,sessionId:"resumed",driverId:"driver-1",onNotification:()=>{}});
-	const first = open();
-	first.start(); await waitFor(() => frames.some((f) => f.type === "session.register"));
-	first.publish("turn.start"); first.publish("turn.stop");
-	await waitFor(() => settled("3"));
-	first.close();
-	const second = open();
-	second.start(); await waitFor(() => lifecycle().length > 3);
-	second.publish("turn.start"); second.publish("turn.stop");
-	await waitFor(() => settled("6"));
-	assert.deepEqual(lifecycle().map((f) => f.producer_seq), [1, 2, 3, 4, 5, 6]);
-	second.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
+	let client = new RozoroEventBusClient({socketPath:path,sessionId:"durable",role:"crew",taskId:"task-durable"});
+	client.start(); client.publish("turn.start"); client.publish("turn.stop");
+	await waitFor(() => frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).length === 3);
+	client.close();
+	client = new RozoroEventBusClient({socketPath:path,sessionId:"durable",role:"crew",taskId:"task-durable"}); client.start();
+	await waitFor(() => frames.filter((frame) => frame.type === "session.register").length === 2);
+	assert.deepEqual(frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).map((frame) => frame.producer_seq), [1,2,3,4]);
+	client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
+});
+
+test("backlog replay skips a spool file concurrently removed between listing and reading", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-vanish-")); const path = join(dir, "monitor.sock");
+	const first = new RozoroEventBusClient({socketPath:path,sessionId:"vanish",role:"crew",taskId:"task-vanish"}); first.close();
+	const spool = join(dir,"pi-producers","vanish","spool"); const cursor = join(dir,"pi-producers","vanish","cursor-v1");
+	const name = (await readdir(spool)).find((item) => item.endsWith(".json"))!; const victim = join(spool, name);
+	const original = fsSync.readFileSync;
+	fsSync.readFileSync = ((target: unknown, ...rest: unknown[]) => {
+		if (target === victim) fsSync.unlinkSync(victim);
+		return (original as (...args: unknown[]) => unknown)(target, ...rest);
+	}) as typeof original;
+	syncBuiltinESMExports();
+	let second: RozoroEventBusClient | undefined;
+	try {
+		second = new RozoroEventBusClient({socketPath:path,sessionId:"vanish",role:"crew",taskId:"task-vanish"});
+	} finally {
+		fsSync.readFileSync = original; syncBuiltinESMExports();
+	}
+	second.close();
+	assert.equal(await readFile(cursor, "utf8"), "2\n");
+	const remaining = (await readdir(spool)).filter((item) => item.endsWith(".json"));
+	assert.deepEqual(remaining, [remaining.find((item) => item !== name)]);
+	await rm(dir,{recursive:true,force:true});
+});
+
+test("twenty clients sharing one Pi session allocate one contiguous custody stream", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-shared-")); const path = join(dir, "monitor.sock");
+	const moduleUrl=pathToFileURL(join(process.cwd(),".pi/lib/rozoro-event-bus-client.ts")).href;
+	const script=`import {RozoroEventBusClient} from ${JSON.stringify(moduleUrl)}; new RozoroEventBusClient({socketPath:${JSON.stringify(path)},sessionId:"shared",role:"crew",taskId:"task-shared"});`;
+	await Promise.all(Array.from({length:20},()=>new Promise<void>((resolve,reject)=>{const child=spawn(process.execPath,["--experimental-strip-types","--input-type=module","-e",script]); child.once("exit",code=>code===0?resolve():reject(new Error(`producer exited ${code}`)));})));
+	const spool = join(dir,"pi-producers","shared","spool");
+	const sequences = (await readdir(spool)).filter((name) => name.endsWith(".json")).map((name) => Number(name.slice(0,16))).sort((a,b)=>a-b);
+	assert.deepEqual(sequences, Array.from({length:20}, (_,index)=>index+1));
+	await rm(dir,{recursive:true,force:true});
+});
+
+test("Pi custody rejects symlinked public and downgraded state", async () => {
+	for (const mode of ["symlink","public","downgrade","foreign"] as const) {
+		const dir=await mkdtemp(join(tmpdir(),"rozoro-pi-unsafe-")); const producer=join(dir,"pi-producers","unsafe"); await mkdir(producer,{recursive:true,mode:0o700}); await chmod(join(dir,"pi-producers"),0o700); await chmod(producer,0o700);
+		if (mode === "symlink") { const foreign=await mkdtemp(join(tmpdir(),"foreign-")); await symlink(foreign,join(producer,"spool")); }
+		else if (mode === "foreign") {
+			const first=new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}); first.close();
+			const spool=join(producer,"spool"); const name=(await readdir(spool)).find(item=>item.endsWith(".json"))!; const frame=JSON.parse(await readFile(join(spool,name),"utf8")); frame.task_id="other-task"; await writeFile(join(spool,name),JSON.stringify(frame),{mode:0o600});
+		} else { await mkdir(join(producer,"spool")); await chmod(join(producer,"spool"),mode === "public" ? 0o755 : 0o700); await writeFile(join(producer,"custody-version"),mode === "downgrade" ? "1\n" : "2\n",{mode:0o600}); }
+		assert.throws(()=>new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}),/unsafe|unsupported|foreign/);
+		await rm(dir,{recursive:true,force:true});
+	}
 });
 
 test("stable driver identity matches fixed reconcile environment across resume", () => {
