@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -151,6 +153,30 @@ test("durable Pi custody is contiguous and reload continues at the exact next se
 	await waitFor(() => frames.filter((frame) => frame.type === "session.register").length === 2);
 	assert.deepEqual(frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).map((frame) => frame.producer_seq), [1,2,3,4]);
 	client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
+});
+
+test("backlog replay skips a spool file concurrently removed between listing and reading", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-vanish-")); const path = join(dir, "monitor.sock");
+	const first = new RozoroEventBusClient({socketPath:path,sessionId:"vanish",role:"crew",taskId:"task-vanish"}); first.close();
+	const spool = join(dir,"pi-producers","vanish","spool"); const cursor = join(dir,"pi-producers","vanish","cursor-v1");
+	const name = (await readdir(spool)).find((item) => item.endsWith(".json"))!; const victim = join(spool, name);
+	const original = fsSync.readFileSync;
+	fsSync.readFileSync = ((target: unknown, ...rest: unknown[]) => {
+		if (target === victim) fsSync.unlinkSync(victim);
+		return (original as (...args: unknown[]) => unknown)(target, ...rest);
+	}) as typeof original;
+	syncBuiltinESMExports();
+	let second: RozoroEventBusClient | undefined;
+	try {
+		second = new RozoroEventBusClient({socketPath:path,sessionId:"vanish",role:"crew",taskId:"task-vanish"});
+	} finally {
+		fsSync.readFileSync = original; syncBuiltinESMExports();
+	}
+	second.close();
+	assert.equal(await readFile(cursor, "utf8"), "2\n");
+	const remaining = (await readdir(spool)).filter((item) => item.endsWith(".json"));
+	assert.deepEqual(remaining, [remaining.find((item) => item !== name)]);
+	await rm(dir,{recursive:true,force:true});
 });
 
 test("twenty clients sharing one Pi session allocate one contiguous custody stream", async () => {
