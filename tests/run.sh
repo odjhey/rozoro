@@ -13,7 +13,7 @@ if [ -n "${CONTAINER_ENGINE:-}" ]; then
 else
   engine=""
   for candidate in podman docker; do
-    if command -v "$candidate" >/dev/null 2>&1; then
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" info >/dev/null 2>&1; then
       engine="$candidate"
       break
     fi
@@ -21,7 +21,7 @@ else
   if [ -z "$engine" ]; then
     cat >&2 <<'EOF'
 error: the test suite requires Podman or Docker.
-Install either container engine, or set CONTAINER_ENGINE to its executable.
+Start either container engine, or set CONTAINER_ENGINE to its executable.
 EOF
     exit 127
   fi

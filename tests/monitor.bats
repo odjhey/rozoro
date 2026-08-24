@@ -23,9 +23,16 @@ load test_helper/common
   run "$REPO_ROOT/bin/rozoro" monitor reset --force; assert_failure
   [ -e "$ROZORO_HOME/monitor.db" ]; [ "$(cat "$external")" = sentinel ]
   rm "$ROZORO_HOME/monitor.db-shm"
+  mkdir -p "$ROZORO_HOME/producer-seq" "$ROZORO_HOME/spool"
+  chmod 700 "$ROZORO_HOME/producer-seq" "$ROZORO_HOME/spool"
+  printf '3' > "$ROZORO_HOME/producer-seq/session.seq"
+  printf '{"durable":"event"}' > "$ROZORO_HOME/spool/event.json"
+  chmod 600 "$ROZORO_HOME/producer-seq/session.seq" "$ROZORO_HOME/spool/event.json"
   run "$REPO_ROOT/bin/rozoro" monitor reset --force; assert_success
   [ ! -e "$ROZORO_HOME/monitor.db" ]
   [ ! -e "$ROZORO_HOME/monitor.db-wal" ]
+  [ ! -e "$ROZORO_HOME/producer-seq" ]
+  [ ! -e "$ROZORO_HOME/spool" ]
   [ "$(cat "$ROZORO_HOME/tasks/task-1/handoff.md")" = authoritative ]
   run "$REPO_ROOT/bin/rozoro" monitor start; assert_success
   run "$REPO_ROOT/bin/rozoro" monitor status --json; assert_success

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export const WAKE_CONTENT = "Rozoro notification pending; run ./bin/rozoro reconcile.";
 export const MAX_FRAME_BYTES = 1_048_576;
+export const MAX_PRODUCER_SEQ = 9_007_199_254_740_991;
 
 export type AdapterOptions = {
 	socketPath: string;
@@ -37,6 +39,40 @@ const safeId = (value: string, label: string) => {
 	return value;
 };
 
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
+const DIGITS = /^[0-9]+$/;
+const privatelyOwned = (info: { uid: number; mode: number }) => {
+	const uid = process.geteuid?.();
+	return (uid === undefined || info.uid === uid) && (info.mode & 0o077) === 0;
+};
+
+const fsyncDirectory = (path: string, label: string): void => {
+	const fd = openSync(path, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+	try {
+		const info = fstatSync(fd);
+		if (!info.isDirectory() || !privatelyOwned(info)) throw new Error(`unsafe Rozoro ${label} directory`);
+		fsyncSync(fd);
+	} finally { closeSync(fd); }
+};
+
+const readCounter = (fd: number): number => {
+	const buffer = Buffer.alloc(64);
+	const text = buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, 0)).toString("ascii").trim();
+	if (!text) return 0;
+	const value = Number(text);
+	if (!DIGITS.test(text) || !Number.isSafeInteger(value)) throw new Error("invalid Rozoro producer sequence state");
+	return value;
+};
+
+const writeCounter = (fd: number, value: number): void => {
+	const data = Buffer.from(String(value), "ascii");
+	let written = 0;
+	while (written < data.length) written += writeSync(fd, data, written, data.length - written, written);
+	ftruncateSync(fd, data.length);
+	fsyncSync(fd);
+};
+
 export class RozoroEventBusClient {
 	private socket?: Socket;
 	private chunks: Buffer[] = [];
@@ -49,13 +85,15 @@ export class RozoroEventBusClient {
 	private registrationRequest = "";
 	private pending?: Pending;
 	private queue: Pending[] = [];
-	private producerSeq = Date.now() * 1000;
+	private producerSeq: number;
 	private turn = 0;
 	private delivering?: number;
 	private notifications: number[] = [];
 	private epoch = 0;
 	private deliveredThisEpoch = new Set<number>();
 	private readonly sessionRegistration: Pending;
+	private readonly producerSeqDir: string;
+	private readonly producerSeqPath: string;
 	readonly sessionId: string;
 	readonly driverId: string;
 	readonly taskId: string;
@@ -70,7 +108,30 @@ export class RozoroEventBusClient {
 		this.taskId = options.taskId ? safeId(options.taskId, "Pi task id") : "";
 		if (this.role === "watchtower" && !this.driverId) throw new Error("Pi watchtower requires driver id");
 		if (this.role === "crew" && !this.taskId) throw new Error("Pi crew requires task id");
+		this.producerSeqDir = join(dirname(options.socketPath), "producer-seq");
+		this.producerSeqPath = join(this.producerSeqDir, `${this.sessionId}.seq`);
+		this.producerSeq = this.counter(readCounter);
 		this.sessionRegistration = { frame: this.event("session.register"), kind: "event" };
+	}
+
+	private counter<T>(run: (fd: number) => T): T {
+		try { mkdirSync(this.producerSeqDir, 0o700); }
+		catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+		const directory = lstatSync(this.producerSeqDir);
+		if (!directory.isDirectory() || !privatelyOwned(directory)) throw new Error("unsafe Rozoro producer sequence directory");
+		fsyncDirectory(dirname(this.producerSeqDir), "home");
+		const fd = openSync(this.producerSeqPath, constants.O_RDWR | constants.O_CREAT | NOFOLLOW, 0o600);
+		try {
+			const info = fstatSync(fd);
+			if (!info.isFile() || !privatelyOwned(info)) throw new Error("unsafe Rozoro producer sequence file");
+			fsyncDirectory(this.producerSeqDir, "producer sequence");
+			return run(fd);
+		} finally { closeSync(fd); }
+	}
+
+	private commit(seq: number): void {
+		try { this.counter((fd) => { if (readCounter(fd) < seq) writeCounter(fd, seq); }); }
+		catch { this.options.onStatus?.("event bus: producer sequence not durable"); }
 	}
 
 	start(): void {
@@ -170,12 +231,14 @@ export class RozoroEventBusClient {
 	}
 
 	private event(type: "session.register" | "turn.start" | "turn.stop"): Frame {
-		const seq = ++this.producerSeq;
+		const seq = this.producerSeq + 1;
+		if (seq > MAX_PRODUCER_SEQ) throw new Error(`Rozoro producer sequence exhausted for ${this.sessionId}`);
+		this.producerSeq = seq;
 		const frame: Frame = { v: 1, type, event_id: `${this.sessionId}-${seq}-${randomUUID()}`, producer_seq: seq,
 			session_id: this.sessionId, harness: "pi", role: this.role };
 		if (this.role === "watchtower") frame.driver_id = this.driverId; else frame.task_id = this.taskId;
 		if (type === "turn.start") frame.turn_id = `${this.sessionId}-turn-${++this.turn}`;
-		if (type === "turn.stop") { frame.turn_id = `${this.sessionId}-turn-${this.turn}`; frame.background_active = null; }
+		if (type === "turn.stop") { frame.turn_id = `${this.sessionId}-turn-${this.turn}`; frame.background_active = false; }
 		return frame;
 	}
 
@@ -222,6 +285,7 @@ export class RozoroEventBusClient {
 		if (this.pending.kind === "event") {
 			if (!exact(frame, ["v", "type", "event_id", "durable_seq"]) || frame.v !== 1 || frame.type !== "ack" ||
 				frame.event_id !== this.pending.frame.event_id || !positive(frame.durable_seq)) return false;
+			this.commit(this.pending.frame.producer_seq as number);
 		} else if (!exact(frame, ["v", "type", "request_id"]) || frame.v !== 1 || frame.type !== "ok" ||
 			frame.request_id !== this.pending.frame.request_id) return false;
 		this.pending = undefined; this.flush(); return true;
