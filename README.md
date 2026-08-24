@@ -1,213 +1,240 @@
 # rozoro
 
-A deliberately tiny agent-session orchestrator over the [herdr](https://herdr.dev)
-terminal backend. A **driver** (the "control tower" — usually a powerful model in
-its own session) uses rozoro to **spawn, watch, message, and reap** a fleet of
-agent sessions. Each **task** is one herdr **tab** holding one **pane** running
-one agent. All state lives on disk under `$ROZORO_HOME` (default `~/.rozoro`), so
-killing the driver loses nothing — the next command reconciles from disk.
+> [!WARNING]
+> **WIP / fast-moving project.** Rozoro is being actively used and actively redesigned at the same time. Interfaces, terminology, and architecture can change quickly. Treat the current CLI and state formats as working software, not as a stable public contract.
 
-The core mechanics:
+Rozoro is a **highly opinionated way to deliver tasks to different coding harnesses** such as Claude Code, Codex, Pi, and Copilot while keeping each task independently visible, messageable, and resumable.
 
-1. **spawn sessions as tabs** — one crew agent per tab, from a reusable preset
-2. **event-driven updates** — a push subscriber to herdr's status stream, no polling
-3. **send to sessions** — a DATA-plane follow-up the agent reads, or a
-   CONTROL-plane verb (interrupt, cancel, a key press, stop, restart) the
-   harness executes — never conflated
-4. **lockfile** — single-driver safety around the spawn mutation
+Today it does that through [Herdr](https://herdr.dev): one task becomes one harness session in an inspectable Herdr tab/pane, with durable local task state under `$ROZORO_HOME` and a watchtower-oriented workflow on top.
 
-## What rozoro is for
+The current experience is useful and is intentionally being preserved while the project evaluates how much of the underlying session/runtime layer should instead be delegated to existing standards and tooling—especially:
 
-The problem: one agent session is easy to run, but the moment you want three or
-five tasks worked in parallel — across different repos — you become a tab-juggler,
-babysitting sessions and copy-pasting context. rozoro's goal is to let **one
-driver session run a fleet** without that overhead. The driver talks to you and
-dispatches; each crew agent works its task in its own tab; the driver watches,
-steers, and reaps.
+- [Agent Client Protocol (ACP)](https://github.com/agentclientprotocol/agent-client-protocol) — a protocol for connecting clients and coding agents; and
+- [acpx](https://github.com/openclaw/acpx) — a headless client for stateful ACP sessions.
 
-Concretely, rozoro aims to be:
+We are **not** currently extracting a new `rozoro-core`. The next architecture step is to spike ACP/acpx against the capabilities Rozoro already relies on, then keep only the gaps that are actually worth owning. See [PR #77](https://github.com/odjhey/rozoro/pull/77) for the current decision direction.
 
-- **The smallest useful spawn/watch/message/reap layer over herdr** — four verbs,
-  not a framework. If herdr already does it, rozoro doesn't wrap it.
-- **Crash-safe through durable local ownership.** The resident `rozorod` daemon
-  commits lifecycle events, projections, and wake generations to owner-private
-  SQLite before acknowledgement; adapters spool across restarts.
-- **A leverage multiplier for the driver.** The driver dispatches *eagerly* and
-  delegates *discovery* (reading issues, reproducing bugs, weighing approaches) to
-  the crew, rather than pre-solving work itself. rozoro is the hands; the crew is
-  the domain expert; the driver is the judgment.
+## What Rozoro is today
 
-## What rozoro is *not* (non-goals)
+The practical problem is simple: one coding-agent session is easy; many simultaneous tasks across repositories are not. You end up juggling terminals, remembering which session owns which task, copying follow-ups between places, and losing continuity when processes restart.
 
-These are deliberate. rozoro stays small by refusing to grow into them:
+Rozoro gives an opinionated operating model around that problem:
 
-- **Not a manager or workflow engine.** It knows nothing about worktrees, PR
-  resolution, delivery, testing, or merge authority — and never will. Those are
-  repo-specific and belong to the crew agent (see the design boundary below).
-- **Not a harness or a model.** It *launches* harnesses (`claude`, `codex`, …);
-  it doesn't replace or wrap their reasoning.
-- **Not a policy layer over the crew.** rozoro is a *transport, not a gatekeeper*
-  — a dumb spawner, not a manager. Task prompts pass through verbatim; it never
-  rewrites, filters, or approves what you tell the crew. The only injection is a
-  preset's standing `rules`, and only as a separate appended system prompt.
-- **Not a remote workflow service.** The owner-private local `rozorod` daemon
-  maintains durable lifecycle/projection state; it does not schedule or judge
-  repository work and exposes no network service.
-- **Not a replacement for repo rules.** The crew loads the target repo's own
-  `AGENTS.md` / `CLAUDE.md` / skills from its `--cwd`; rozoro never re-encodes them.
-- **Not a doer of domain work.** rozoro spawns "Resolve issue #NNN" and stays out
-  of the way. It does not read the code, pick approaches, or judge correctness —
-  that intelligence is the driver's and the crew's.
+```text
+operator / watchtower
+        |
+        | start / status / send / control / resume
+        v
+     Rozoro
+        |
+      Herdr
+        |
+   +----+----+---------+---------+
+   |         |         |         |
+ Claude    Codex      Pi      Copilot
+```
 
-## rozoro is a spawner, not a manager (the design boundary)
+The current implementation provides:
 
-rozoro is intentionally dumb. It does **not** know about worktrees, PR
-resolution, delivery, or merge authority — and it never will. Those are
-**repo-specific** and belong to the **spawned agent**, which loads the target
-repo's own rules (`AGENTS.md`, skills, `CLAUDE.md`) from its `--cwd`. rozoro
-spawns "Resolve issue #NNN" and stays out of the way; the crew agent — and any
-harness-native subagents it spawns — does everything domain-specific.
+- **durable task identity** — commands address a Rozoro task key rather than forcing the caller to track native harness session IDs;
+- **parallel, inspectable sessions** — tasks live in Herdr tabs/panes that a human can inspect;
+- **event-driven status** — `rozorod` owns durable lifecycle/event projections for managed paths;
+- **two distinct communication planes** — DATA messages go to the coding agent; CONTROL actions operate the runtime/process;
+- **exact-session continuation** — supported harness sessions can be linked and resumed rather than cold-started;
+- **watchtower-friendly reporting** — durable handoffs and reconciliation make many simultaneous tasks easier to coordinate;
+- **multiple coding harnesses** — Claude, Codex, Pi, and Copilot can be selected through launch presets/flags.
 
-Consequently:
+## Opinionated by design
 
-- **Task prompts are passed verbatim.** rozoro never edits what you tell a crew
-  to do. The only thing it injects is a preset's standing `rules`, and only as an
-  *appended system prompt*, never into the task.
-- **The intelligence is the driver's.** "Identify the work, dispatch, steer,
-  judge done" is the driver session using rozoro + `gh` as tools — spawning on the
-  default crew unless you ask for a specific one, and leaving the investigation to
-  the crew. rozoro is the hands.
+Rozoro is not trying to be a universal multi-agent framework.
+
+It currently assumes a particular style of work:
+
+1. give a task to an independent coding-harness session;
+2. let that session load and follow the target repository's own rules;
+3. observe it without blocking the operator;
+4. send follow-ups to the same conversation when needed;
+5. preserve task/session continuity until the result is accepted or intentionally torn down.
+
+A watchtower can use these primitives to coordinate many tasks, but repository-specific engineering policy belongs in the target repository and harness-native child-agent orchestration belongs in the harness.
+
+If Claude/Pi/Codex can delegate internally using their own subagents, teams, trees, worktrees, or workflows, Rozoro should prefer those capabilities rather than reimplementing them.
+
+## Architecture is under active evaluation
+
+The current implementation is deliberately **not** being torn down while the architecture changes.
+
+### Current operational path
+
+```text
+Rozoro CLI / watchtower
+          |
+       rozorod
+          |
+        Herdr
+          |
+ Claude / Codex / Pi / Copilot
+```
+
+This is the path to use today.
+
+### Direction being tested
+
+ACP and acpx already cover a substantial amount of the coding-session protocol and persistence problem that a hypothetical `rozoro-core` would otherwise need to implement.
+
+The working hypothesis is therefore much thinner:
+
+```text
+watchtower / human / GitHub / CI / scripts
+                  |
+        stable task / mailbox layer ?
+                  |
+              ACP / acpx
+                  |
+          coding harness sessions
+```
+
+The `?` is intentional. The project first needs evidence that Rozoro adds enough value above ACP/acpx to justify owning that layer.
+
+Potentially unique gaps include:
+
+- a durable application/task address such as `pr-63` independent of native/ACP session identity;
+- a mailbox for GitHub, CI, background jobs, humans, or other processes to deliver information to that task;
+- attribution, ordering, acknowledgement, and supersession across many simultaneous tasks;
+- continuity when the underlying coding-harness process/session is replaced or resumed;
+- compatibility with the current watchtower experience.
+
+If ACP/acpx already solves those sufficiently, Rozoro should shrink rather than rebuild them.
+
+## What belongs elsewhere
+
+Rozoro should not become the owner of every part of the engineering workflow.
+
+| Concern | Owner |
+|---|---|
+| nested subagents, teams, trees, fan-out/fan-in | coding harness |
+| worktree/branch/PR/test/merge rules | target repository / harness tooling |
+| task decomposition and cross-task prioritization | watchtower/client/operator |
+| correctness and final acceptance | reviewer/operator/application policy |
+| review/test/docs/lint/PR/CI delivery gate | [no-mistakes](https://github.com/kunchenguid/no-mistakes) or repo delivery tooling |
+| task/session transport, lifecycle, messages, resume | current Rozoro; ACP/acpx under evaluation |
+
+A useful boundary is:
+
+> If a feature needs to understand **what work should happen next**, it probably does not belong in the low-level Rozoro substrate.
 
 ## Requirements
 
-- `herdr` 0.8.x on `PATH`, a running server, and you running **inside** a herdr
-  session (so new tabs land in your workspace). Verify: `herdr tab list`.
-- `jq` on `PATH`
-- Python **3.11 or newer** as `python3` on `PATH` (stdlib only) — required by the resident monitor and event-stream watcher. Python 3.10 is not yet supported, and EOL Python 3.9 is out of policy; run `brew install python` and ensure Homebrew's `python3` precedes older interpreters on `PATH`.
-- `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
-- The selected coding harness (`claude`, `codex`, `copilot`, or `pi`) on `PATH`
+The current implementation requires:
 
-## Automated tests
+- `herdr` 0.8.x on `PATH` with a running server;
+- `jq`;
+- Python 3.11 or newer as `python3`;
+- Bash (stock macOS Bash 3.2 is supported);
+- at least one supported coding harness (`claude`, `codex`, `copilot`, or `pi`).
 
-The regression suite is isolated from your real home, Rozoro state, Herdr
-session, harness stores, and working checkouts. It uses a PATH-injected fake
-Herdr and standard-library Unix socket fixtures, so neither a running Herdr
-server nor an installed coding harness is needed.
+Run inside a Herdr session so new task tabs land in the current workspace.
 
-Install Podman or Docker, then run the same command used by CI:
-
-```sh
-./tests/run.sh
-```
-
-The runner prefers Podman when both engines are available and falls back to
-Docker. Set `CONTAINER_ENGINE=docker` (or an executable path) to select one
-explicitly. It builds a small cached test image from the official Bats 1.14.0
-image pinned by digest, copying `jq` and Python from separately pinned images.
-The first run pulls those immutable images; later builds reuse the container
-engine's cache. Tests run without network access against a read-only checkout,
-using only a temporary writable filesystem inside the disposable container. No
-host Bats, `jq`, or Python installation is required. CI runs the full suite this
-way on Linux; on macOS it checks stock Bash 3.2 syntax and exercises monitor
-migration and lifecycle behavior on both Python 3.11 and Homebrew's current
-Python.
-
-The automated suite covers shell/Python protocol parsing, event transport,
-watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr
-0.8.x server remain optional manual integration smoke tests; they are not part
-of the automated correctness evidence.
-
-## Install
-
-There is nothing to build and no dir to create — `$ROZORO_HOME` (default
-`~/.rozoro`) and its `state/`, `crew/`, `tasks/` subdirs are created lazily on
-first use. To set up a machine:
+## Install / preflight
 
 ```sh
 git clone git@github.com:odjhey/rozoro.git
 cd rozoro
-./bin/rozoro doctor                     # verify external deps, server, preset
+./bin/rozoro doctor
 ```
 
-`./bin/rozoro doctor` is the preflight — it checks the external binaries, that
-the herdr server answers, and the resolved default harness. Green means you can
-`./bin/rozoro start` a task.
+`doctor` checks the current operational dependencies and selected harness configuration.
 
-Run commands from this checkout through the local dispatcher:
-`./bin/rozoro <verb>`. The underlying `rzr-<verb>.sh` scripts remain internal
-entry points, but setup and control-tower workflows do not require Rozoro's own
-`bin/` directory on `PATH`.
+## Typical use
 
-## The tools (`bin/`)
+Start a durable task:
 
-| Command | What it does |
+```sh
+./bin/rozoro start fix-auth --body /tmp/task.md --cwd ~/src/my-repo
+```
+
+The command prints the exact task key. Use that key for later operations.
+
+Inspect it:
+
+```sh
+./bin/rozoro status <task-key>
+```
+
+Send a follow-up to the same coding conversation:
+
+```sh
+./bin/rozoro send <task-key> "Re-check the failing macOS case."
+```
+
+Operate the runtime separately from conversational input:
+
+```sh
+./bin/rozoro control <task-key> interrupt
+./bin/rozoro control <task-key> restart
+```
+
+Resume an already reaped supported conversation:
+
+```sh
+./bin/rozoro resume <task-key> --prompt "Continue from the previous result."
+```
+
+List known tasks:
+
+```sh
+./bin/rozoro list
+```
+
+## Main commands
+
+| Command | Purpose |
 |---|---|
-| `./bin/rozoro <verb> [args]` | checkout-local dispatcher; `./bin/rozoro help` lists verbs |
-| `./bin/rozoro start <display-name> --body <file> --cwd <repo> [opts]` | blessed start: atomically reserve a unique task key → render → spawn → link; prints the key used by every later command |
-| `./bin/rozoro spawn <id> --cwd <repo> [opts]` | low-level `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
-| `./bin/rozoro render <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
-| `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, Copilot, or Pi; Copilot and Pi use preallocated native session UUIDs; idempotent unless `--refresh` replaces the link after restart |
-| `./bin/rozoro status <id>` | daemon-backed schema-v2-compatible projection separating availability, foreground, background, task, report, and action state; fails loudly when the resident monitor is down |
-| `./bin/rozoro ack <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `./bin/rozoro register --harness <h>` | explicit legacy/diagnostic wake-target registration; managed Pi and supported-Claude adapters register with the daemon automatically |
-| `./bin/rozoro watch [--once] [id…]` | **diagnostics/legacy compatibility only**: observe Herdr transitions; never use beside daemon-managed Pi or supported Claude |
-| `./bin/rozoro monitor start\|status\|stop` | manage and diagnose the resident event-bus authority |
-| `./bin/rozoro reconcile [--driver <id>]` | reconcile the daemon's immutable generation snapshot, then ACK exactly that generation (never resolves OPEN items) |
-| `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
-| `./bin/rozoro control <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
-| `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, Copilot, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
-| `./bin/rozoro crew list\|show <name>` | inspect crewmember presets (spawn profiles) |
-| `./bin/rozoro lock status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
-| `./bin/rozoro list` | known tasks + live agent state |
-| `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/Python >=3.11 and the selected harness), herdr server reachable, default preset — exits non-zero with an install hint on a missing or unsupported hard dep |
-| `./bin/rozoro teardown <id> [--force]` | close the tab, remove the record (the `tasks/<id>/` folder survives); refuses if the recorded `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits) unless `--force` |
+| `./bin/rozoro start` | reserve a durable task key, render the brief, spawn, and link the session |
+| `./bin/rozoro spawn` | lower-level task/session spawn |
+| `./bin/rozoro status` | read daemon-backed lifecycle/task/report projection |
+| `./bin/rozoro send` | DATA-plane prompt/follow-up |
+| `./bin/rozoro control` | CONTROL-plane interrupt/cancel/key/stop/restart |
+| `./bin/rozoro resume` | reopen the exact linked conversation when supported |
+| `./bin/rozoro reconcile` | reconcile the current immutable wake generation |
+| `./bin/rozoro ack` | advance task open-item acknowledgement |
+| `./bin/rozoro list` | list known tasks and live state |
+| `./bin/rozoro monitor start\|status\|stop` | operate/diagnose `rozorod` |
+| `./bin/rozoro crew list\|show` | inspect current launch presets |
+| `./bin/rozoro teardown` | close/remove live hosting while preserving the task folder |
+| `./bin/rozoro doctor` | current dependency/capability preflight |
 
-`rzr-lib.sh` is the shared shell library. `rozorod` is the sole lifecycle,
-projection, coalescing, and delivery owner for managed Pi and supported Claude.
-`rzr-watch.sh` and `herdr-eventwait.py` remain diagnostic/legacy tools, not the
-normal management path. See [`docs/event-bus-cutover.md`](docs/event-bus-cutover.md).
+`watch` remains a diagnostics/legacy path; managed Pi and supported Claude use the resident event-bus path.
 
-### Durable task folders
+## DATA and CONTROL are deliberately different
 
-`./bin/rozoro start` treats its first argument as a concise display name and generates a
-time-sortable, globally collision-safe key such as
-`test-foundation--01K3A7Y8M4N2ABCDEFGHJKMNPQ`. It prints that key at startup;
-use the exact key for `send`, `status`, `ack`, `control`, `resume`, and
-`teardown`. The display name remains the tab label. Names may contain letters,
-digits, `.`, `_`, and `-` (maximum 80 characters);
-path separators and traversal components are rejected.
+```text
+send      = tell the coding agent something
+control   = tell the runtime/process something
+```
 
-The key is reserved with an atomic directory creation before any brief or
-handoff file is rendered. Repeated names, concurrent starts, and starts from
-different repositories therefore always receive different folders. Repository
-context is recorded in `identity.json` for discovery, but is not the uniqueness
-boundary. Because Herdr agent names have a stricter 32-character lowercase
-syntax, `identity.json` also records a separate collision-safe transport name.
-The durable task key remains the lifecycle address and the display name remains
-the tab label; fresh spawn and resume reuse the transport name internally.
+`send` delivers text for the model to interpret.
 
-Each task has a folder under `$ROZORO_HOME/tasks/<task-key>/` so teardown is
-non-lossy: `brief.md` (the input), `handoff.md` (append-only output — each turn the
-crew appends a `verdict:` block, so `done` is distinguishable from `needs-action`
-and context accumulates across `./bin/rozoro send` rounds), and `session.json` (the resume
-link). It is **data** — it lives in `$ROZORO_HOME`, never in this repo.
+`control` uses a closed set of runtime actions such as interrupt, cancel, key, stop, and restart. Rozoro does not encode a control request as chat text and hope the model obeys it.
 
-Compatibility: existing safe, unsuffixed keys such as `issue-42` remain valid
-exact addresses. All lifecycle commands, including `resume`, continue to read
-their existing `tasks/issue-42/` and `state/issue-42.meta` records without
-migration or rewriting. Only new `./bin/rozoro start` calls allocate suffixed keys.
+## Durable task state
 
-That covers the task *record*; teardown separately guards the crew's actual
-work: it refuses to close a task whose recorded `cwd` has uncommitted,
-untracked, or unpushed changes, so a crew's real output is never discarded
-silently (`--force` overrides).
+State lives under `$ROZORO_HOME` (default `~/.rozoro`). A task folder preserves the task's durable artifacts even after its live hosting is torn down.
 
-## Crewmember presets
+Current task state includes artifacts such as:
 
-A **preset** bundles *how* a crew agent is booted — harness, model, effort,
-fast service tier, permission mode, and standing `rules` — never *what* its task is. Presets are one
-JSON file per name under `$ROZORO_HOME/crew/<name>.json`. For example, the
-personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
+- `brief.md` — task input;
+- `handoff.md` — append-only application-level reports used by the current watchtower flow;
+- `session.json` — linkage used to reopen the exact supported native conversation;
+- identity/state metadata used to map the durable Rozoro task to current hosting/session identifiers.
+
+These formats are part of the current working implementation but should not yet be treated as long-term stable public protocol contracts.
+
+## Launch presets
+
+Current presets live under `$ROZORO_HOME/crew/<name>.json` and describe how a harness is launched: harness, model, effort, permission mode, fast tier, and optional standing rules.
+
+Example:
 
 ```json
 {
@@ -220,329 +247,38 @@ personal `$ROZORO_HOME/crew/default.json` can select gpt-5.6-sol/high:
 }
 ```
 
-- `$ROZORO_HOME/crew/default.json` is authoritative when present. Rozoro never
-  creates, migrates, or rewrites it. For safety against stale personal presets,
-  Codex is the one launch-time exception: its effective permission mode is
-  always normalized to `yolo`.
-- If that file is absent, the hardcoded fallback is Claude/Sonnet/`auto`.
-  Passing `--harness codex` selects gpt-5.6-sol/`low`; `--harness copilot` selects portable `auto` with no explicit effort. Codex and Copilot always use normalized `yolo` permission. Codex always passes
-  `--yolo`.
-- Spawn from one with `./bin/rozoro spawn <id> --cwd <repo> --crew <name> …`.
-- **Precedence** for harness/model/effort/fast/permission-mode: explicit flag > preset
-  file > hardcoded harness fallback. Codex permission mode is the exception: the
-  spawner always uses `yolo`. `rules` come only from the preset file.
-- `rules` are **crew-behavioral** (e.g. "never push"), deliberately distinct from
-  **repo** rules, which the agent auto-loads from `--cwd`.
+The `crew` terminology is historical/current UX. Whether this eventually becomes a simpler launch-profile concept depends on the ACP/acpx spike; no compatibility-breaking rename is planned merely for architectural cleanliness.
 
-**Harness mapping** (preset fields → the underlying binary's flags, via herdr's
-`agent start … -- <arg>` passthrough):
+## Testing
 
-| harness | maps to | notes |
-|---|---|---|
-| `claude` | `--model --effort --permission-mode --append-system-prompt-file` | verified on this machine |
-| `codex`  | `--yolo --model <m> --config model_reasoning_effort=<e> [--config service_tier=priority]` | `--yolo` is unconditional; `fast:true` selects the gpt-5.6-sol priority tier |
-| `copilot`| `--no-auto-update --autopilot --yolo --no-ask-user --model <m> [--effort <e>] --session-id <uuid>` | capability-checked; fresh UUID is preallocated; exact resume uses `--resume=<uuid>` |
-| `pi`     | `--model <m> --thinking <e> --approve --append-system-prompt <file> --session-id <uuid>` | project trust is approved when permission mode is non-empty; native UUID enables exact linking/resume |
+The regression suite isolates itself from the real Rozoro home, Herdr session, harness stores, and working checkouts. It uses fake Herdr and local socket fixtures for protocol/lifecycle coverage.
 
-Claude, Codex, Copilot, and Pi support `effort` (Pi names it `thinking`). Claude and Pi
-receive the handoff protocol and preset `rules` through dedicated system-prompt
-channels, leaving the task prompt verbatim. Harnesses without one receive the
-protocol and rules in the delivered prompt. An unmapped harness fails loudly
-rather than launching with wrong flags.
-
-`fast` is separate from reasoning effort: `high` controls how much reasoning the
-model uses, while `fast:true` requests Codex's `priority` service tier (higher
-speed and increased usage). Stage 1 supports this only for Codex with
-`gpt-5.6-sol`; other harness/model combinations fail before a tab is created.
-Use `--fast` or `--no-fast` to override a preset for spawn and resume. The
-resolved profile is stored in `session.json`, so restart and exact resume reapply
-the model, effort, and service tier instead of depending on user defaults.
-
-## Instructing rozoro (the control tower)
-
-The driver's whole vocabulary is small:
-
-| Trigger | Call |
-|---|---|
-| **Start** a task | `./bin/rozoro start <display-name> --body <file> --cwd <repo> [--crew <preset>] [--model <model>] [--fast]` (prints the immutable task key) |
-| **Steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` |
-| **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
-| **Resume** a reaped task | `./bin/rozoro resume <id> [--effort <e>] [--fast|--no-fast] [--prompt "<follow-up>"]` |
-| **Stop** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`; refuses on unlanded work in the crew's `cwd`, `--force` to discard anyway) |
-| *(sense, not trigger)* | `./bin/rozoro reconcile` (on the daemon's fixed wake) · `./bin/rozoro status <id>` (handoff verdict) · `./bin/rozoro list` · `./bin/rozoro monitor status --json` (daemon health). `./bin/rozoro watch` is diagnostics/legacy only |
-
-**DATA vs CONTROL, and why it's split.** A crew must receive two clearly
-distinct kinds of message, never conflated: DATA is free text the agent reads
-and reasons about (`./bin/rozoro send`); CONTROL is a lifecycle action from a closed
-verb list that the harness *executes* (`./bin/rozoro control`) — never text the agent
-might interpret as chat. The failure this prevents: a lifecycle command
-arriving as chat the agent "reads" instead of the harness carrying out. Control
-verbs also fail closed on target resolution (an unresolved task/pane is refused
-loudly, never guessed at) and verify their own postcondition rather than
-trusting a herdr call's exit code alone.
-
-Keep the driver in the Rozoro checkout and call `./bin/rozoro`; point each fresh
-task at its own repository with `--cwd`. For managed Pi and supported Claude the
-resident daemon owns crew state: on its fixed wake run `./bin/rozoro reconcile`
-then `./bin/rozoro status <id>` rather than blocking on `./bin/rozoro watch`
-(diagnostics/legacy only) or reading the legacy `state/<id>.status` snapshot.
-
-### Launching the driver
-
-The driver is just a capable agent session with the rozoro skill in reach and a
-system prompt that keeps it in the control tower. That prompt is versioned in this
-repo at [`templates/watchtower.md`](templates/watchtower.md) — maintain it there,
-not inline. Launch the driver **inside a herdr session** from this Rozoro checkout,
-where the bundled skill and checkout-local dispatcher remain available:
-
-From the Rozoro checkout:
+Run the same containerized suite used by CI:
 
 ```sh
-# Pi watchtower (recommended)
-./bin/rozoro pi-watchtower
-
-# Exact resume (reapplies immutable role, extension, and standing prompt)
-./bin/rozoro pi-watchtower --resume <session-id-or-file>
-
-# Or Claude
-ROZORO_ROLE=watchtower claude \
-  --append-system-prompt-file "$PWD/templates/watchtower.md"
+./tests/run.sh
 ```
 
-Use `./bin/rozoro claude-watchtower` (or `--resume`) for a supported Claude
-watchtower; it installs the certified hooks and registers the stable driver with
-the daemon automatically. `ROZORO_ROLE=watchtower` distinguishes it from crew and
-plain development sessions. The resident daemon delivers issue #25's monitor
-scope; see [`docs/claude-watchtower-live-gate.md`](docs/claude-watchtower-live-gate.md).
+Podman is preferred when available; Docker is the fallback. The suite covers shell/Python protocol parsing, event transport, lifecycle/reconciliation behavior, and locking. Real-Herdr checks remain manual integration smoke tests.
 
-Running plain `pi` opens a normal coding session, not a watchtower. Use the
-supported `pi-watchtower` launcher for both startup and exact resume: it always
-sets immutable `ROZORO_WATCHTOWER=1`, explicitly loads the checkout extension,
-and reapplies the standing prompt (Pi does not persist appended system prompts
-across a bare `--session` resume). Unsupported or missing pane/session identity
-intentionally leaves the adapter inactive. The driver calls the dispatcher from
-the checkout.
+## Near-term direction
 
-The Pi launch loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
-Its Pi 0.84.2/Herdr startup and reload process regression is available with
-`RZR_LIVE_PI_RELOAD=1 tests/live/pi-watchtower-reload.sh` (no model call).
-It is a thin reconnecting daemon client: notifications become one fixed
-`reconcile` follow-up and are confirmed only after Pi accepts that follow-up.
-It owns no watcher child, reducer, ledger, task inventory, or filesystem watcher.
-Use `/rozoro-monitor status` for adapter health and `monitor status --json` for
-authoritative diagnostics.
+The next architecture experiment is **not** a rewrite.
 
-Editing `templates/watchtower.md` and committing it is how you evolve the driver's
-standing behavior; every watchtower booted from the file inherits the change. Keep
-it short — the rozoro skill carries the detailed loop. The one idea it must anchor
-is the boundary: **the driver spawns and judges; the crew does the domain work.**
-(rozoro-the-tool is the dumb spawner; the driver is the judgment.)
+The plan is:
 
-## Examples
+1. keep current Rozoro usable;
+2. exercise ACP/acpx for create/send/status/cancel/resume/persistence across supported harnesses;
+3. compare that evidence against current Rozoro;
+4. separately prove or disprove the need for durable task/mailbox indirection above ACP sessions;
+5. build only the missing layer.
 
-The blessed flow is `./bin/rozoro start` (durable brief + spawn + session link in
-one step); reach for raw `./bin/rozoro spawn` only for throwaway probes.
+Until that experiment is complete, Herdr remains the current supported host and no new `rozoro-core`, tmux host abstraction, or replacement harness-adapter layer should be assumed.
 
-**Fan out several issues in parallel** — one id + body per task, dispatched
-eagerly, then one event-driven watcher over the fleet:
+## Project stance
 
-```sh
-for n in 42 57 61; do
-  printf 'Resolve issue #%s in this repo — investigate, fix, and open a PR.\n' "$n" \
-    > /tmp/task-$n.md
-  ./bin/rozoro start issue-$n --body /tmp/task-$n.md --cwd ~/proj/acme
-done
-./bin/rozoro watch issue-42 issue-57 issue-61  # streams each real edge; no polling
-```
+Rozoro is intentionally experimental.
 
-On each edge, read the **handoff verdict** — not herdr's raw `done` — then reap:
+It is built around a real operating workflow, not around a claim that its abstractions are final. When a coding harness, ACP/acpx, Herdr, no-mistakes, or another existing tool solves a problem better, Rozoro should integrate with it, delegate to it, or delete the duplicate layer.
 
-```sh
-./bin/rozoro status issue-42        # done → verify the result, then reap
-./bin/rozoro teardown issue-42      #   (tasks/issue-42/ survives teardown)
-```
-
-**Steer a live crew (DATA)** — a follow-up is submitted as text the agent reads:
-
-```sh
-./bin/rozoro send issue-57 "Skip the refactor — smallest fix that closes the issue."
-```
-
-**Interrupt a runaway turn (CONTROL)** — executed, never handed to the agent as
-chat; verifies the agent actually left `working` before reporting success:
-
-```sh
-./bin/rozoro control issue-57 interrupt
-```
-
-**Dispatch a scout (investigation only, no PR)** — knowledge, not a change:
-
-```sh
-printf 'Investigate why CI flakes on the auth suite. Write findings; change no code.\n' \
-  > /tmp/scout.md
-./bin/rozoro start scout-ci-flake --body /tmp/scout.md --cwd ~/proj/acme
-```
-
-**Override the crew when you explicitly want a bigger model:**
-
-```sh
-./bin/rozoro start issue-99 --body /tmp/task-99.md --cwd ~/proj/acme --model opus
-```
-
-**Use a custom preset** — e.g. a "draft PR, never push" crew, defined once under
-`$ROZORO_HOME/crew/`, then reused:
-
-```sh
-./bin/rozoro crew list                            # see available presets
-./bin/rozoro start issue-77 --body /tmp/t.md --cwd ~/proj/acme --crew draft-only
-```
-
-**Follow up after `done` without losing context.** `done` is an invitation to
-review, not a signal to reap — a done crew sits idle at ~0 cost. If it's still
-live, just continue it (same agent, full context):
-
-```sh
-./bin/rozoro send issue-42 "Reviewed — also handle the null-token case, then re-push."
-```
-
-**Resume a task you already reaped** — if it was torn down before your follow-up
-arrived, reopen the *exact* conversation (not a cold re-spawn) and hand it the
-feedback in one step:
-
-```sh
-./bin/rozoro resume issue-42 --prompt "Also handle the null-token case, then re-push."
-#   → new tab, harness resumes <uuid>, crew picks up with full memory
-```
-
-(Only reap once the result is accepted; `resume` is the safety net for when you
-reaped too early. Prefer *not closing* over *closing and resuming*.)
-
-## How each mechanism maps to herdr 0.8.2
-
-- **spawn/tab** — `herdr tab create --cwd … --label … --no-focus [--workspace <ws>]`
-  returns `.result.root_pane.pane_id` and `.result.tab.tab_id`; new tabs default
-  to the driver's own workspace so they are sibling tabs you can click to. The
-  agent comes up with `herdr agent start <id> --kind <harness> --pane <p> -- <profile args…>`.
-  The agent **name is the task id** (unique) — herdr rejects a reused live name,
-  so naming every crew after the harness would cap the fleet at one. `tab create`
-  can return before the pane's shell is ready, so `agent start` is retried on the
-  transient `agent_pane_busy`.
-- **event-driven** — `rozorod` accepts every harness-native event into SQLite,
-  reduces lifecycle state, coalesces only notifications, and owns generation /
-  delivered / ACK state. Pi's extension is a reconnecting socket adapter that
-  sends only the fixed reconciliation wake; it has no child watcher, projection
-  reducer, task membership, or `.meta` restart logic. Supported Claude hooks
-  publish certified lifecycle facts and fail closed to `unknown` when capability
-  is absent. Herdr supplies host liveness and safe actuation, never semantic
-  completion. `rzr-watch.sh` is retained only for explicit diagnostics and legacy
-  Codex/Copilot compatibility.
-- **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
-  atomically, and is rejected up front if the agent is blocked.
-- **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
-  `herdr agent send-keys <pane> <key>` (esc / ctrl+c / any named key); `stop`
-  reuses `rzr-teardown.sh`; `restart` composes teardown + `rzr-spawn.sh` under
-  the same id. Every verb confirms its result with
-  `herdr agent wait <pane> --until <states> --timeout <ms>` rather than trusting
-  the send's exit code alone. `restart` deliberately passes `--force` to
-  teardown's unlanded-work guard: teardown only drops the tab + state record,
-  never the working tree, so restart re-spawns into the *same* cwd with any
-  prior work still on disk — nothing is lost by skipping the guard here.
-- **lock** — atomic `mkdir state/.lock`, holder pid recorded; a dead holder is
-  reclaimed on the next acquire. `rzr-spawn.sh` holds it around the
-  create-tab/write-meta mutation.
-
-## Configuration (env)
-
-- `ROZORO_HOME` / `RZR_HOME` — home (default `~/.rozoro`). Holds `state/` (task
-  meta, status, locks) and `crew/` (presets). `ROZORO_HOME` wins; `RZR_HOME` is
-  the legacy name.
-- `RZR_WORKSPACE` — herdr workspace for new tabs (default `$HERDR_WORKSPACE_ID`).
-- `RZR_SESSION` — herdr `--session` name (default: the single local server).
-- `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps
-  once before re-reading the handoff when a foreground settle event races its
-  append; `0` disables the retry.
-- Managed Pi and supported Claude always use the resident event bus. The
-  temporary `ROZORO_EVENT_BUS`, inverse fallback, and disable flags were removed
-  at production cutover. Upgrade, fresh-install, health, and rollback procedures
-  are in [`docs/event-bus-cutover.md`](docs/event-bus-cutover.md).
-
-## Try it
-
-```sh
-# 1. spawn from $ROZORO_HOME/crew/default.json (if configured):
-./bin/rozoro spawn t1 --cwd /some/repo --prompt 'List the files in this repo, then stop.'
-
-# With no default.json, explicitly select the Codex low fallback:
-./bin/rozoro spawn t2 --cwd /some/repo --harness codex --prompt 'Resolve issue #42.'
-
-# Pi gets the same model/effort/rules/session lifecycle support as Claude:
-./bin/rozoro spawn t3 --cwd /some/repo --harness pi --model openai-codex/gpt-5.6-sol --effort low --prompt 'Resolve issue #43.'
-
-# 2. start/check the resident authority; Pi and supported Claude register
-# automatically and receive a fixed wake when reconciliation is pending:
-./bin/rozoro monitor start
-./bin/rozoro monitor status --json
-./bin/rozoro reconcile
-./bin/rozoro status t1
-
-# `watch` is only an explicit Herdr diagnostic / legacy-harness observer:
-./bin/rozoro watch --once t1 t2
-
-# 3. send a follow-up (DATA); --wait blocks until it settles:
-./bin/rozoro send t1 'Now count the lines in README.' --wait
-
-# 3b. …or interrupt a runaway turn (CONTROL) — executed, never read as chat:
-./bin/rozoro control t1 interrupt
-
-# 4. inspect presets / reap:
-./bin/rozoro crew list
-./bin/rozoro teardown t1
-```
-
-## Verified on herdr 0.8.2 (macOS)
-
-- ✅ tab create + pane/tab id parsing, meta on disk; `agent start` with per-preset
-  harness-specific model/effort/permission/system-prompt passthrough
-- ✅ unique-name spawn → multiple live crew concurrently
-- ✅ push-stream watcher: real `working`/`idle`/`done` edges, deduped, no flood,
-  clean process teardown; concurrent multi-pane attribution
-- ✅ `rzr-send.sh` (DATA) delivery and `--wait` settle
-- ✅ `rzr-control.sh` (CONTROL) `interrupt`/`cancel`/`key`/`stop`/`restart`, each
-  against a live throwaway task, each verifying its own postcondition
-- ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
-- ✅ Pi with gpt-5.6-sol/low: model/thinking/trust/system-prompt passthrough,
-  native session linking, teardown, exact resume, and continued handoff context
-- ✅ Pi watchtower monitor: the resident daemon's Herdr push subscription runs
-  outside tool execution, preserving interactive operator input while its
-  reconnecting adapter delivers a fixed reconcile follow-up on actionable edges
-- ✅ lock: live-holder refusal, stale-pid reclaim, release
-- ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
-
-Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interrupt, and exact resume. Run the opt-in, cost-incurring lifecycle and Copilot-hosted watchtower smokes with `RZR_LIVE_COPILOT=1 tests/live/copilot-lifecycle.sh` and `RZR_LIVE_COPILOT=1 tests/live/copilot-watchtower.sh`. Copilot model availability is account-specific: persisted model metadata is the requested profile, and Copilot may warn and route an unavailable named model through `auto`.
-
-### Status v2 and background-work boundary
-
-`rozoro status` is read-only: it never contacts Herdr and never writes any
-cursor (the old `.seen-blocks` miss-detector it used to advance is gone). For
-managed Pi and supported Claude, the resident daemon owns the runtime
-projection; `state/<id>.runtime.json` and its watcher remain only as the
-explicit legacy-diagnostic fallback (see
-[`docs/event-bus-cutover.md`](docs/event-bus-cutover.md)). The append-only
-handoff and `.acked-blocks-v2` own task reporting and FIFO acknowledgement.
-`runtime_status`, `foreground_status`, `background_activity`, `task_status`, and
-`turn_report_status` are independent axes; `done` is a runtime/crew assertion,
-not user acceptance.
-
-A crew may report `verdict: waiting` only with useful reason/pending text and no
-requested input. Supported Claude hooks publish certified
-`background.start`/`background.stop`/`background.snapshot` events through the
-daemon, so a genuine background job reports `waiting-background` instead of
-`inconsistent-wait`. **Herdr 0.8.2 does not expose normalized background jobs**,
-so managed Pi and Herdr-only harnesses (Copilot, Codex, legacy `rzr-watch`)
-still report background support/count as unknown and treat every waiting
-report as `inconsistent-wait` (actionable); status does not inspect terminal
-text or Claude footers as a substitute. Certified wait suppression and
-final-job wake for those harnesses are gated on a Herdr release providing
-harness-neutral capability discovery, synchronized active counts/opaque job
-IDs, ordered revisions and final-zero success/failure/cancellation events.
-Acceptance and timeouts remain driver/user policy.
+The goal is not to own the most framework. The goal is to keep multi-harness task delivery and follow-up practical.
