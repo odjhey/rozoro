@@ -53,6 +53,28 @@ class Issue80CorrectnessTests(unittest.TestCase):
             reports = store.reconcile("driver", "watch", registration["epoch"], 1)
             self.assertEqual([item["task_id"] for item in reports], ["task-2"])
             self.assertEqual(store.task_projection("task-1")["availability"], "gone")
+            store.accept_event(lifecycle("turn.stop", 3, session="one", task="task-1"))
+            self.assertEqual(store._connection.execute(
+                "SELECT present FROM task_membership WHERE task_id='task-1'").fetchone()[0], 0)
+
+    def test_metadata_present_disappearance_is_one_exact_gone_edge(self):
+        with EventStore(self.db) as store:
+            store.accept_event(lifecycle("session.register", 1))
+            store.reconcile_herdr_liveness("task-1", pane_exists=True)
+            store.reconcile_herdr_liveness("task-1", pane_exists=False)
+            self.assertEqual(store._connection.execute(
+                "SELECT actionable_reason FROM pending_generation_tasks").fetchall()[0][0], "gone")
+            store.reconcile_herdr_liveness("task-1", pane_exists=False)
+            self.assertEqual(store.health_snapshot()["generation"], 1)
+
+    def test_trailing_malformed_heading_overrides_older_valid_done(self):
+        handoff=self.home / "tasks/task-1/handoff.md"
+        handoff.write_text("## turn 1 — complete\nverdict: done\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n## trailing broken report\n")
+        with EventStore(self.db) as store:
+            store.accept_event(lifecycle("session.register",1)); store.accept_event(lifecycle("turn.start",2))
+            result=store.accept_event(lifecycle("turn.stop",3)); row=store.task_projection("task-1")
+            self.assertEqual((row["report_state"],row["verdict"],row["actionable_reason"]),("malformed",None,"malformed-report"))
+            self.assertEqual(result.generation,1)
 
     def test_equal_cursors_have_unambiguous_settled_health(self):
         with EventStore(self.db) as store:
@@ -111,6 +133,12 @@ class Issue80CorrectnessTests(unittest.TestCase):
         raw.close()
         with self.assertRaisesRegex(RuntimeError, "empty spool"):
             EventStore(self.db, state_dir=state, spool_backlog=1)
+
+    def test_migration_rejects_generation_without_driver(self):
+        state=self.make_v6_fixture(projections=1,active=1)
+        raw=sqlite3.connect(self.db); raw.execute("UPDATE daemon_metadata SET value='1' WHERE key='latest_generation'"); raw.commit(); raw.close()
+        with self.assertRaisesRegex(RuntimeError,"equal generation cursors"):
+            EventStore(self.db,state_dir=state)
 
     def test_old_binary_refuses_schema_seven(self):
         with EventStore(self.db): pass

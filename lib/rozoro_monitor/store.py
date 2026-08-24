@@ -281,7 +281,7 @@ class StoreTransaction:
         self._connection.execute(
             """INSERT INTO task_membership(task_id,present,updated_event_seq)
                VALUES(?,1,?) ON CONFLICT(task_id) DO UPDATE SET
-               present=1,updated_event_seq=excluded.updated_event_seq,
+               updated_event_seq=excluded.updated_event_seq,
                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
             (task_id, durable_seq),
         )
@@ -357,7 +357,8 @@ def _report_projection(task_dir: Path) -> tuple[str, str | None, dict[str, Any]]
     # Historical parse errors are retained below, but current authority follows
     # the latest append-only correction. Only a malformed latest block poisons
     # current report state.
-    state = ("malformed" if report["protocol_errors"] and latest is None else
+    state = ("malformed" if report.get("trailing_malformed") else
+             "malformed" if report["protocol_errors"] and latest is None else
              "missing" if report["blocks"] == 0 else
              "valid" if latest is not None and latest.get("valid") else "malformed")
     latest_verdict = (None if latest is None else latest["fields"].get("verdict", "").casefold() or None)
@@ -705,13 +706,17 @@ class EventStore:
         """Evidence-preserving repair of schema-6 mutable state."""
         if not upgrading_v6:
             return
+        latest = int(connection.execute(
+            "SELECT value FROM daemon_metadata WHERE key='latest_generation'").fetchone()[0])
+        driver_count = int(connection.execute("SELECT COUNT(*) FROM watchtower_deliveries").fetchone()[0])
         unsettled = connection.execute(
             """SELECT driver_id FROM watchtower_deliveries
                WHERE latest_generation<>delivered_generation
                   OR delivered_generation<>acked_generation LIMIT 1""").fetchone()
         unconfirmed = connection.execute(
             "SELECT 1 FROM delivery_offers WHERE confirmed=0 LIMIT 1").fetchone()
-        if unsettled is not None or unconfirmed is not None or self._migration_spool_backlog:
+        if (unsettled is not None or unconfirmed is not None or self._migration_spool_backlog
+                or (latest > 0 and driver_count == 0)):
             raise RuntimeError(
                 "schema 7 migration requires equal generation cursors, empty spool, and no unconfirmed offer")
 
@@ -952,12 +957,22 @@ class EventStore:
                     projection_changed = (before is None or before["actionable_reason"] != reason
                                           or old_detail.get("availability") != state.availability)
                     disconnected_edge = adapter_connected is False and was_adapter_connected
-                    if (reason != "none" and projection_changed) or disconnected_edge:
-                        edge_reason = "unknown" if disconnected_edge and reason == "none" else reason
+                    gone_edge = pane_exists is False and old_detail.get("availability") != "gone"
+                    if (reason != "none" and projection_changed) or disconnected_edge or gone_edge:
+                        edge_reason = ("gone" if gone_edge else
+                                       "unknown" if disconnected_edge and reason == "none" else reason)
                         StoreTransaction(connection).bump_actionable(ActionableChange(
                             task_id, edge_reason,
                             "urgent" if edge_reason in {"gone", "blocked", "failed", "needs-action"} else "normal",
                             preserve_projection_reason=(edge_reason != reason)))
+
+    def activate_task_membership(self, task_id: str) -> None:
+        """Activate a task only from validated metadata membership."""
+        with self._lock, self._immediate() as connection:
+            connection.execute(
+                """INSERT INTO task_membership(task_id,present) VALUES(?,1)
+                   ON CONFLICT(task_id) DO UPDATE SET present=1,retirement_reason=NULL,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""", (task_id,))
 
     def retire_task_membership(self, task_id: str) -> None:
         """Retire controlled metadata removal without creating a wake."""

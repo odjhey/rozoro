@@ -67,9 +67,9 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unrelated_event_not_interrupted_by_metadata_rewrite(self):
         (self.state/'a.meta').write_text('pane=p1\n'); (self.state/'b.meta').write_text('pane=p2\n')
-        await self.monitor.start(); sub=self.subs[-1]
+        await self.monitor.start(); sub=next(item for item in self.subs if item.panes == ('p1',)); count=len(self.subs)
         (self.state/'b.meta').write_text('pane=p2\nchanged=yes\n'); await self.monitor.scan()
-        self.assertIs(sub,self.subs[-1])
+        self.assertEqual(count,len(self.subs)); self.assertNotIn(("close",('p1',)),self.log)
         await sub.queue.put(PaneLevel('p1','done',True)); await asyncio.sleep(0)
         self.assertIn(('a',True,'done'),self.seen)
 
@@ -97,15 +97,16 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_replaced_route_cannot_resurrect_but_unrelated_old_route_drains(self):
         (self.state/'a.meta').write_text('pane=p1\n'); (self.state/'b.meta').write_text('pane=pb\n')
         self.levels['p1']=PaneLevel('p1','idle',True); self.levels['pb']=PaneLevel('pb','idle',True)
-        await self.monitor.start(); old=self.subs[-1]
+        await self.monitor.start(); old=next(item for item in self.subs if item.panes == ('p1',)); unrelated=next(item for item in self.subs if item.panes == ('pb',))
         (self.state/'a.meta').write_text('pane=p2\n'); self.levels['p2']=PaneLevel('p2','unknown',False)
         replacing=asyncio.create_task(self.monitor.scan())
         for _ in range(20):
-            if len(self.subs)>1: break
+            if any(item.panes == ('p2',) for item in self.subs): break
             await asyncio.sleep(.005)
         await old.queue.put(PaneLevel('p1','done',True))
-        await old.queue.put(PaneLevel('pb','done',True))
+        await unrelated.queue.put(PaneLevel('pb','done',True))
         await replacing
+        self.assertNotIn(("close",('pb',)),self.log)
         self.assertNotIn(('a',True,'done'),self.seen)
         self.assertIn(('a',False,'unknown'),self.seen)
         self.assertIn(('b',True,'done'),self.seen)

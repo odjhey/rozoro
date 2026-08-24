@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import test from "node:test";
 import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
@@ -150,6 +151,27 @@ test("durable Pi custody is contiguous and reload continues at the exact next se
 	await waitFor(() => frames.filter((frame) => frame.type === "session.register").length === 2);
 	assert.deepEqual(frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).map((frame) => frame.producer_seq), [1,2,3,4]);
 	client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
+});
+
+test("twenty clients sharing one Pi session allocate one contiguous custody stream", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-shared-")); const path = join(dir, "monitor.sock");
+	const moduleUrl=pathToFileURL(join(process.cwd(),".pi/lib/rozoro-event-bus-client.ts")).href;
+	const script=`import {RozoroEventBusClient} from ${JSON.stringify(moduleUrl)}; new RozoroEventBusClient({socketPath:${JSON.stringify(path)},sessionId:"shared",role:"crew",taskId:"task-shared"});`;
+	await Promise.all(Array.from({length:20},()=>new Promise<void>((resolve,reject)=>{const child=spawn(process.execPath,["--experimental-strip-types","--input-type=module","-e",script]); child.once("exit",code=>code===0?resolve():reject(new Error(`producer exited ${code}`)));})));
+	const spool = join(dir,"pi-producers","shared","spool");
+	const sequences = (await readdir(spool)).filter((name) => name.endsWith(".json")).map((name) => Number(name.slice(0,16))).sort((a,b)=>a-b);
+	assert.deepEqual(sequences, Array.from({length:20}, (_,index)=>index+1));
+	await rm(dir,{recursive:true,force:true});
+});
+
+test("Pi custody rejects symlinked public and downgraded state", async () => {
+	for (const mode of ["symlink","public","downgrade"] as const) {
+		const dir=await mkdtemp(join(tmpdir(),"rozoro-pi-unsafe-")); const producer=join(dir,"pi-producers","unsafe"); await mkdir(producer,{recursive:true});
+		if (mode === "symlink") { const foreign=await mkdtemp(join(tmpdir(),"foreign-")); await symlink(foreign,join(producer,"spool")); }
+		else { await mkdir(join(producer,"spool")); await chmod(join(producer,"spool"),mode === "public" ? 0o755 : 0o700); await writeFile(join(producer,"custody-version"),mode === "downgrade" ? "1\n" : "2\n",{mode:0o600}); }
+		assert.throws(()=>new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}),/unsafe|unsupported/);
+		await rm(dir,{recursive:true,force:true});
+	}
 });
 
 test("stable driver identity matches fixed reconcile environment across resume", () => {

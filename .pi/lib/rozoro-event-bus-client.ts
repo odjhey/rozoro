@@ -56,6 +56,8 @@ export class RozoroEventBusClient {
 	private readonly producerDir: string;
 	private readonly spoolDir: string;
 	private readonly cursorPath: string;
+	private readonly versionPath: string;
+	private readonly lockPath: string;
 	private turn = 0;
 	private delivering?: number;
 	private notifications: number[] = [];
@@ -79,6 +81,8 @@ export class RozoroEventBusClient {
 		this.producerDir = options.producerStateDir ?? join(dirname(options.socketPath), "pi-producers", this.sessionId);
 		this.spoolDir = join(this.producerDir, "spool");
 		this.cursorPath = join(this.producerDir, "cursor-v1");
+		this.versionPath = join(this.producerDir, "custody-version");
+		this.lockPath = join(this.producerDir, ".allocation-lock");
 		this.restoreProducer();
 		this.sessionRegistration = { frame: this.event("session.register"), kind: "event" };
 		this.queue.push(this.sessionRegistration);
@@ -166,26 +170,42 @@ export class RozoroEventBusClient {
 		this.reconnectTimer.unref();
 	}
 
+	private validateCustodyEntry(path: string, kind: "file" | "directory"): void {
+		const info = lstatSync(path); const uid = process.geteuid?.();
+		const validKind = kind === "file" ? info.isFile() : info.isDirectory();
+		if (!validKind || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid) || (info.mode & 0o077) !== 0)
+			throw new Error(`unsafe Pi producer custody ${kind}`);
+	}
+
 	private restoreProducer(): void {
 		const home = resolve(dirname(this.options.socketPath));
 		const state = resolve(this.producerDir);
 		if (state !== home && !state.startsWith(`${home}/`)) throw new Error("Pi producer custody must stay inside Rozoro home");
-		const homeInfo = lstatSync(home); const uid = process.geteuid?.();
-		if (!homeInfo.isDirectory() || homeInfo.isSymbolicLink() || (uid !== undefined && homeInfo.uid !== uid) || (homeInfo.mode & 0o077) !== 0)
-			throw new Error("unsafe Rozoro home for Pi producer custody");
+		this.validateCustodyEntry(home, "directory");
 		for (const directory of [dirname(this.producerDir), this.producerDir, this.spoolDir]) {
-			if (!existsSync(directory)) mkdirSync(directory, {mode: 0o700});
-			const info = lstatSync(directory);
-			if (!info.isDirectory() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid) || (info.mode & 0o077) !== 0)
-				throw new Error("unsafe Pi producer custody directory");
+			try { mkdirSync(directory, {mode: 0o700}); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+			this.validateCustodyEntry(directory, "directory");
+		}
+		if (existsSync(this.versionPath)) {
+			this.validateCustodyEntry(this.versionPath, "file");
+			if (readFileSync(this.versionPath, "utf8") !== "2\n") throw new Error("unsupported Pi producer custody version");
+		} else {
+			if (existsSync(this.cursorPath) || readdirSync(this.spoolDir).length) throw new Error("unversioned Pi producer custody requires explicit rollback/reset");
+			try { writeFileSync(this.versionPath, "2\n", {mode: 0o600, flag: "wx"}); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+			this.validateCustodyEntry(this.versionPath, "file");
+			if (readFileSync(this.versionPath, "utf8") !== "2\n") throw new Error("unsupported Pi producer custody version");
 		}
 		if (existsSync(this.cursorPath)) {
+			this.validateCustodyEntry(this.cursorPath, "file");
 			const raw = readFileSync(this.cursorPath, "utf8").trim();
 			if (!/^(0|[1-9][0-9]*)$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error("invalid Pi producer cursor");
 			this.producerSeq = Number(raw);
 		}
 		const backlog = readdirSync(this.spoolDir).filter((name) => name.endsWith(".json")).map((name) => {
-			const frame = JSON.parse(readFileSync(join(this.spoolDir, name), "utf8")) as Frame;
+			const path = join(this.spoolDir, name); this.validateCustodyEntry(path, "file");
+			const frame = JSON.parse(readFileSync(path, "utf8")) as Frame;
 			if (!positive(frame.producer_seq) || typeof frame.event_id !== "string") throw new Error("invalid Pi producer spool");
 			return frame;
 		}).sort((a, b) => (a.producer_seq as number) - (b.producer_seq as number));
@@ -193,6 +213,35 @@ export class RozoroEventBusClient {
 			this.producerSeq = Math.max(this.producerSeq, frame.producer_seq as number);
 			this.queue.push({frame, kind: "event"});
 		}
+	}
+
+	private withAllocationLock<T>(operation: () => T): T {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				writeFileSync(this.lockPath, `${process.pid}\n`, {mode: 0o600, flag: "wx"}); break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 500) throw error;
+				try {
+					this.validateCustodyEntry(this.lockPath, "file");
+					const owner = Number(readFileSync(this.lockPath, "utf8").trim());
+					if (Number.isSafeInteger(owner)) try { process.kill(owner, 0); } catch { unlinkSync(this.lockPath); continue; }
+				} catch (lockError) { if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError; }
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+			}
+		}
+		try { return operation(); } finally { unlinkSync(this.lockPath); }
+	}
+
+	private currentProducerSeq(): number {
+		let current = 0;
+		if (existsSync(this.cursorPath)) current = Number(readFileSync(this.cursorPath, "utf8").trim());
+		for (const name of readdirSync(this.spoolDir).filter((item) => item.endsWith(".json"))) {
+			this.validateCustodyEntry(join(this.spoolDir, name), "file");
+			const frame = JSON.parse(readFileSync(join(this.spoolDir, name), "utf8")) as Frame;
+			if (!positive(frame.producer_seq)) throw new Error("invalid Pi producer spool");
+			current = Math.max(current, frame.producer_seq);
+		}
+		return current;
 	}
 
 	private persistEvent(frame: Frame): void {
@@ -229,7 +278,8 @@ export class RozoroEventBusClient {
 	}
 
 	private event(type: "session.register" | "turn.start" | "turn.stop"): Frame {
-		const seq = this.producerSeq + 1;
+		return this.withAllocationLock(() => {
+		const seq = this.currentProducerSeq() + 1;
 		const frame: Frame = { v: 1, type, event_id: `${this.sessionId}-${seq}-${randomUUID()}`, producer_seq: seq,
 			session_id: this.sessionId, harness: "pi", role: this.role };
 		if (this.role === "watchtower") frame.driver_id = this.driverId; else frame.task_id = this.taskId;
@@ -237,6 +287,7 @@ export class RozoroEventBusClient {
 		if (type === "turn.stop") { frame.turn_id = `${this.sessionId}-turn-${this.turn}`; frame.background_active = false; }
 		this.persistEvent(frame); this.producerSeq = seq;
 		return frame;
+		});
 	}
 
 	publish(type: "turn.start" | "turn.stop"): void {
