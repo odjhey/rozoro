@@ -27,7 +27,7 @@ ledger to bypass the refusal.
 # prior release
 ./bin/rozoro reconcile --driver <driver>
 # new release
-./bin/rozoro doctor              # verifies Python >=3.9 and other prerequisites
+./bin/rozoro doctor              # verifies Python >=3.10 and other prerequisites
 ./bin/rozoro monitor start
 ./bin/rozoro monitor status --json
 ./bin/rozoro status <task> --json
@@ -38,9 +38,9 @@ cursors, task identities, and `.meta` membership are not migrated or rewritten.
 
 ## Fresh install and health
 
-The monitor supports stock macOS Python 3.9.6 and newer runtimes, including
-Homebrew Python. If doctor reports an older runtime, run `brew install python`
-and ensure that installation's `python3` precedes the old interpreter on PATH.
+The monitor requires Python >=3.10 and does not support stock macOS Python
+3.9.6. If doctor reports an unsupported runtime, run `brew install python` and
+ensure that installation's `python3` precedes the stock interpreter on PATH.
 The start command performs the same version check before spawning `rozorod`, so
 adapter/spool callers receive the runtime error directly instead of waiting for
 a generic readiness timeout.

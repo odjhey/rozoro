@@ -10,10 +10,11 @@ import signal
 import sys
 from pathlib import Path
 
-if sys.version_info < (3, 9):
+if sys.version_info < (3, 10):
     print(
-        "rozorod: Python >=3.9 is required; install Homebrew Python with "
-        "`brew install python` and ensure its python3 is on PATH "
+        "rozorod: Python >=3.10 is required (stock macOS Python 3.9.6 is not "
+        "supported); install Homebrew Python with `brew install python` and "
+        "ensure its python3 precedes the stock interpreter on PATH "
         f"(found {sys.version.split()[0]} at {sys.executable})",
         file=sys.stderr,
     )

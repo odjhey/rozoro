@@ -26,7 +26,26 @@ SH
 
   run env PATH="$TEST_ROOT/doctor-path:/usr/bin:/bin:/usr/sbin:/sbin" "$REPO_ROOT/bin/rozoro" doctor
   assert_failure
-  assert_output_contains 'python3 >=3.9 required for the resident monitor'
+  assert_output_contains 'python3 >=3.10 required for the resident monitor'
+  assert_output_contains 'brew install python'
+}
+
+@test "doctor rejects stock macOS Python 3.9.6 with an actionable Homebrew PATH remediation" {
+  mkdir -p "$TEST_ROOT/doctor-path"
+  for command_name in bash dirname herdr jq; do
+    ln -s "$(command -v "$command_name")" "$TEST_ROOT/doctor-path/$command_name"
+  done
+  cat > "$TEST_ROOT/doctor-path/python3" <<'SH'
+#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'Python 3.9.6'; exit 0; fi
+exit 1
+SH
+  chmod +x "$TEST_ROOT/doctor-path/python3"
+
+  run env PATH="$TEST_ROOT/doctor-path:/usr/bin:/bin:/usr/sbin:/sbin" "$REPO_ROOT/bin/rozoro" doctor
+  assert_failure
+  assert_output_contains 'python3 >=3.10 required for the resident monitor'
+  assert_output_contains 'stock macOS Python 3.9.6 is not supported'
   assert_output_contains 'brew install python'
 }
 

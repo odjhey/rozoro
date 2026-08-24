@@ -11,10 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from lib.rozoro_monitor.store import _MIGRATIONS, SCHEMA_VERSION
 
-if os.environ.get("ROZORO_REQUIRE_PYTHON_39") == "1":
-    assert sys.version_info[:2] == (3, 9), sys.version
+if os.environ.get("ROZORO_REQUIRE_PYTHON_310") == "1":
+    assert sys.version_info[:2] == (3, 10), sys.version
 else:
-    assert sys.version_info >= (3, 9), sys.version
+    assert sys.version_info >= (3, 10), sys.version
 
 
 def run(*args, home, check=True):

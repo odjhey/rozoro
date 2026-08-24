@@ -20,7 +20,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping
 
 from .handoff import parse_task_report
 from .reducer import (
@@ -51,9 +51,7 @@ class ActionableChange:
 
 
 ReducerHook = Callable[["StoreTransaction", Mapping[str, Any], int], Any]
-# This alias is evaluated at import time even with postponed annotations.
-# Optional keeps the monitor importable on the supported Python 3.9 floor.
-ActionableHook = Callable[["StoreTransaction", Mapping[str, Any], int, Any], Optional[ActionableChange]]
+ActionableHook = Callable[["StoreTransaction", Mapping[str, Any], int, Any], ActionableChange | None]
 _DEFAULT_REDUCER = object()
 
 

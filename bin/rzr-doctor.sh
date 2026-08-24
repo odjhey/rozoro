@@ -31,10 +31,10 @@ for c in herdr jq; do
 done
 if ! command -v python3 >/dev/null 2>&1; then
   fail "python3 not found on PATH"
-elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-  pass "python3 $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))') ($(command -v python3); monitor minimum is 3.9)"
+elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+  pass "python3 $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))') ($(command -v python3); monitor minimum is 3.10)"
 else
-  fail "python3 >=3.9 required for the resident monitor (found $(python3 --version 2>&1) at $(command -v python3)); on macOS run: brew install python"
+  fail "python3 >=3.10 required for the resident monitor (stock macOS Python 3.9.6 is not supported; found $(python3 --version 2>&1) at $(command -v python3)); on macOS run: brew install python and put its python3 ahead of the stock interpreter on PATH"
 fi
 
 echo "herdr server:"

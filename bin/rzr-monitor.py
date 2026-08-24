@@ -14,8 +14,8 @@ import time
 import uuid
 from pathlib import Path
 
-MIN_PYTHON = (3, 9)
-PYTHON_ERROR = "Rozoro monitor requires Python >=3.9; install Homebrew Python with `brew install python` and ensure its python3 is on PATH"
+MIN_PYTHON = (3, 10)
+PYTHON_ERROR = "Rozoro monitor requires Python >=3.10 (stock macOS Python 3.9.6 is not supported); install Homebrew Python with `brew install python` and ensure its python3 precedes the stock interpreter on PATH"
 
 if sys.version_info < MIN_PYTHON:
     print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
