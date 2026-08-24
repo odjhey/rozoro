@@ -1,6 +1,6 @@
 # Artifact lifecycle
 
-This page shows when Rozoro's important artifacts come into existence and which boundaries are already implemented versus target refinements.
+This page shows when Rozoro's important artifacts come into existence and which boundaries are already implemented versus target capabilities.
 
 ## Creation sequence
 
@@ -28,7 +28,7 @@ sequenceDiagram
 
     D->>A: actionable task change
     Note over A: CURRENT: record generation membership + immutable snapshot
-    Note over A: TARGET: also CREATE stable mailbox item
+    Note over A: TARGET: create stable attention-item identity
 
     A-->>W: coalesced wake generation
     W->>D: reconcile generation
@@ -41,10 +41,10 @@ sequenceDiagram
 
     W->>D: ACK reconciled generation
     Note over D: generation delivery/reconcile state advances
-    Note over A: TARGET: independently mark selected mailbox items handled
+    Note over A: TARGET: independently mark selected attention items handled
 
     W->>R: resolve task open item when actually handled
-    Note over R: task ACK is separate from generation/mailbox handling
+    Note over R: task ACK is separate from generation/attention handling
 
     O->>W: accept/reap when appropriate
     W->>H: remove live host
@@ -53,6 +53,8 @@ sequenceDiagram
     W->>R: resume later
     R->>H: reopen exact native conversation
 ```
+
+The target attention layer is a capability contract. Its implementation may live in Rozoro or in an adapted dependency; the lifecycle below does not decide that ownership question.
 
 ## Artifact view
 
@@ -73,8 +75,8 @@ sequenceDiagram
 | Delivery offer/state | watchtower delivery cycle | offer/confirm/reconnect/reconcile transitions | yes | shipped |
 | Generation ACK | successful exact reconcile | monotonically by generation | yes | shipped |
 | Task open-item ACK | operator/watchtower resolves surfaced task item | per task cursor/state | yes | shipped |
-| Mailbox item | meaningful task-scoped attention reason | handled/superseded metadata | yes | **target** |
-| Mailbox item handled state | watchtower processes that specific item | independent per item | yes | **target** |
+| Attention item | meaningful task-scoped attention reason | handled/superseded metadata | yes | **target capability** |
+| Attention-item handled state | watchtower processes that specific item | independent per item | yes | **target capability** |
 
 ## Important ordering
 
@@ -90,7 +92,7 @@ Session / Task Projection
 actionable change
   ↓
 CURRENT: generation membership + snapshot
-TARGET:  mailbox item identity
+TARGET:  stable attention-item identity
   ↓
 coalesced wake delivery
   ↓
@@ -100,7 +102,7 @@ operator priority decision
   ↓
 selected steering/action
   ↓
-generation ACK / mailbox handled state
+generation ACK / attention-item handled state
   ↓
 task open-item resolution
   ↓
@@ -114,7 +116,7 @@ Each layer answers a different question:
 - **Event Log:** what happened?
 - **Projection:** what is true now?
 - **Generation:** which immutable batch was offered/reconciled for wake delivery?
-- **Mailbox item (target):** which specific task-scoped reason still deserves watchtower attention?
+- **Attention item (target):** which specific task-scoped reason still deserves watchtower attention?
 - **Task open item:** what underlying work remains unresolved?
 - **Operator acceptance:** are we satisfied with the result?
 
