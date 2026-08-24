@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
 FIXTURE = json.loads((ROOT / "tests/fixtures/claude-hooks-2.1.240.json").read_text())
 FIXTURES = [
+    FIXTURE,
     json.loads((ROOT / "tests/fixtures/claude-hooks-2.1.241.json").read_text()),
 ]
 SPEC = importlib.util.spec_from_file_location("claude_rozoro_event", ROOT / "hooks/claude-rozoro-event.py")
@@ -106,22 +107,32 @@ class ClaudeProducerTests(unittest.TestCase):
     def test_fixture_maps_only_frozen_lifecycle_fields(self):
         expected = ["session.register", "turn.start", "background.start",
                     "turn.stop", "turn.stop", "turn.stop", "session.end"]
-        mapped = []
-        with identity():
-            for payload in FIXTURE["payloads"]:
-                events = HOOK.map_payload(payload)
-                mapped.extend(event["type"] for event in events if event["type"] != "background.snapshot")
-                encoded = json.dumps(events)
-                for secret in ("prompt", "last_assistant_message", "description", "command", "transcript"):
-                    self.assertNotIn(secret, encoded)
-        self.assertEqual(mapped, expected)
+        for fixture in FIXTURES:
+            with self.subTest(version=fixture["claude_code_version"]):
+                mapped = []
+                with identity(session=fixture["redactions"]["session_id"]):
+                    for payload in fixture["payloads"]:
+                        events = HOOK.map_payload(payload)
+                        mapped.extend(event["type"] for event in events
+                                      if event["type"] != "background.snapshot")
+                        encoded = json.dumps(events)
+                        for secret in ("prompt", "last_assistant_message", "description",
+                                       "command", "transcript"):
+                            self.assertNotIn(secret, encoded)
+                self.assertEqual(mapped, expected)
 
     def test_fixture_compatibility_range(self):
         for fixture in FIXTURES:
             with self.subTest(version=fixture["claude_code_version"]):
                 with identity(session=fixture["redactions"]["session_id"]):
                     mapped = [event["type"] for payload in fixture["payloads"] for event in HOOK.map_payload(payload)]
-                self.assertEqual(mapped[0], "session.register")
+                self.assertEqual(
+                    mapped,
+                    ["session.register", "turn.start", "background.start",
+                     "turn.stop", "background.snapshot", "turn.stop",
+                     "background.snapshot", "turn.stop", "background.snapshot",
+                     "session.end"],
+                )
 
     def test_stop_snapshots_certify_active_active_clear_and_missing_is_unknown(self):
         stops = [item for item in FIXTURE["payloads"] if item["hook_event_name"] == "Stop"]

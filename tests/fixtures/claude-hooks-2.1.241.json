@@ -159,6 +159,12 @@
     }
   ],
   "outcome_evidence": {
+    "certification": {
+      "claude_code_version": "2.1.241",
+      "probe": "background-agent",
+      "observed_sequence": ["active", "active", "clear"],
+      "capture": "live-hook-capability-probe"
+    },
     "background_sequence": {
       "probe": "background-agent",
       "stop_snapshots": [

@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / "tests/fixtures/claude-hooks-2.1.240.json"
 PROBE = ROOT / "tests/live/claude-hook-capability-probe.sh"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -24,10 +23,10 @@ EXPECTED_FIELDS = {
 }
 
 
-class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
+class ClaudeHookCapabilityFixtureAssertions:
     @classmethod
     def setUpClass(cls) -> None:
-        cls.fixture = json.loads(FIXTURE.read_text())
+        cls.fixture = json.loads(cls.fixture_path.read_text())
         cls.payloads = cls.fixture["payloads"]
 
     def test_all_required_hooks_have_exact_observed_fields(self) -> None:
@@ -99,8 +98,15 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
             "fixture_version", "claude_code_version", "captured_with",
             "redactions", "payloads", "stream_hook_events", "outcome_evidence",
         })
-        self.assertEqual(self.fixture["claude_code_version"], "2.1.240")
+        version = self.fixture["claude_code_version"]
+        self.assertIn(version, {"2.1.240", "2.1.241"})
         self.assertIn("--no-session-persistence", self.fixture["captured_with"])
+        self.assertEqual(self.fixture["outcome_evidence"]["certification"], {
+            "claude_code_version": version,
+            "probe": "background-agent",
+            "observed_sequence": ["active", "active", "clear"],
+            "capture": "live-hook-capability-probe",
+        })
         redactions = self.fixture["redactions"]
         self.assertEqual(redactions, {
             "session_id": "00000000-0000-4000-8000-000000000001",
@@ -124,7 +130,7 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
                 self.assertEqual(task["description"], "<redacted>")
                 if "command" in task:
                     self.assertEqual(task["command"], "<redacted>")
-        text = FIXTURE.read_text()
+        text = self.fixture_path.read_text()
         allowed_uuids = {
             "00000000-0000-4000-8000-000000000001",
             "00000000-0000-4000-8000-000000000002",
@@ -209,6 +215,16 @@ class ClaudeHookCapabilityFixtureTest(unittest.TestCase):
             self.assertIn(required, script)
         for forbidden in ("~/.claude", "$HOME/.claude", "settings.json >"):
             self.assertNotIn(forbidden, script)
+
+
+class TestClaudeHookCapabilityFixture240(ClaudeHookCapabilityFixtureAssertions,
+                                         unittest.TestCase):
+    fixture_path = ROOT / "tests/fixtures/claude-hooks-2.1.240.json"
+
+
+class TestClaudeHookCapabilityFixture241(ClaudeHookCapabilityFixtureAssertions,
+                                         unittest.TestCase):
+    fixture_path = ROOT / "tests/fixtures/claude-hooks-2.1.241.json"
 
 
 if __name__ == "__main__":
