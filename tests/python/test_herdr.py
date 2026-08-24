@@ -112,6 +112,23 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.01)
         self.assertIsNot(first, self.subs[-1]); self.assertTrue(self.monitor.connected)
 
+    async def test_staged_stream_failure_before_route_commit_forces_rebuild(self):
+        (self.state/'a.meta').write_text('pane=p1\n'); await self.monitor.scan(force=True)
+        retiring=asyncio.Event(); release=asyncio.Event()
+        async def retire(_): retiring.set(); await release.wait()
+        self.monitor.retire=retire
+        (self.state/'a.meta').unlink(); (self.state/'b.meta').write_text('pane=p2\n')
+        replacing=asyncio.create_task(self.monitor.scan())
+        await retiring.wait()
+        staged=next(sub for sub in self.subs if sub.panes == ('p2',))
+        await staged.queue.put(ConnectionError('lost before commit'))
+        for _ in range(20):
+            if self.monitor._force_rebuild: break
+            await asyncio.sleep(.005)
+        release.set(); await replacing
+        self.assertTrue(self.monitor._force_rebuild)
+        self.assertTrue(self.monitor._wake.is_set())
+
     async def test_old_replaced_route_cannot_resurrect_but_unrelated_old_route_drains(self):
         (self.state/'a.meta').write_text('pane=p1\n'); (self.state/'b.meta').write_text('pane=pb\n')
         self.levels['p1']=PaneLevel('p1','idle',True); self.levels['pb']=PaneLevel('pb','idle',True)

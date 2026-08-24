@@ -99,7 +99,7 @@ class MembershipMonitor:
         self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
         self._force_rebuild=False; self._dir_signature=None
         self._active_token=None; self._pane_epoch: dict[str,int]={}; self._apply_lock=asyncio.Lock()
-        self._route_generation: dict[str,int]={}; self._routes={}
+        self._route_generation: dict[str,int]={}; self._routes={}; self._owned_route_tokens=set()
     def hint(self): self._wake.set()
     async def start(self):
         try: await self.scan(force=True)
@@ -137,7 +137,13 @@ class MembershipMonitor:
             if task not in found and any(error.startswith(task+".meta:") for error in result.errors): found[task]=member
         changed=set(found) != set(self.members) or any(found[k].pane_id != self.members[k].pane_id for k in set(found)&set(self.members))
         if force or self._force_rebuild or changed:
-            await self._replace(found,rebuild=force or self._force_rebuild); self._force_rebuild=False; return True
+            rebuild=force or self._force_rebuild
+            self._force_rebuild=False
+            try: await self._replace(found,rebuild=rebuild)
+            except Exception:
+                if rebuild: self._force_rebuild=True
+                raise
+            return True
         levels_ok=await self._levels(self.members)
         self.connected=bool(self.members) and levels_ok and all(not route[1].done() for route in self._routes.values())
         if self.connected and not self.last_scan_errors: self.last_error=None
@@ -157,6 +163,7 @@ class MembershipMonitor:
                 member=found[task]; generation=self._route_generation.get(task,0)+1
                 sub=self.subscriber((member.pane_id,)); await sub.start()
                 token=object(); routing={task:(member,generation)}
+                self._owned_route_tokens.add(token)
                 consumer=asyncio.create_task(self._consume(sub,token,routing))
                 staged[task]=(sub,consumer,token,generation)
                 self._route_generation[task]=generation
@@ -167,7 +174,8 @@ class MembershipMonitor:
                 if consumer.done(): await consumer; raise ConnectionError("new Herdr stream died during level reconciliation")
         except Exception:
             self._route_generation=previous_generations
-            for sub,consumer,_,_ in staged.values():
+            for sub,consumer,token,_ in staged.values():
+                self._owned_route_tokens.discard(token)
                 consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True); await sub.close()
             if self.retire:
                 for task in reversed(activated): await self.retire(task)
@@ -185,7 +193,8 @@ class MembershipMonitor:
         if self.connected and not self.last_scan_errors: self.last_error=None
         elif not found: self.last_error="no resident members; configured Herdr socket untested"
         elif not levels_ok: self.last_error="Herdr level RPC unavailable"
-        for sub,consumer,_,_ in old_routes.values():
+        for sub,consumer,token,_ in old_routes.values():
+            self._owned_route_tokens.discard(token)
             await asyncio.sleep(self.drain_interval); await sub.close()
             try: await asyncio.wait_for(consumer,self.drain_interval)
             except TimeoutError: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
@@ -224,7 +233,7 @@ class MembershipMonitor:
             raise ConnectionError("Herdr subscription ended")
         except asyncio.CancelledError: pass
         except Exception as exc:
-            if any(route[2] is token for route in self._routes.values()):
+            if token in self._owned_route_tokens:
                 self.connected=False; self.last_error=str(exc)[:128]; self._force_rebuild=True; self.hint()
     def health(self):
         return {"herdr_connected":self.connected,"herdr_last_error":self.last_error,
@@ -233,6 +242,7 @@ class MembershipMonitor:
         for task in (self._runner,self._hints):
             if task: task.cancel()
         await asyncio.gather(*(t for t in (self._runner,self._hints) if t),return_exceptions=True)
+        self._owned_route_tokens.clear()
         for sub,consumer,_,_ in self._routes.values():
             await sub.close(); consumer.cancel()
         await asyncio.gather(*(route[1] for route in self._routes.values()),return_exceptions=True)
