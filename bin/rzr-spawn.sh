@@ -126,7 +126,7 @@ case "$HARNESS" in
     [ "$EVENT_BUS" = true ] && SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
 esac
 EVENT_SETTINGS=""
-if [ "$EVENT_BUS" = true ]; then
+if [ "$HARNESS" = claude ]; then
   EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$SESSION_ID")" || exit 1
 fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then

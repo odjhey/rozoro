@@ -107,7 +107,7 @@ CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
 EVENT_SETTINGS=""
-if [ "$EVENT_BUS" = true ]; then
+if [ "$HARNESS" = claude ]; then
   EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$UUID")" || exit 1
 fi
 

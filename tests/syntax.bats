@@ -41,6 +41,11 @@ load test_helper/common
   assert_success
 }
 
+@test "Codex structured lifecycle adapter covers ten-second completion" {
+  run python3 "$REPO_ROOT/tests/codex-event-adapter.test.py"
+  assert_success
+}
+
 @test "Python helpers compile into the isolated bytecode root" {
   run python3 -m py_compile "$REPO_ROOT/bin/herdr-eventwait.py" "$REPO_ROOT/tests/test_helper/event_server.py"
   assert_success
