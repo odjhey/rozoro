@@ -1,6 +1,6 @@
 # Rozoro product documentation
 
-`docs/` is the product alignment point for Rozoro: the place to describe the system we are intentionally converging toward, while keeping the distinction between **already shipped substrate** and **remaining product decisions** explicit.
+`docs/` is the product alignment point for Rozoro: the place to describe the system we are intentionally converging toward, while keeping the distinction between **already shipped substrate**, **required capabilities**, and **still-open implementation ownership** explicit.
 
 The README remains the operator-facing description of the current CLI. Implementation plans describe delivery sequences. These product docs describe the durable concepts and boundaries that should survive individual implementations.
 
@@ -22,11 +22,11 @@ The intended operating model is:
 1. The **operator** supplies intent, business priority, and final acceptance.
 2. The **watchtower** decomposes/dispatches/steers work and presents factual fleet state, but does not silently invent business priority.
 3. **Crew sessions** do repository/domain work using the target repository's own rules and tools.
-4. Harness-native lifecycle facts are normalized into Rozoro; Herdr provides hosting/liveness/actuation rather than semantic completion truth.
-5. `rozorod` durably records normalized events and reduces them into current projections before wake delivery is considered authoritative.
+4. Structured harness lifecycle facts are normalized conservatively; terminal hosting/liveness is not semantic completion truth.
+5. The current `rozorod` path durably records normalized events and reduces them into current projections before wake delivery is considered authoritative.
 6. Wake **generations** are delivery batches, not task identities and not operator work items.
-7. The target **Watchtower Mailbox** adds stable task-scoped attention-item identity and partial handling on top of the shipped event/projection/generation substrate.
-8. Task open-item resolution, notification delivery, watchtower reconciliation, and operator acceptance remain distinct operations.
+7. The target product requires stable task-scoped **attention-item identity** and partial handling. We call this the Watchtower Mailbox capability, but ACP/acpx and existing local-first tools should be evaluated before Rozoro owns another subsystem.
+8. Task open-item resolution, notification delivery, watchtower reconciliation, attention-item handling, and operator acceptance remain distinct operations.
 
 ## Principles
 
@@ -36,8 +36,9 @@ The intended operating model is:
 - **Projection is current truth.** Events answer what happened; projections answer what is true now.
 - **Delivery batches are not work items.** Coalescing may reduce wake spam, but it must not erase per-task attribution.
 - **Task identity outlives hosting.** Brief, handoff history, and exact-resume linkage survive host teardown.
+- **Prefer adoption over reinvention.** Product contracts can remain firm while their implementation is delegated to ACP/acpx or another dependency that satisfies them.
 - **Keep Rozoro small.** Repository workflows, PR policy, testing policy, merge authority, and harness-native subagent orchestration remain outside the core.
 
 ## Reading rule
 
-When a document describes something not yet implemented, it must say so. Target-state language is useful only if readers can still tell where current runtime behavior ends and the intended product begins.
+When a document describes something not yet implemented, it must say so. When a capability is required but implementation ownership is still open, say that too. Target-state language is useful only if readers can tell where current runtime behavior ends and the intended product begins.
