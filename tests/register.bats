@@ -56,6 +56,34 @@ load test_helper/common
   [ "$(jq -r .identity "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json")" = driver-pane ]
 }
 
+@test "early empty harness is bounded-retriable, not a terminal harness mismatch" {
+  # During Herdr startup a pane can report an agent record whose harness is still
+  # empty while interactive_ready/pane_id are already populated. Field positions
+  # must be preserved so this stays the retriable 'does not report a harness'
+  # transient the watchtower retries, never the terminal 'does not match'.
+  export HERDR_PANE_ID=driver-pane
+  fake_pane driver-pane idle "" true
+  run rzr-register.sh --harness claude
+  assert_failure
+  assert_output_contains 'does not report a harness'
+  case "$output" in *'does not match'*) printf 'empty harness must not surface as a terminal mismatch:\n%s\n' "$output" >&2; return 1 ;; esac
+  [ ! -e "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json" ]
+}
+
+@test "empty Pi harness with a populated agent_session stays retriable" {
+  # Leading empty field followed by populated later columns is the exact shape
+  # that tab-as-IFS collapse would shift, mis-reading the session path into the
+  # harness slot. Position preservation keeps this the retriable transient.
+  export HERDR_PANE_ID=driver-pane
+  session="$TEST_ROOT/pi-session.jsonl"; : > "$session"; chmod 600 "$session"
+  fake_pane driver-pane idle "" false "$session"
+  run rzr-register.sh --harness pi --backend herdr --agent-session "$session"
+  assert_failure
+  assert_output_contains 'does not report a harness'
+  case "$output" in *'does not match'*) printf 'empty harness must not surface as a terminal mismatch:\n%s\n' "$output" >&2; return 1 ;; esac
+  [ ! -e "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json" ]
+}
+
 @test "manual Pi registration refuses stale agent_session identity" {
   export HERDR_PANE_ID=driver-pane
   : > "$TEST_ROOT/current.jsonl"; chmod 600 "$TEST_ROOT/current.jsonl"

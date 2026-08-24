@@ -51,11 +51,13 @@ codex_ok() { [ -n "${CODEX_THREAD_ID:-}" ] && command -v codex >/dev/null 2>&1 &
 # Validate the herdr pane actually runs the declared harness before pinning it.
 validate_herdr() {
   [ -n "${HERDR_PANE_ID:-}" ] || rzr_die "herdr backend requires HERDR_PANE_ID from the resident pane"
-  local out hp ready reported_pane session_kind session_source session_value
+  local out _field hp ready reported_pane session_kind session_source session_value
+  local -a fields=()
   out=$(rzr_herdr agent get "$HERDR_PANE_ID" 2>/dev/null) || rzr_die "herdr does not report a live agent for pane '$HERDR_PANE_ID'"
-  IFS=$'\t' read -r hp ready reported_pane session_kind session_source session_value <<EOF
-$(printf '%s' "$out" | jq -r '(.result.agent // .result // .) as $a | [($a.agent // $a.kind // $a.harness // "" | ascii_downcase), (($a.interactive_ready // false) | tostring), ($a.pane_id // ""), ($a.agent_session.kind // ""), ($a.agent_session.source // ""), ($a.agent_session.value // "")] | @tsv' 2>/dev/null || true)
-EOF
+  while IFS= read -r -d '' _field; do fields+=("$_field"); done \
+    < <(printf '%s' "$out" | jq -j '(.result.agent // .result // .) as $a | [($a.agent // $a.kind // $a.harness // "" | ascii_downcase), (($a.interactive_ready // false) | tostring), ($a.pane_id // ""), ($a.agent_session.kind // ""), ($a.agent_session.source // ""), ($a.agent_session.value // "")] | .[] | (. + "\u0000")' 2>/dev/null || true)
+  hp="${fields[0]:-}" ready="${fields[1]:-}" reported_pane="${fields[2]:-}"
+  session_kind="${fields[3]:-}" session_source="${fields[4]:-}" session_value="${fields[5]:-}"
   [ -n "$hp" ] || rzr_die "herdr does not report a harness for pane '$HERDR_PANE_ID' (is the agent live?)"
   [ "$hp" = "$HARNESS" ] || rzr_die "declared harness '$HARNESS' does not match pane '$HERDR_PANE_ID' (herdr reports '$hp') — refusing to wake the wrong session"
   [ "$reported_pane" = "$HERDR_PANE_ID" ] || rzr_die "herdr agent identity does not match pane '$HERDR_PANE_ID'"
