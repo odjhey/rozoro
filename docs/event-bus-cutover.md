@@ -100,9 +100,10 @@ explicitly even when its task cwd is another repository. No `ROZORO_EVENT_BUS*`
 variable is required or supported.
 
 Use `monitor status --json` to diagnose: daemon down (`running=false`), Herdr
-`connected`/`disconnected`, adapter-derived `unknown`, delivery `deferred`,
-`delivered` with generation above ACK, retry/error counters, and spool backlog.
-A live pane with a disconnected adapter remains `unknown`, never quiescent.
+`connected`/`disconnected`, adapter-derived `unknown`, delivery `settled` when no
+generation is pending or awaiting ACK, `deferred`, `delivered` with generation
+above ACK, retry/error counters, and spool backlog. A live pane with a
+disconnected adapter remains `unknown`, never quiescent.
 
 ## Rollback
 
