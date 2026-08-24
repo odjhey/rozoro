@@ -2,12 +2,14 @@
 
 Use these defaults when you dispatch crew. Keep each crewmate focused on one job. Do not let roles blur together just because a crew is already running.
 
+Use the canonical model IDs written below. Reasoning effort is a separate setting. Do not invent model names from the shorthand, for example `luna-high` or `gpt-5.6-luna-high`.
+
 Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer, tester, decomposer, or replanner to run it as part of their own work.
 
-* **Task Decomposer, Sol High**
+* **Task Decomposer, `gpt-5.6-sol`, high reasoning effort**
 
-  * Break if the task/plan if too broad, ambiguous, or lacking context, into bounded tasks that a coder can execute.
-  * Use the existing contracts, ports, repo docs, dependencies, and boundaries, or any other found in docs.
+  * If the task or plan is too broad, ambiguous, or lacking context, break it into bounded tasks that a coder can execute.
+  * Use the existing contracts, ports, repo docs, dependencies, boundaries, and anything else relevant in the docs.
   * Make the acceptance criteria explicit.
   * Do not implement.
   * Do not run no-mistakes.
@@ -19,7 +21,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * assumptions;
     * unresolved ambiguity.
 
-* **Coder, Sol Low**
+* **Coder, `gpt-5.6-sol`, low reasoning effort**
 
   * Give the coder the output from the Task Decomposer.
   * The coder should implement that task, not reopen the whole plan.
@@ -39,7 +41,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **Reviewer, Luna High**
+* **Reviewer, `gpt-5.6-luna`, high reasoning effort**
 
   * Give the reviewer a fresh context.
   * Ask it to review the implementation against the task, contracts, surrounding code, and acceptance criteria.
@@ -59,7 +61,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **Tester, Luna High**
+* **Tester, `gpt-5.6-luna`, high reasoning effort**
 
   * Ask the tester to try to break the implementation.
   * Tests should come from the use case, contracts, decomposition, acceptance criteria, and failure modes, not only from reading the implementation.
@@ -87,15 +89,16 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **No-Mistakes Runner, Luna High**
+* **No-Mistakes Runner, `gpt-5.6-luna`, high reasoning effort**
 
   * This is the only crew role that runs no-mistakes.
-  * Dispatch the runner itself with Luna High.
+  * Dispatch the runner itself with model `gpt-5.6-luna` and high reasoning effort.
   * Dispatch it after the normal coding, review, and test work when you want the no-mistakes pass.
   * Ask it to run the actual no-mistakes workflow. Do not substitute a normal review prompt.
-  * When invoking no-mistakes, pass the model explicitly through its model flag or local config.
-  * Prefer Sonnet High for the no-mistakes workflow.
-  * If Sonnet is usage-limited and waiting for cooldown, use Luna High for the no-mistakes workflow instead. Do not hold the task just to wait for Sonnet capacity.
+  * When invoking no-mistakes, pass the canonical model ID explicitly through its model flag or local config. Set reasoning effort separately.
+  * Prefer model `claude-sonnet-5` with high reasoning effort for the no-mistakes workflow.
+  * If `claude-sonnet-5` is usage-limited and waiting for cooldown, use model `gpt-5.6-luna` with high reasoning effort instead. Do not hold the task just to wait for Sonnet capacity.
+  * Do not invent or substitute another Luna or Sonnet model ID.
   * It should look for things the coder, reviewer, and tester may all have missed.
   * This includes failure paths, concurrency, retries, idempotency, cleanup, corrupted state, security boundaries, regressions, and bad assumptions.
   * Ask for a report that includes:
@@ -106,11 +109,11 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * affected contract, invariant, or use case;
     * whether the problem is local or needs re-planning;
     * remaining uncertainty;
-    * model used by the no-mistakes workflow;
+    * model ID and reasoning effort used by the no-mistakes workflow;
     * `attempt_count`;
     * `caused_by`.
 
-* **Escalation Replanner, Sol High**
+* **Escalation Replanner, `gpt-5.6-sol`, high reasoning effort**
 
   * Use this when repeated coder, review, or test loops are not converging.
   * Before you dispatch it, harvest the useful reports from the current crew and abandon that crew as the active owner.
@@ -132,7 +135,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **Watchtower, Sol High**
+* **Watchtower, `gpt-5.6-sol`, high reasoning effort**
 
   * You own dispatch and routing.
   * Keep the global view across all tasks and reports.
