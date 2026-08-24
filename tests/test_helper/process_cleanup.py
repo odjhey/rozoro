@@ -18,7 +18,7 @@ def _command(pid: int) -> str:
     try:
         return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
     except (OSError, UnicodeError):
-        result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], text=True,
+        result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], text=True, check=False,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         return result.stdout.strip() if result.returncode == 0 else ""
 
