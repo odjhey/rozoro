@@ -2,7 +2,7 @@
 
 Last reconciled with `master`: 2026-08-24.
 
-PR #46 originally described several event-bus capabilities as target architecture. Since then, the event-bus stack shipped through the implementation sequence culminating in the production cutover. This page prevents the product model from becoming stale by separating **shipped substrate** from **remaining target behavior**.
+PR #46 originally described several event-bus capabilities as target architecture. Since then, the event-bus stack shipped through the implementation sequence culminating in the production cutover. The current README also pauses further lower-level extraction while ACP/acpx and existing tooling are evaluated. This page separates shipped substrate from required product capabilities without prematurely deciding who must implement them.
 
 ## Shipped substrate
 
@@ -21,23 +21,23 @@ PR #46 originally described several event-bus capabilities as target architectur
 | ACK separation | `reconcile` ACKs a delivered generation; task `ack` resolves surfaced handoff/open-item state separately. |
 | Production cutover | The legacy watcher is diagnostic/compatibility only for daemon-managed Pi and supported Claude operation. |
 
-The current implementation therefore already satisfies much of the original #46 event/projection/notification architecture. Those concepts should now be documented as **foundations**, not aspirational features.
+The current implementation therefore already satisfies much of the original #46 event/projection/notification architecture. Those concepts are foundations, not aspirational features.
 
 ## Remaining target behavior
 
-### 1. First-class Watchtower Mailbox
+### 1. First-class watchtower attention identity
 
 The shipped delivery ledger is still generation-centric. `pending_generation_tasks` preserves task attribution inside a generation, but the watchtower ultimately reconciles/ACKs the generation as a unit.
 
-The target mailbox adds:
+The product still needs the capability usually described here as a Watchtower Mailbox:
 
 - a stable identity for each task-scoped attention reason;
 - independent observed/handled state;
 - partial handling when many crews report together;
 - explicit supersession without deleting history;
-- generations that reference mailbox items for delivery batching rather than serving as the item identity themselves.
+- delivery batches that reference attention items rather than serving as the item identity themselves.
 
-This is an additive refinement of the shipped event/projection/generation stack, not a replacement for it.
+What is **not** decided is that Rozoro must build and own another mailbox subsystem. ACP/acpx and off-the-shelf local-first tools should be tested against this contract first. If an existing component satisfies it cleanly, Rozoro should adapt rather than rebuild.
 
 ### 2. Fleet-scale attention UX
 
@@ -53,7 +53,15 @@ The product must preserve factual ordering and attribution without silently conv
 
 ### 3. Harness parity where evidence exists
 
-Pi and Claude currently have the strongest semantic event-bus integration. Codex/Copilot lifecycle parity should be added only when their native lifecycle evidence can support the same conservative contracts. Unknown/uncertified state is preferable to guessing from terminal idleness.
+Pi and Claude currently have the strongest Rozoro-specific semantic event-bus integration. Equivalent lifecycle capability is still required for other harnesses, but new Rozoro-specific adapters are not the default answer.
+
+Prefer, in order:
+
+1. a proven ACP/acpx or upstream harness contract;
+2. a thin adapter over an existing structured lifecycle source;
+3. a Rozoro-specific adapter only when a real gap remains.
+
+Unknown or uncertified state is preferable to guessing from terminal idleness.
 
 ### 4. Keep workflow policy above the core
 
@@ -67,7 +75,7 @@ Future implementation work should preserve these already-shipped contracts unles
 Event durability
   != notification delivery
   != generation reconciliation/ACK
-  != mailbox-item handling (target)
+  != attention-item handling (target capability)
   != task open-item resolution
   != operator acceptance
 ```
