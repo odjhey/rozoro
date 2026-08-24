@@ -75,11 +75,11 @@ case "$HARNESS" in
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
 EVENT_BUS=false
-[ "$HARNESS" = claude ] && EVENT_BUS=true
+case "$HARNESS" in claude|codex) EVENT_BUS=true ;; esac
 if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
   "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
 fi
-[ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
+[ "$HARNESS" != claude ] || rzr_claude_event_capability || exit 1
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
 if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then
   jq -e '
@@ -107,7 +107,7 @@ CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
 EVENT_SETTINGS=""
-if [ "$EVENT_BUS" = true ]; then
+if [ "$HARNESS" = claude ]; then
   EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$UUID")" || exit 1
 fi
 
@@ -230,6 +230,13 @@ do_resume() {
     rzr_die "herdr agent start ($HARNESS resume) failed in pane $pane: $sout; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
+  if [ "$HARNESS" = codex ]; then
+    codex_store="${CODEX_HOME:-$HOME/.codex}/sessions"
+    "$RZR_BIN/rzr-codex-event-adapter.py" --task "$ID" --cwd "$CWD" --session "$UUID" \
+      --store "$codex_store" --socket "$ROZORO_HOME/monitor.sock" \
+      >>"$(rzr_task_dir "$ID")/codex-event-adapter.log" 2>&1 &
+    rzr_meta_set "$ID" event_adapter_pid "$!"
+  fi
 
   if [ -n "$PROMPT" ]; then
     rzr_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \

@@ -24,6 +24,11 @@ rzr_task_exists "$ID" || rzr_die "no such task '$ID'"
 [ "$FORCE" -eq 0 ] || echo "rzr: warning: --force is deprecated and unnecessary; teardown never inspects repository state" >&2
 
 TAB=$(rzr_meta_get "$ID" tab || true)
+ADAPTER_PID=$(rzr_meta_get "$ID" event_adapter_pid || true)
+if [[ "$ADAPTER_PID" =~ ^[0-9]+$ ]] && [ -r "/proc/$ADAPTER_PID/cmdline" ] && \
+   tr '\0' ' ' <"/proc/$ADAPTER_PID/cmdline" | grep -Fq "rzr-codex-event-adapter.py --task $ID "; then
+  kill "$ADAPTER_PID" 2>/dev/null || true
+fi
 if [ "$KEEP" -eq 0 ] && [ -n "$TAB" ]; then
   rzr_herdr tab close "$TAB" >/dev/null 2>&1 \
     && echo "rzr: closed tab $TAB" \
