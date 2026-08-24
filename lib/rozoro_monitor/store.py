@@ -705,16 +705,15 @@ class EventStore:
         """Evidence-preserving repair of schema-6 mutable state."""
         if not upgrading_v6:
             return
-        if upgrading_v6:
-            unsettled = connection.execute(
-                """SELECT driver_id FROM watchtower_deliveries
-                   WHERE latest_generation<>delivered_generation
-                      OR delivered_generation<>acked_generation LIMIT 1""").fetchone()
-            unconfirmed = connection.execute(
-                "SELECT 1 FROM delivery_offers WHERE confirmed=0 LIMIT 1").fetchone()
-            if unsettled is not None or unconfirmed is not None or self._migration_spool_backlog:
-                raise RuntimeError(
-                    "schema 7 migration requires equal generation cursors, empty spool, and no unconfirmed offer")
+        unsettled = connection.execute(
+            """SELECT driver_id FROM watchtower_deliveries
+               WHERE latest_generation<>delivered_generation
+                  OR delivered_generation<>acked_generation LIMIT 1""").fetchone()
+        unconfirmed = connection.execute(
+            "SELECT 1 FROM delivery_offers WHERE confirmed=0 LIMIT 1").fetchone()
+        if unsettled is not None or unconfirmed is not None or self._migration_spool_backlog:
+            raise RuntimeError(
+                "schema 7 migration requires equal generation cursors, empty spool, and no unconfirmed offer")
 
         observed = inventory(self.state_dir)
         if observed.errors:
@@ -843,12 +842,6 @@ class EventStore:
             )
             durable_seq = int(cursor.lastrowid)
             tx = StoreTransaction(connection)
-            before_projection = None
-            if reducer is _DEFAULT_REDUCER and event.get("task_id"):
-                before_projection = connection.execute(
-                    "SELECT availability,report_state,verdict,actionable_reason,projection_json FROM task_projections WHERE task_id=?",
-                    (event["task_id"],),
-                ).fetchone()
             if reducer is _DEFAULT_REDUCER:
                 reduced = _reduce_projection(tx, event, durable_seq, self.tasks_dir)
             else:
