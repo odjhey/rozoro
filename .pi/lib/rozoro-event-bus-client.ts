@@ -213,11 +213,14 @@ export class RozoroEventBusClient {
 			this.producerSeq = Number(raw);
 		}
 		const backlog = readdirSync(this.spoolDir).filter((name) => name.endsWith(".json")).map((name) => {
-			const path = join(this.spoolDir, name); this.validateCustodyEntry(path, "file");
-			const frame = JSON.parse(readFileSync(path, "utf8")) as Frame;
-			this.validateRestoredFrame(frame);
-			return frame;
-		}).sort((a, b) => (a.producer_seq as number) - (b.producer_seq as number));
+			try {
+				const path = join(this.spoolDir, name); this.validateCustodyEntry(path, "file");
+				const frame = JSON.parse(readFileSync(path, "utf8")) as Frame;
+				this.validateRestoredFrame(frame);
+				return frame;
+			} catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+		}).filter((frame): frame is Frame => frame !== undefined)
+			.sort((a, b) => (a.producer_seq as number) - (b.producer_seq as number));
 		for (const frame of backlog) {
 			this.producerSeq = Math.max(this.producerSeq, frame.producer_seq as number);
 			this.queue.push({frame, kind: "event"});
@@ -245,10 +248,12 @@ export class RozoroEventBusClient {
 		let current = 0;
 		if (existsSync(this.cursorPath)) current = Number(readFileSync(this.cursorPath, "utf8").trim());
 		for (const name of readdirSync(this.spoolDir).filter((item) => item.endsWith(".json"))) {
-			this.validateCustodyEntry(join(this.spoolDir, name), "file");
-			const frame = JSON.parse(readFileSync(join(this.spoolDir, name), "utf8")) as Frame;
-			this.validateRestoredFrame(frame);
-			current = Math.max(current, frame.producer_seq);
+			try {
+				this.validateCustodyEntry(join(this.spoolDir, name), "file");
+				const frame = JSON.parse(readFileSync(join(this.spoolDir, name), "utf8")) as Frame;
+				this.validateRestoredFrame(frame);
+				current = Math.max(current, frame.producer_seq);
+			} catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 		}
 		return current;
 	}
