@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Lifecycle and diagnostic CLI for the local Rozoro monitor."""
-from __future__ import annotations
+import sys
+
+MIN_PYTHON = (3, 10)
+PYTHON_ERROR = "Rozoro monitor requires Python >=3.10 (stock macOS Python 3.9.6 is not supported); install Homebrew Python with `brew install python` and ensure its python3 precedes the stock interpreter on PATH"
+
+if sys.version_info < MIN_PYTHON:
+    print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
+    raise SystemExit(2)
 
 import argparse
 import fcntl
@@ -9,17 +16,9 @@ import os
 import socket
 import stat
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
-
-MIN_PYTHON = (3, 10)
-PYTHON_ERROR = "Rozoro monitor requires Python >=3.10 (stock macOS Python 3.9.6 is not supported); install Homebrew Python with `brew install python` and ensure its python3 precedes the stock interpreter on PATH"
-
-if sys.version_info < MIN_PYTHON:
-    print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
-    raise SystemExit(2)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

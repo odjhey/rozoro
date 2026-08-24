@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 """Run the Rozoro monitor in the foreground."""
-
-from __future__ import annotations
-
-import argparse
-import asyncio
-import os
-import signal
 import sys
-from pathlib import Path
 
 if sys.version_info < (3, 10):
     print(
@@ -19,6 +11,12 @@ if sys.version_info < (3, 10):
         file=sys.stderr,
     )
     raise SystemExit(2)
+
+import argparse
+import asyncio
+import os
+import signal
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
