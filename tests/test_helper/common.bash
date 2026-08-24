@@ -13,6 +13,7 @@ setup() {
   export PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache"
   export PATH="$REPO_ROOT/tests/fakes:$REPO_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   mkdir -p "$HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks" "$FAKE_HERDR_ROOT" "$PYTHONPYCACHEPREFIX"
+  chmod 700 "$ROZORO_HOME"
   : > "$FAKE_CODEX_LOG"
   SENTINEL="$BATS_TEST_TMPDIR/outside-sentinel"
   printf 'untouched\n' > "$SENTINEL"
@@ -21,6 +22,7 @@ setup() {
 }
 
 teardown() {
+  if [ -S "${ROZORO_HOME:-}/monitor.sock" ]; then "$REPO_ROOT/bin/rzr-monitor.sh" stop >/dev/null 2>&1 || true; fi
   for pid in $TEST_PIDS; do
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -76,11 +78,12 @@ fake_status() {
 }
 
 # Configure a pane's full agent-get shape for registration/gating tests:
-#   fake_pane <pane> <status> [kind] [interactive_ready:true|false]
+#   fake_pane <pane> <status> [kind] [interactive_ready:true|false] [agent_session]
 fake_pane() {
   pane="$1"; printf '%s\n' "$2" > "$FAKE_HERDR_ROOT/status.$pane"
   [ $# -ge 3 ] && printf '%s\n' "$3" > "$FAKE_HERDR_ROOT/kind.$pane"
   printf '%s\n' "${4:-true}" > "$FAKE_HERDR_ROOT/ready.$pane"
+  [ $# -lt 5 ] || printf '%s\n' "$5" > "$FAKE_HERDR_ROOT/session.$pane"
 }
 
 start_event_server() {

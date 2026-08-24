@@ -7,7 +7,7 @@ load test_helper/common
   python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["running"] is False and v["spool_backlog"] == 0' "$output"
 }
 
-@test "explicit monitor reset removes v4 database but preserves authoritative task folders" {
+@test "explicit monitor reset rolls back v5 database state but preserves authoritative task folders" {
   mkdir -p "$ROZORO_HOME/tasks/task-1"
   printf 'authoritative\n' > "$ROZORO_HOME/tasks/task-1/handoff.md"
   chmod 700 "$ROZORO_HOME"
@@ -29,7 +29,7 @@ load test_helper/common
   [ "$(cat "$ROZORO_HOME/tasks/task-1/handoff.md")" = authoritative ]
   run "$REPO_ROOT/bin/rozoro" monitor start; assert_success
   run "$REPO_ROOT/bin/rozoro" monitor status --json; assert_success
-  assert_output_contains '"schema_version":4'
+  assert_output_contains '"schema_version":6'
   run "$REPO_ROOT/bin/rozoro" monitor stop; assert_success
 }
 

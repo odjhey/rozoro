@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 load test_helper/common
 
+export ROZORO_LEGACY_DIAGNOSTIC=1
+
 block() { printf '%s\n' "## turn $1 — report" "verdict: $2" "reason: ${3:-}" "did: work" "pending: none" "inputs-needed: none" "artifacts: none"; }
 
 @test "status v2 is pure and stable with no handoff" {

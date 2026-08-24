@@ -75,9 +75,9 @@ default harness. It does not create or rewrite the optional
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, Copilot, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
-| **Read state** | `./bin/rozoro status <id>` — pure v2 runtime/background/task/turn/action projection plus unresolved OPEN items; status reads never advance observation state |
+| **Read state** | `./bin/rozoro status <id>` — daemon-backed schema-v2-compatible projection plus unresolved OPEN items; fails loudly when the resident monitor is down; status reads never advance observation state |
 | **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
-| **Sense** (don't block) | Pi watchtowers use the project `rozoro-watchtower` extension, which injects actionable Herdr edges without occupying a tool call. Codex/Claude watchtowers register once (`./bin/rozoro register --harness <h>`) then run `./bin/rozoro watch --once --wake <ids>` in a genuinely external background task; the wake is durable (at-least-once ledger) and the driver runs `./bin/rozoro reconcile` on the nudge. Read `state/<id>.status` for the latest watcher-produced snapshot. |
+| **Sense** (don't block) | Managed Pi and supported-Claude watchtowers use the resident daemon/event bus. Their thin adapters deliver one fixed wake; run `./bin/rozoro reconcile` and then `status`. Use `monitor status --json` for health. `rzr-watch` is diagnostics/legacy compatibility only, never normal Pi/Claude management. |
 
 `<id>` is a short unique slug you choose (e.g. `issue-123`, `pr-88`). It names the
 state files and the tab.
@@ -185,27 +185,21 @@ answer itself, but whether the answer already exists.
    issue comments or repro steps into the brief, you're doing the crew's job.
 3. **Do not sit in a poll loop or occupy a foreground tool call with a watcher.**
    A foreground `./bin/rozoro watch` blocks the watchtower's model turn, so operator
-   messages queue behind it. In Pi, the project-local `rozoro-watchtower`
-   extension owns a long-lived Herdr push subscriber and injects
-   `[rozoro event]` messages on actionable edges; each names the validated task
-   for `./bin/rozoro status <id>`. This direct Pi path needs neither registration
-   nor `reconcile`; `/rozoro-monitor status` reports it and `/rozoro-monitor on`
-   repairs it. In a resident Codex or Claude
-   watchtower, register the validated target once (`./bin/rozoro register --harness
-   <h>`), then run `./bin/rozoro watch --once --wake <ids>` from a genuinely external
-   background task: it delivers a fixed, content-free nudge on settled `idle`,
-   `done`, or `blocked` edges through the registered backend (Codex queue, or the
-   Herdr pane for Claude — deferred while the driver is working/blocked), backed by
-   a durable at-least-once ledger. On the nudge run `./bin/rozoro reconcile` to read
-   verdicts and ack the generation. `./bin/rozoro list` polling is
-   only a fallback. `state/<id>.status` is produced by the active watcher. Either
-   way, `done`/`idle` means the agent ended a turn — not that the task is correct
-   or landed.
+   messages queue behind it. Managed Pi and supported-Claude watchtowers instead
+   use the resident `rozorod` event bus: Pi's extension and the Claude watchtower
+   poller register with it automatically and deliver only a fixed reconciliation
+   nudge. On that nudge run `./bin/rozoro reconcile` to read verdicts and ack the
+   generation, then `./bin/rozoro status <id>`. `/rozoro-monitor status` reports Pi
+   adapter health; `./bin/rozoro monitor status --json` reports daemon health.
+   `rzr-watch` wake options are disabled in normal operation. They require the
+   unmistakable `ROZORO_LEGACY_DIAGNOSTIC=1` marker and exist only for explicit
+   old-release diagnosis, never alongside a daemon-managed driver. `done`/`idle`
+   means the agent ended a turn — not that the task is correct or landed.
 4. On each edge, run `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`); `needs-action` →
    answer via `./bin/rozoro send`; `waiting` → leave the crew alone unless status also
-   reports `action_required` (Stage 1 can't certify Herdr background activity, so
-   an uncertified `waiting` is actionable — see the README's status v2 section);
+   reports `action_required` (unknown or disconnected background state fails
+   closed and cannot certify `waiting`);
    a `[same]`/no-new-block on an idle edge means the crew
    ended a turn without reporting (e.g. backgrounded work) — nudge it. Status also
    prints any **unresolved OPEN items** (an earlier `needs-action`/`blocked`/`failed`

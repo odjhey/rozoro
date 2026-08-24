@@ -125,9 +125,11 @@ inputs-needed: none
 artifacts: none
 """)
         with EventStore(self.db) as store:
-            self.register(store)
-            store.accept_event(event("start", 2, "turn.start", turn_id="turn-1"))
-            store.accept_event(event("stop", 3, "turn.stop", background_active=False))
+            # Projection rebuild is a pre-ledger diagnostic; suppress generation
+            # creation explicitly so this test exercises only that boundary.
+            store.accept_event(event("register", 1, "session.register"), actionable=lambda *args: None)
+            store.accept_event(event("start", 2, "turn.start", turn_id="turn-1"), actionable=lambda *args: None)
+            store.accept_event(event("stop", 3, "turn.stop", background_active=False), actionable=lambda *args: None)
             before = store._connection.execute(
                 "SELECT task_id,availability,report_state,verdict,actionable_reason,projection_generation,last_event_seq,projection_json FROM task_projections"
             ).fetchone()

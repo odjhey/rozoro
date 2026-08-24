@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 load test_helper/common
+export ROZORO_LEGACY_DIAGNOSTIC=1
 
 @test "watch reconciles initial level and persists it" {
   write_meta task 'pane=p1' 'tab=t1'

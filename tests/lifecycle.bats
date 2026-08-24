@@ -33,6 +33,33 @@ load test_helper/common
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 
+@test "Claude event-bus production generates isolated hooks and exact launch identity" {
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --prompt 'do exactly this'
+  assert_success
+  session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/task.meta")"
+  [ -n "$session" ]
+  [ "$(sed -n 's/^event_bus=//p' "$ROZORO_HOME/state/task.meta")" = true ]
+  settings="$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  [ "$(file_perm "$settings")" = 600 ]
+  [ "$(jq '.hooks | keys | length' "$settings")" -eq 6 ]
+  command="$(jq -r '.hooks.Stop[0].hooks[0].command' "$settings")"
+  [[ "$command" == *"ROZORO_TASK_ID=task"* ]]
+  [[ "$command" == *"ROZORO_SESSION_ID=$session"* ]]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--session-id\t'"$session"
+  assert_file_contains "$FAKE_HERDR_LOG" $'--settings\t'"$settings"
+}
+
+@test "Claude generated settings refuse final and predictable-temp symlinks" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  ln -s "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  ln -s "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json.tmp"
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT"
+  assert_failure
+  [ -L "$ROZORO_HOME/tasks/task/claude-event-settings.json" ]
+  [ "$(cat "$SENTINEL")" = untouched ]
+}
+
+
 @test "Pi spawn maps profile fields, keeps the task verbatim, and preallocates a session" {
   mkdir -p "$ROZORO_HOME/crew"
   cat > "$ROZORO_HOME/crew/pi-worker.json" <<'JSON'
@@ -48,7 +75,8 @@ JSON
   [[ "$agent_name" =~ ^[a-z0-9_-]{1,32}$ ]]
   assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'never push'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--model\tanthropic/claude-sonnet-4-6\t--thinking\thigh\t--approve\t--append-system-prompt'
   assert_file_contains "$FAKE_HERDR_LOG" $'\t--session-id\t'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
 }
@@ -248,6 +276,16 @@ JSON
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1\t--\t--resume\tuuid-1'
 }
 
+@test "Claude event-bus resume preserves exact session identity in generated hooks" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  printf '{"session_id":"uuid-1","harness":"claude","cwd":"%s"}\n' "$TEST_ROOT" > "$ROZORO_HOME/tasks/task/session.json"
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rzr-resume.sh" task
+  assert_success
+  settings="$ROZORO_HOME/tasks/task/claude-event-settings.json"
+  [[ "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")" == *"ROZORO_SESSION_ID=uuid-1"* ]]
+  assert_file_contains "$FAKE_HERDR_LOG" $'--resume\tuuid-1\t--permission-mode\tauto\t--settings\t'"$settings"
+}
+
 @test "Codex resume reapplies durable model effort and fast tier" {
   mkdir -p "$ROZORO_HOME/tasks/task"
   cat > "$ROZORO_HOME/tasks/task/session.json" <<JSON
@@ -350,7 +388,9 @@ JSON
   assert_success
   assert_file_contains "$ROZORO_HOME/state/task.meta" 'session=uuid-pi'
   agent_name="$(sed -n 's/^herdr_agent_name=//p' "$ROZORO_HOME/state/task.meta")"
-  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tpi\t--pane\tp1\t--\t--extension\t'
+  assert_file_contains "$FAKE_HERDR_LOG" $'rozoro-watchtower.ts\t--session\tuuid-pi\t--approve\t--model\tanthropic/claude-sonnet-4-6\t--append-system-prompt'
+  assert_file_contains "$ROZORO_HOME/tasks/task/sysprompt.md" 'rozoro-task: task'
   assert_file_contains "$FAKE_HERDR_LOG" "$ROZORO_HOME/tasks/task/sysprompt.md"
 }
 

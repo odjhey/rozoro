@@ -25,6 +25,13 @@ while [ $# -gt 0 ]; do
 done
 
 DIR="$(rzr_resolve_driver_dir "$DRIVER")"
+
+if [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
+  args=(reconcile --driver "$(basename "$DIR")")
+  [ "$JSON" -eq 1 ] && args+=(--json)
+  exec python3 "$RZR_BIN/rzr-event-bus-client.py" "${args[@]}"
+fi
+
 GEN="$(rzr_ledger_int "$DIR" generation)"
 
 # Gather the affected tasks recorded in the ledger, newest snapshot wins. For each

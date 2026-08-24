@@ -31,7 +31,10 @@ RZR_TASKS="$RZR_HOME/tasks"
 # this checkout, not RZR_HOME. Override with RZR_TEMPLATES.
 RZR_REPO="$(cd "$RZR_BIN/.." && pwd)"
 RZR_TEMPLATES="${RZR_TEMPLATES:-$RZR_REPO/templates}"
+[ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
 mkdir -p "$RZR_STATE"
+[ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
+chmod 700 "$RZR_STATE"
 
 # Task keys and legacy ids are deliberately conservative filesystem components.
 # Existing unsuffixed folders remain valid; unsafe historical names must be
@@ -393,12 +396,133 @@ rzr_copilot_capabilities() {
 # preset rules). Claude takes it through --append-system-prompt-file; Pi's
 # --append-system-prompt accepts either text or a file path. The 6th optional arg
 # is a preallocated harness session id (used by Pi and Copilot for exact linking).
+rzr_claude_event_capability() {
+  command -v claude >/dev/null 2>&1 || { echo "rzr: event-bus opt-in requires Claude Code 2.1.240" >&2; return 1; }
+  local version
+  version="$(claude --version 2>/dev/null)" || return 1
+  case "$version" in
+    2.1.240|2.1.240\ *) return 0 ;;
+    *) echo "rzr: Claude event hooks are certified only for 2.1.240 (found: $version)" >&2; return 1 ;;
+  esac
+}
+
+# Generate a private Claude watchtower settings overlay. The caller supplies the
+# already validated Herdr pane and stable driver identity; this never edits user
+# or project settings and remains opt-in.
+rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <adapter-session> <native-session> <herdr-pane>
+  local target="$1" driver="$2" session="$3" native="$4" pane="$5" binary
+  binary="$(command -v claude)" || return 1
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$native" "$pane" "$binary" <<'PY' || return 1
+import json, os, secrets, shlex, stat, subprocess, sys
+path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
+parent, name = os.path.split(path); fd=os.open(parent,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if info.st_uid!=os.geteuid() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)&0o077: raise SystemExit("watchtower settings directory must be owner-private")
+    old=os.stat(name,dir_fd=fd,follow_symlinks=False) if os.path.lexists(path) else None
+    if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid()): raise SystemExit("refusing unsafe watchtower settings destination")
+    version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
+    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    try:
+        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
+        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+    finally:
+        try: os.unlink(proof+".tmp")
+        except FileNotFoundError: pass
+    command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
+    entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
+    data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
+    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"
+    try:
+        out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        try:
+            view=memoryview(data)
+            while view: view=view[os.write(out,view):]
+            os.fsync(out)
+        finally: os.close(out)
+        os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
+    finally:
+        try: os.unlink(tmp,dir_fd=fd)
+        except FileNotFoundError: pass
+finally: os.close(fd)
+PY
+}
+
+# Generate a task-local Claude settings overlay. It is passed explicitly with
+# --settings and never mutates user or project Claude configuration.
+rzr_claude_event_settings() {  # <task-id> <exact-session-id>
+  local task_id="$1" session_id="$2" target
+  target="$(rzr_task_dir "$task_id")/claude-event-settings.json"
+  local binary; binary="$(command -v claude)" || return 1
+  python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" "$binary" <<'PY' || return 1
+import json, os, secrets, shlex, stat, subprocess, sys
+path, hook, home, task, session, binary = sys.argv[1:]
+parent, name = os.path.split(path)
+flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+dirfd = os.open(parent, flags)
+try:
+    info = os.fstat(dirfd)
+    if info.st_uid != os.geteuid() or not stat.S_ISDIR(info.st_mode):
+        raise SystemExit("refusing unowned Claude settings directory")
+    os.fchmod(dirfd, 0o700)
+    if stat.S_IMODE(os.fstat(dirfd).st_mode) != 0o700:
+        raise SystemExit("Claude settings directory is not private")
+    try:
+        final = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+    except FileNotFoundError:
+        final = None
+    if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid()):
+        raise SystemExit("refusing unsafe Claude settings destination")
+    version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
+    if version!="2.1.240": raise SystemExit("Claude capability drift")
+    real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    try:
+        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
+        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+    finally:
+        try: os.unlink(proof+".tmp")
+        except FileNotFoundError: pass
+    command = shlex.join([
+        "env",  "ROZORO_ROLE=crew",
+        f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
+        f"ROZORO_HOME={home}", "python3", hook, "--claude-binary", binary,
+        "--capability-proof", proof,
+    ])
+    entry = [{"hooks": [{"type": "command", "command": command, "timeout": 2}]}]
+    settings = {"hooks": {event: entry for event in (
+        "SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"
+    )}}
+    data = (json.dumps(settings, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    temporary = ".claude-settings-" + secrets.token_hex(12) + ".tmp"
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+        os.fsync(dirfd)
+    finally:
+        try: os.unlink(temporary, dir_fd=dirfd)
+        except FileNotFoundError: pass
+finally:
+    os.close(dirfd)
+PY
+  printf '%s' "$target"
+}
+
 rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id] [fast]
   local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}" fast="${7:-false}"
   rzr_profile_validate "$harness" "$model" "$effort" "$fast"
   case "$harness" in
     claude)
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
+      [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
       [ -n "$effort" ]   && printf '%s\0%s\0' --effort "$effort"
       [ -n "$permmode" ] && printf '%s\0%s\0' --permission-mode "$permmode"
       [ -n "$sysfile" ]  && printf '%s\0%s\0' --append-system-prompt-file "$sysfile"
@@ -416,6 +540,9 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$session_id" ] && printf '%s\0%s\0' --session-id "$session_id"
       ;;
     pi)
+      # Managed Pi crews explicitly load the checkout-owned event-bus producer,
+      # even when their cwd is an arbitrary target repository.
+      printf '%s\0%s\0' --extension "$RZR_BIN/../.pi/extensions/rozoro-watchtower.ts"
       [ -n "$model" ]      && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]     && printf '%s\0%s\0' --thinking "$effort"
       [ -n "$permmode" ]   && printf '%s\0' --approve
@@ -629,11 +756,16 @@ PY
 # idempotent while legacy callers without an edge ID retain per-call bumps.
 rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   local dir="$1"
-  mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
+  mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" RZR_LEDGER_EDGE="${4:-}" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(authority_fd, fcntl.LOCK_SH)
+os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy generation refused: driver is event-bus authoritative; explicitly disable authority before fallback")
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -655,6 +787,7 @@ os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
 os.close(lock_fd)
+os.close(authority_fd)
 PY
 }
 
@@ -671,6 +804,10 @@ rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(authority_fd, fcntl.LOCK_SH)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy delivery refused: driver is event-bus authoritative; explicitly disable authority before fallback")
 lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 try:    d = json.load(open(p))
@@ -694,20 +831,42 @@ os.umask(0o077)
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, p)
 os.close(lock_fd)
+os.close(authority_fd)
 PY
 }
 
 # Coalescing gate: deliver iff generation > ack AND delivered <= ack.
 rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
   local dir="$1" g a d
+  [ ! -e "$dir/.event-bus-authority" ] && [ ! -L "$dir/.event-bus-authority" ] || return 1
   g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
   [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
 }
 
 # Advance the driver's ack to the given generation (single-writer file, atomic).
 rzr_ledger_ack() {  # <driver-dir> <generation>
-  local dir="$1"; mkdir -p "$dir"
-  printf '%s\n' "$2" | rzr_write_private "$dir/ack"
+  local dir="$1"; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
+  RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
+import fcntl, json, os
+p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"])
+authority_fd=os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"),os.O_CREAT|os.O_RDWR,0o600)
+fcntl.flock(authority_fd,fcntl.LOCK_SH)
+os.makedirs(os.path.dirname(p),mode=0o700,exist_ok=True)
+if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+    raise SystemExit("legacy ACK refused: driver is event-bus authoritative; explicitly disable authority before fallback")
+pending=os.path.join(os.path.dirname(p),"pending.json")
+lock_fd=os.open(pending+".lock",os.O_CREAT|os.O_RDWR,0o600); fcntl.flock(lock_fd,fcntl.LOCK_EX)
+try: data=json.load(open(pending))
+except FileNotFoundError: data={"schema":1,"generation":0,"delivered":0,"tasks":{}}
+if value>int(data.get("generation",0)): raise SystemExit("legacy ACK exceeds generation")
+data["delivered"]=max(int(data.get("delivered",0)),value)
+os.umask(0o077); pending_tmp=pending+f".tmp.{os.getpid()}"
+with open(pending_tmp,"w") as stream: json.dump(data,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+os.replace(pending_tmp,pending)
+tmp=p+f".tmp.{os.getpid()}"
+with open(tmp,"w") as stream: stream.write(str(value)+"\n"); stream.flush(); os.fsync(stream.fileno())
+os.replace(tmp,p); os.close(lock_fd); os.close(authority_fd)
+PY
 }
 
 rzr_target_field() {  # <driver-dir> <field>

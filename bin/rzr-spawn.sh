@@ -131,14 +131,28 @@ rzr_render_handoff_protocol "$ID"
 HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
 SESSION_ID=""
+EVENT_BUS=false
+[ "$HARNESS" = claude ] && EVENT_BUS=true
+if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
+  "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
+fi
+[ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 case "$HARNESS" in
   pi|copilot)
     # Caller-selected UUIDs remove discovery races and provide exact identity.
     SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
+  claude)
+    # Event-bus hooks bind to an exact preallocated Claude conversation.
+    [ "$EVENT_BUS" = true ] && SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
 esac
+EVENT_SETTINGS=""
+if [ "$EVENT_BUS" = true ]; then
+  EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$SESSION_ID")" || exit 1
+fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
   SYSFILE="$FOLDER/sysprompt.md"
-  { cat "$HANDOFF"
+  { printf 'rozoro-task: %s\n\n' "$ID"
+    cat "$HANDOFF"
     [ -n "$RULES" ] && printf '\n\n---\n## Crew rules\n\n%s\n' "$RULES"
   } > "$SYSFILE"
 elif [ -n "$PROMPT" ]; then
@@ -183,6 +197,7 @@ do_spawn() {
   rzr_meta_set "$ID" fast "$FAST"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   [ -n "$SESSION_ID" ] && rzr_meta_set "$ID" session "$SESSION_ID"
+  rzr_meta_set "$ID" event_bus "$EVENT_BUS"
   rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
   echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
@@ -203,6 +218,7 @@ do_spawn() {
   local -a agent_args=()
   while IFS= read -r -d '' _a; do agent_args+=("$_a"); done \
     < <(rzr_harness_args "$HARNESS" "$MODEL" "$EFFORT" "$PERMMODE" "$SYSFILE" "$SESSION_ID" "$FAST")
+  [ -z "$EVENT_SETTINGS" ] || agent_args+=(--settings "$EVENT_SETTINGS")
   local -a start=(agent start "$AGENT_NAME" --kind "$HARNESS" --pane "$pane")
   [ "${#agent_args[@]}" -gt 0 ] && start+=(-- "${agent_args[@]}")
 

@@ -15,8 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol
+from .notify import Coalescer, DeliveryResult, DeliveryStatus
 from .client import _open_home
 from .store import EventStore
+from .herdr import (
+    EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription,
+    read_pane_level,
+)
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
@@ -51,12 +56,14 @@ class MonitorServer:
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
         self._spool_task: asyncio.Task[None] | None = None
+        self._herdr: MembershipMonitor | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._capacity = asyncio.Event()
         self._capacity.set()
         self._socket_identity: tuple[int, int] | None = None
         self._clients = 0
+        self._active_drivers: dict[str, int] = {}
         self.shutdown_requested = asyncio.Event()
         self._spool_backlog = 0
         self._spool_errors = 0
@@ -204,6 +211,52 @@ class MonitorServer:
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
+            explicit_state = os.environ.get("ROZORO_STATE_DIR")
+            state_dir = Path(explicit_state or str(self.home / "state"))
+            try:
+                state_dir.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            state_info = state_dir.lstat()
+            if (not stat.S_ISDIR(state_info.st_mode) or state_info.st_uid != os.geteuid()
+                    or state_dir.is_symlink()):
+                raise UnsafeStateError("state must be an owner-controlled directory")
+            if stat.S_IMODE(state_info.st_mode) != 0o700:
+                if explicit_state:
+                    raise UnsafeStateError("external state directory must already be owner-private")
+                os.chmod(state_dir, 0o700, follow_symlinks=False)
+            herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
+            if not herdr_socket:
+                try:
+                    command = ["herdr", "session", "list", "--json"]
+                    proc = await asyncio.create_subprocess_exec(
+                        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
+                    sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
+                    wanted = os.environ.get("RZR_SESSION")
+                    selected = (next((item for item in sessions if item.get("name") == wanted), None)
+                                if wanted else next((item for item in sessions if item.get("default") is True), None))
+                    herdr_socket = None if selected is None else selected.get("socket_path")
+                except (OSError, ValueError, TimeoutError):
+                    herdr_socket = None
+            if herdr_socket:
+                async def level_reader(pane_id: str) -> PaneLevel:
+                    return await read_pane_level(
+                        herdr_socket, pane_id,
+                        timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
+
+                async def reconcile(task_id: str, level: PaneLevel) -> None:
+                    assert self._store is not None
+                    self._store.reconcile_herdr_liveness(task_id, pane_exists=level.exists)
+
+                self._herdr = MembershipMonitor(
+                    state_dir, lambda panes: (UnixHerdrSubscription(herdr_socket, panes)
+                                              if panes else EmptySubscription()),
+                    level_reader, reconcile,
+                    scan_interval=float(os.environ.get("ROZORO_HERDR_SCAN_INTERVAL", "30")),
+                    hint_interval=float(os.environ.get("ROZORO_HERDR_HINT_INTERVAL", ".2")),
+                    debounce=float(os.environ.get("ROZORO_HERDR_DEBOUNCE", ".15")))
+                await self._herdr.start()
         except BaseException:
             await self.close()
             raise
@@ -353,8 +406,8 @@ class MonitorServer:
             if code not in {"invalid-event", "invalid-field", "unsupported-type"} or "event_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
-        elif message_type in {"health", "monitor.stop", "watchtower.register",
-                              "notification.delivered", "reconcile", "ack-generation"}:
+        elif message_type in {"health", "task.status", "driver.snapshot", "driver.disable", "driver.authority", "reconcile.pending", "reconcile.ack",
+                              "monitor.stop", "watchtower.register", "watchtower.availability", "notification.pending", "notification.delivered", "reconcile", "ack-generation"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -394,10 +447,13 @@ class MonitorServer:
             raise protocol.ProtocolError("read-timeout", "client read deadline exceeded") from exc
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        registered_driver: tuple[str, str, int] | None = None
+        pending_coalescer: Coalescer | None = None
         try:
             while True:
                 frame = b""
                 request_shutdown = False
+                notification: dict[str, Any] | None = None
                 try:
                     read = await self._read_frame(reader)
                     if read is None:
@@ -406,15 +462,99 @@ class MonitorServer:
                     message = protocol.decode(frame)
                     if message["type"] == "health":
                         assert self._store is not None
+                        snapshot = self._store.health_snapshot()
+                        for driver in snapshot.get("drivers", []):
+                            driver["adapter_state"] = "connected" if driver["driver_id"] in self._active_drivers else "disconnected"
                         reply = {"v": 1, "type": "health.result", "request_id": message["request_id"],
                                  "running": True, "socket": str(self.socket_path),
-                                 "clients": self._clients, **self._store.health_snapshot(),
+                                 "clients": self._clients, **snapshot,
                                  "spool_backlog": self._spool_backlog,
                                  "spool_errors": self._spool_errors, "pid": os.getpid(),
-                                 "last_spool_error": self._last_spool_error}
+                                 "last_spool_error": self._last_spool_error,
+                                 **(self._herdr.health() if self._herdr else {
+                                     "herdr_connected": False,
+                                     "herdr_last_error": "Herdr socket unavailable",
+                                     "herdr_inventory_errors": 0,
+                                     "herdr_task_count": 0})}
+                    elif message["type"] == "task.status":
+                        assert self._store is not None
+                        projection = self._store.task_projection(message["task_id"])
+                        reply = {"v": 1, "type": "task.status.result", "request_id": message["request_id"],
+                                 "task_id": message["task_id"], "found": projection is not None}
+                        if projection is not None:
+                            detail = json.loads(projection["projection_json"])
+                            reply.update({"availability": projection["availability"],
+                                          "foreground": detail.get("foreground", "unknown"),
+                                          "background": detail.get("background", "unknown"),
+                                          "background_count": detail.get("background_count"),
+                                          "report_state": projection["report_state"],
+                                          "verdict": projection["verdict"],
+                                          "actionable_reason": projection["actionable_reason"]})
+                    elif message["type"] == "driver.snapshot":
+                        assert self._store is not None
+                        reply = {"v": 1, "type": "driver.snapshot.result", "request_id": message["request_id"],
+                                 "driver_id": message["driver_id"], **self._store.driver_snapshot(message["driver_id"])}
+                    elif message["type"] == "driver.disable":
+                        assert self._store is not None
+                        self._store.disable_driver_authority(message["driver_id"])
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                    elif message["type"] == "driver.authority":
+                        assert self._store is not None
+                        reply = {"v": 1, "type": "driver.authority.result", "request_id": message["request_id"],
+                                 "driver_id": message["driver_id"],
+                                 "authority": self._store.driver_authority(message["driver_id"])}
+                    elif message["type"] == "reconcile.pending":
+                        assert self._store is not None
+                        through, reports = self._store.reconcile_delivered(message["driver_id"])
+                        reply = {"v": 1, "type": "reconcile.pending.result",
+                                 "request_id": message["request_id"], "through": through, "reports": reports}
+                    elif message["type"] == "reconcile.ack":
+                        assert self._store is not None
+                        self._store.ack_delivered(message["driver_id"], message["through"])
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                     elif message["type"] == "monitor.stop":
                         reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                         request_shutdown = True
+                    elif message["type"] == "watchtower.register":
+                        assert self._store is not None
+                        registration = self._store.register_driver(
+                            message["driver_id"], message["session_id"], message["harness"])
+                        registered_driver = (message["driver_id"], message["session_id"], registration["epoch"])
+                        self._active_drivers[message["driver_id"]] = self._active_drivers.get(message["driver_id"], 0) + 1
+                        pending_coalescer = Coalescer(
+                            self._store, *registered_driver,
+                            actuator=lambda _notification: DeliveryResult(DeliveryStatus.DEFERRED),
+                        )
+                        reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                    elif message["type"] in {"watchtower.availability", "notification.pending", "notification.delivered", "reconcile", "ack-generation"}:
+                        assert self._store is not None
+                        if registered_driver is None or registered_driver[0] != message["driver_id"]:
+                            raise protocol.ProtocolError("invalid-field", "request is not bound to this driver session")
+                        driver_id, session_id, epoch = registered_driver
+                        if message["type"] == "watchtower.availability":
+                            reply = {"v": 1, "type": "watchtower.availability.result",
+                                     "request_id": message["request_id"], "driver_id": driver_id,
+                                     "availability": self._store.watchtower_availability(driver_id, session_id, epoch)}
+                        elif message["type"] == "notification.pending":
+                            if pending_coalescer is None:
+                                raise protocol.ProtocolError("invalid-field", "pending poll has no coalescer")
+                            offered = pending_coalescer.offer_pending()
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                            if offered is not None:
+                                notification = {"v": 1, "type": "notification",
+                                                "generation": offered.generation,
+                                                "priority": offered.priority,
+                                                "task_count": offered.task_count}
+                        elif message["type"] == "notification.delivered":
+                            self._store.confirm_delivery(driver_id, session_id, epoch, message["generation"])
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
+                        elif message["type"] == "reconcile":
+                            reports = self._store.reconcile(driver_id, session_id, epoch, message["through"])
+                            reply = {"v": 1, "type": "reconcile.result", "request_id": message["request_id"],
+                                     "through": message["through"], "reports": reports}
+                        else:
+                            self._store.ack_generation(driver_id, session_id, epoch, message["through"])
+                            reply = {"v": 1, "type": "ok", "request_id": message["request_id"]}
                     elif "event_id" in message and protocol.requires_producer_seq(message["type"]):
                         assert self._store is not None
                         try:
@@ -432,9 +572,14 @@ class MonitorServer:
                         raise protocol.ProtocolError("unsupported-type", "request is not served yet")
                 except protocol.ProtocolError as exc:
                     reply = self._correlated_error(frame, exc) if frame else self._frame_error(exc.code)
+                except ValueError:
+                    error = protocol.ProtocolError("invalid-field", "ledger request conflicts with durable state")
+                    reply = self._correlated_error(frame, error) if frame else self._frame_error(error.code)
                 except (MemoryError, RecursionError):
                     reply = self._frame_error("internal-error")
                 await self._send(writer, reply)
+                if notification is not None:
+                    await self._send(writer, notification)
                 if request_shutdown:
                     self.shutdown_requested.set()
                     return
@@ -443,6 +588,11 @@ class MonitorServer:
         except (BrokenPipeError, ConnectionResetError, ConnectionError, TimeoutError):
             pass
         finally:
+            if registered_driver is not None:
+                driver = registered_driver[0]
+                remaining = self._active_drivers.get(driver, 1) - 1
+                if remaining > 0: self._active_drivers[driver] = remaining
+                else: self._active_drivers.pop(driver, None)
             self._clients -= 1
             self._writers.discard(writer)
             self._capacity.set()
@@ -453,6 +603,9 @@ class MonitorServer:
                 pass
 
     async def close(self) -> None:
+        if self._herdr is not None:
+            await self._herdr.close()
+            self._herdr = None
         if self._spool_task is not None:
             self._spool_task.cancel()
             await asyncio.gather(self._spool_task, return_exceptions=True)

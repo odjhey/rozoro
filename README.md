@@ -29,9 +29,9 @@ Concretely, rozoro aims to be:
 
 - **The smallest useful spawn/watch/message/reap layer over herdr** — four verbs,
   not a framework. If herdr already does it, rozoro doesn't wrap it.
-- **Crash-safe by being stateless in-process.** All state is files under
-  `$ROZORO_HOME`; there is no daemon. Kill the driver and the next command
-  reconciles from disk — nothing in flight is lost.
+- **Crash-safe through durable local ownership.** The resident `rozorod` daemon
+  commits lifecycle events, projections, and wake generations to owner-private
+  SQLite before acknowledgement; adapters spool across restarts.
 - **A leverage multiplier for the driver.** The driver dispatches *eagerly* and
   delegates *discovery* (reading issues, reproducing bugs, weighing approaches) to
   the crew, rather than pre-solving work itself. rozoro is the hands; the crew is
@@ -50,8 +50,9 @@ These are deliberate. rozoro stays small by refusing to grow into them:
   — a dumb spawner, not a manager. Task prompts pass through verbatim; it never
   rewrites, filters, or approves what you tell the crew. The only injection is a
   preset's standing `rules`, and only as a separate appended system prompt.
-- **Not a daemon or always-on service.** No background process maintains state;
-  `state/<id>.status` exists only after a watcher has run.
+- **Not a remote workflow service.** The owner-private local `rozorod` daemon
+  maintains durable lifecycle/projection state; it does not schedule or judge
+  repository work and exposes no network service.
 - **Not a replacement for repo rules.** The crew loads the target repo's own
   `AGENTS.md` / `CLAUDE.md` / skills from its `--cwd`; rozoro never re-encodes them.
 - **Not a doer of domain work.** rozoro spawns "Resolve issue #NNN" and stays out
@@ -82,7 +83,7 @@ Consequently:
 - `herdr` 0.8.x on `PATH`, a running server, and you running **inside** a herdr
   session (so new tabs land in your workspace). Verify: `herdr tab list`.
 - `jq` on `PATH`
-- `python3` on `PATH` (stdlib only) — for the event-stream watcher
+- Python **3.11 or newer** as `python3` on `PATH` (stdlib only) — required by the resident monitor and event-stream watcher. Python 3.10 is not yet supported, and EOL Python 3.9 is out of policy; run `brew install python` and ensure Homebrew's `python3` precedes older interpreters on `PATH`.
 - `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
 - The selected coding harness (`claude`, `codex`, `copilot`, or `pi`) on `PATH`
 
@@ -107,7 +108,9 @@ The first run pulls those immutable images; later builds reuse the container
 engine's cache. Tests run without network access against a read-only checkout,
 using only a temporary writable filesystem inside the disposable container. No
 host Bats, `jq`, or Python installation is required. CI runs the full suite this
-way on Linux and keeps a stock macOS Bash 3.2 syntax check.
+way on Linux; on macOS it checks stock Bash 3.2 syntax and exercises monitor
+migration and lifecycle behavior on both Python 3.11 and Homebrew's current
+Python.
 
 The automated suite covers shell/Python protocol parsing, event transport,
 watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr
@@ -144,11 +147,12 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro spawn <id> --cwd <repo> [opts]` | low-level `herdr tab create` → `agent start` (from a crew preset) → optional verbatim first prompt; records `state/<id>.meta` |
 | `./bin/rozoro render <id> <body>` | render `tasks/<id>/brief.md` from `templates/brief.md` (handoff protocol + `rozoro-task:` marker); prints its path |
 | `./bin/rozoro link <id> <cwd> [--refresh]` | capture `tasks/<id>/session.json` for Claude, Codex, Copilot, or Pi; Copilot and Pi use preallocated native session UUIDs; idempotent unless `--refresh` replaces the link after restart |
-| `./bin/rozoro status <id>` | pure schema-v2 projection separating persisted runtime, foreground, background, task, turn-report, and action state; unresolved items remain until explicitly acked |
+| `./bin/rozoro status <id>` | daemon-backed schema-v2-compatible projection separating availability, foreground, background, task, report, and action state; fails loudly when the resident monitor is down |
 | `./bin/rozoro ack <id> [--through n]` | mark a task's surfaced OPEN items resolved (advances a read cursor; never edits the append-only handoff) |
-| `./bin/rozoro register --harness <h>` | pin this watchtower's ONE validated wake target (`watchtowers/<driver-id>/target.json`); validates the declared harness against live herdr state so a stale inherited env var can't wake the wrong session. For a Claude watchtower, run this by hand as `!./bin/rozoro register --harness claude` at your first idle prompt (see `templates/watchtower.md`) — herdr only reports `interactive_ready` once Claude reaches idle, so this is the one documented registration path, not a fallback. `ROZORO_ROLE=watchtower` marks session identity independently of registration |
-| `./bin/rozoro watch [--once] [--wake\|--wake-codex\|--wake-herdr] [id…]` | subscribes to herdr's `pane.agent_status_changed` push stream; prints one line per real state change; `--wake` delivers a fixed nudge through the REGISTERED backend via a durable at-least-once ledger (bursts coalesce; the Herdr backend defers while the driver is working/blocked). `--wake-codex`/`--wake-herdr` force an explicit backend |
-| `./bin/rozoro reconcile [--driver <id>]` | process the driver's pending wake ledger: report affected tasks' v2 projections, flag vanished tasks, and ack exactly the snapshotted generation (never resolves OPEN items) |
+| `./bin/rozoro register --harness <h>` | explicit legacy/diagnostic wake-target registration; managed Pi and supported-Claude adapters register with the daemon automatically |
+| `./bin/rozoro watch [--once] [id…]` | **diagnostics/legacy compatibility only**: observe Herdr transitions; never use beside daemon-managed Pi or supported Claude |
+| `./bin/rozoro monitor start\|status\|stop` | manage and diagnose the resident event-bus authority |
+| `./bin/rozoro reconcile [--driver <id>]` | reconcile the daemon's immutable generation snapshot, then ACK exactly that generation (never resolves OPEN items) |
 | `./bin/rozoro send <id> <text>` | **DATA plane only**: `herdr agent prompt` (submit) — text the agent reads and reasons about; `--wait` blocks until settled |
 | `./bin/rozoro control <id> <verb>` | **CONTROL plane only**: a closed, EXECUTED verb list — `interrupt` \| `cancel` \| `key <name>` \| `stop` \| `restart` — never text the agent might interpret as chat; fails closed on an unresolved target and verifies its own postcondition (`herdr agent wait`) |
 | `./bin/rozoro resume <id> [--prompt <t>]` | reopen a reaped Claude, Codex, Copilot, or Pi task's *exact* conversation as a fresh tab (from `tasks/<id>/session.json`); optionally deliver a follow-up. Refuses if the task is still live (use `./bin/rozoro send`) |
@@ -156,13 +160,13 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro crew roles\|role-show\|role-path <role>` | inspect machine-local role preferences (`coder`/`planner` -> harness/model on this machine) |
 | `./bin/rozoro lock status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `./bin/rozoro list` | known tasks + live agent state |
-| `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/`python3` and the selected harness), herdr server reachable, default preset — exits non-zero on a missing hard dep |
+| `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/Python >=3.11 and the selected harness), herdr server reachable, default preset — exits non-zero with an install hint on a missing or unsupported hard dep |
 | `./bin/rozoro teardown <id> [--force]` | close the tab, remove the record (the `tasks/<id>/` folder survives); refuses if the recorded `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits) unless `--force` |
 
-`rzr-lib.sh` is the shared library (paths, herdr invocation, meta, status,
-presets, lock); it is sourced, not run. `herdr-eventwait.py` is the raw-socket
-subscriber `rzr-watch.sh` drives. `templates/brief.md` is the handoff-protocol seed
-`rzr-render` fills in.
+`rzr-lib.sh` is the shared shell library. `rozorod` is the sole lifecycle,
+projection, coalescing, and delivery owner for managed Pi and supported Claude.
+`rzr-watch.sh` and `herdr-eventwait.py` remain diagnostic/legacy tools, not the
+normal management path. See [`docs/event-bus-cutover.md`](docs/event-bus-cutover.md).
 
 ### Durable task folders
 
@@ -309,7 +313,7 @@ The driver's whole vocabulary is small:
 | **Interrupt / cancel / key / restart** (CONTROL — executed, never read) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--effort <e>] [--fast|--no-fast] [--prompt "<follow-up>"]` |
 | **Stop** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`; refuses on unlanded work in the crew's `cwd`, `--force` to discard anyway) |
-| *(sense, not trigger)* | `./bin/rozoro status <id>` (handoff verdict) · `./bin/rozoro watch` · `./bin/rozoro list` · `rzr_status_get` (disk `state/<id>.status`) |
+| *(sense, not trigger)* | `./bin/rozoro reconcile` (on the daemon's fixed wake) · `./bin/rozoro status <id>` (handoff verdict) · `./bin/rozoro list` · `./bin/rozoro monitor status --json` (daemon health). `./bin/rozoro watch` is diagnostics/legacy only |
 
 **DATA vs CONTROL, and why it's split.** A crew must receive two clearly
 distinct kinds of message, never conflated: DATA is free text the agent reads
@@ -322,9 +326,10 @@ loudly, never guessed at) and verify their own postcondition rather than
 trusting a herdr call's exit code alone.
 
 Keep the driver in the Rozoro checkout and call `./bin/rozoro`; point each fresh
-task at its own repository with `--cwd`. Read crew state from the on-disk
-`state/<id>.status` (the watcher keeps it current) rather than blocking on
-`./bin/rozoro watch`.
+task at its own repository with `--cwd`. For managed Pi and supported Claude the
+resident daemon owns crew state: on its fixed wake run `./bin/rozoro reconcile`
+then `./bin/rozoro status <id>` rather than blocking on `./bin/rozoro watch`
+(diagnostics/legacy only) or reading the legacy `state/<id>.status` snapshot.
 
 ### Launching the driver
 
@@ -338,40 +343,38 @@ From the Rozoro checkout:
 
 ```sh
 # Pi watchtower (recommended)
-pi \
-  --approve \
-  --append-system-prompt "$PWD/templates/watchtower.md"
+./bin/rozoro pi-watchtower
+
+# Exact resume (reapplies immutable role, extension, and standing prompt)
+./bin/rozoro pi-watchtower --resume <session-id-or-file>
 
 # Or Claude
 ROZORO_ROLE=watchtower claude \
   --append-system-prompt-file "$PWD/templates/watchtower.md"
 ```
 
-`ROZORO_ROLE=watchtower` marks this Claude session's identity as a
-watchtower, distinct from a rozoro-spawned crew or a plain dev session opened
-in the same checkout. Nothing reads it yet, but it's reserved for
-watchtower-scoped tooling, such as the planned long-lived monitor daemon
-(#25). A Claude watchtower still registers its wake target by hand at its
-first idle prompt (`!./bin/rozoro register --harness claude`, see the
-`./bin/rozoro register` row below and `templates/watchtower.md`) — there is no
-automatic registration to opt into.
+Use `./bin/rozoro claude-watchtower` (or `--resume`) for a supported Claude
+watchtower; it installs the certified hooks and registers the stable driver with
+the daemon automatically. `ROZORO_ROLE=watchtower` distinguishes it from crew and
+plain development sessions. The resident daemon delivers issue #25's monitor
+scope; see [`docs/claude-watchtower-live-gate.md`](docs/claude-watchtower-live-gate.md).
 
-Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
-command supplies the control-tower prompt and approves the project-local
-extension for this run; the driver calls the dispatcher from the checkout.
+Running plain `pi` opens a normal coding session, not a watchtower. Use the
+supported `pi-watchtower` launcher for both startup and exact resume: it always
+sets immutable `ROZORO_WATCHTOWER=1`, explicitly loads the checkout extension,
+and reapplies the standing prompt (Pi does not persist appended system prompts
+across a bare `--session` resume). Unsupported or missing pane/session identity
+intentionally leaves the adapter inactive. The driver calls the dispatcher from
+the checkout.
 
-The Pi launch also loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
-When it detects the watchtower system prompt, the extension starts the repo-local watcher
-as an owned asynchronous child, keeps the editor responsive, and injects a
-`[rozoro event]` message on actionable crew edges. The direct message names the
-validated task key and instructs Pi to run `./bin/rozoro status <id>`; this path
-requires no watchtower registration and creates no durable wake ledger, so it
-must not call `reconcile`. Stable action edge IDs are deduplicated across child
-restarts while a newly tracked task can still surface its first actionable
-snapshot. This is deliberately different from calling `./bin/rozoro watch`
-through Pi's foreground bash tool, which would occupy the agent turn and queue
-operator messages. Use `/rozoro-monitor status|on|off` to inspect or control the
-monitor.
+The Pi launch loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
+Its Pi 0.84.2/Herdr startup and reload process regression is available with
+`RZR_LIVE_PI_RELOAD=1 tests/live/pi-watchtower-reload.sh` (no model call).
+It is a thin reconnecting daemon client: notifications become one fixed
+`reconcile` follow-up and are confirmed only after Pi accepts that follow-up.
+It owns no watcher child, reducer, ledger, task inventory, or filesystem watcher.
+Use `/rozoro-monitor status` for adapter health and `monitor status --json` for
+authoritative diagnostics.
 
 Editing `templates/watchtower.md` and committing it is how you evolve the driver's
 standing behavior; every watchtower booted from the file inherits the change. Keep
@@ -476,30 +479,15 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
   so naming every crew after the harness would cap the fleet at one. `tab create`
   can return before the pane's shell is ready, so `agent start` is retried on the
   transient `agent_pane_busy`.
-- **event-driven** — Pi's project extension consumes the JSON stream directly,
-  deduplicates stable actionable edge IDs, and injects task-specific
-  `./bin/rozoro status <id>` guidance without registration or a wake ledger.
-  Separately, `rzr-watch.sh` subscribes to herdr's native
-  `pane.agent_status_changed` push stream over the control socket (via
-  `herdr-eventwait.py`). Every message is a real edge, so there is no polling and
-  nothing to spin. Each edge is deduped against this watch process's last-seen
-  state; only real changes are printed and persisted. Buffered stdout from a
-  background watcher cannot wake a driver after its turn has completed, so a wake
-  option adds a fixed, content-free reconciliation nudge on settled (`idle`,
-  `done`, `blocked`) edges. `--wake` delivers through the watchtower's REGISTERED
-  target (see `./bin/rozoro register`): the backend is chosen by the validated
-  registration, never by env-var priority, so a Claude/Pi process that inherited a
-  stale `CODEX_THREAD_ID` can't wake the wrong conversation. Codex uses its native
-  `codex queue`; Claude, Copilot, and Pi are prompted through the resident Herdr pane, and
-  that path DEFERS while the driver is `working` and retains while `blocked` rather
-  than injecting into its turn. `--wake-codex`/`--wake-herdr` force one backend.
-  Every wake routes through a durable per-driver ledger: the actionable generation
-  is persisted BEFORE the backend call, a burst of edges coalesces to one
-  outstanding nudge (deliver iff `generation > ack` and `delivered <= ack`), and
-  `./bin/rozoro reconcile` acks exactly the generation it processed — so delivery is
-  at-least-once and a crash never loses an actionable edge. Initial reconciliation
-  and `working` edges never wake the driver, and no handoff or event contents are
-  ever queued.
+- **event-driven** — `rozorod` accepts every harness-native event into SQLite,
+  reduces lifecycle state, coalesces only notifications, and owns generation /
+  delivered / ACK state. Pi's extension is a reconnecting socket adapter that
+  sends only the fixed reconciliation wake; it has no child watcher, projection
+  reducer, task membership, or `.meta` restart logic. Supported Claude hooks
+  publish certified lifecycle facts and fail closed to `unknown` when capability
+  is absent. Herdr supplies host liveness and safe actuation, never semantic
+  completion. `rzr-watch.sh` is retained only for explicit diagnostics and legacy
+  Codex/Copilot compatibility.
 - **send (DATA)** — `herdr agent prompt <pane> <text>` types and submits
   atomically, and is rejected up front if the agent is blocked.
 - **control (CONTROL)** — `interrupt`/`cancel`/`key` drop to
@@ -525,6 +513,10 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - `RZR_HANDOFF_DELAY_MS` — bounded retry delay (default `200`) the watcher sleeps
   once before re-reading the handoff when a foreground settle event races its
   append; `0` disables the retry.
+- Managed Pi and supported Claude always use the resident event bus. The
+  temporary `ROZORO_EVENT_BUS`, inverse fallback, and disable flags were removed
+  at production cutover. Upgrade, fresh-install, health, and rollback procedures
+  are in [`docs/event-bus-cutover.md`](docs/event-bus-cutover.md).
 
 ## Try it
 
@@ -538,21 +530,15 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 # Pi gets the same model/effort/rules/session lifecycle support as Claude:
 ./bin/rozoro spawn t3 --cwd /some/repo --harness pi --model openai-codex/gpt-5.6-sol --effort low --prompt 'Resolve issue #43.'
 
-# 2. watch the fleet event-driven (blocks, prints on each real transition):
-./bin/rozoro watch t1 t2
-#    06:01:03  t1  working
-#    06:01:07  t1  done
-
-# Pi's bundled watchtower extension needs no registration: its direct event
-# instructs the driver to inspect the validated task key.
+# 2. start/check the resident authority; Pi and supported Claude register
+# automatically and receive a fixed wake when reconciliation is pending:
+./bin/rozoro monitor start
+./bin/rozoro monitor status --json
+./bin/rozoro reconcile
 ./bin/rozoro status t1
 
-# External wake mode (for example, a resident Codex/Claude watchtower) registers
-# once and uses the durable ledger:
-./bin/rozoro register --harness codex
-./bin/rozoro watch --once --wake t1 t2 &
-# On that external nudge, reconcile and ack the generation it processed:
-./bin/rozoro reconcile
+# `watch` is only an explicit Herdr diagnostic / legacy-harness observer:
+./bin/rozoro watch --once t1 t2
 
 # 3. send a follow-up (DATA); --wait blocks until it settles:
 ./bin/rozoro send t1 'Now count the lines in README.' --wait
@@ -578,8 +564,9 @@ reaped too early. Prefer *not closing* over *closing and resuming*.)
 - ✅ presets: personal default.json wins; absent-file harness fallbacks resolve
 - ✅ Pi with gpt-5.6-sol/low: model/thinking/trust/system-prompt passthrough,
   native session linking, teardown, exact resume, and continued handoff context
-- ✅ Pi watchtower monitor: Herdr push subscription runs outside tool execution,
-  preserving interactive operator input while actionable edges trigger a turn
+- ✅ Pi watchtower monitor: the resident daemon's Herdr push subscription runs
+  outside tool execution, preserving interactive operator input while its
+  reconnecting adapter delivers a fixed reconcile follow-up on actionable edges
 - ✅ lock: live-holder refusal, stale-pid reclaim, release
 - ✅ runs on stock bash 3.2 (no `declare -A` / `mapfile`)
 
@@ -588,19 +575,26 @@ Copilot CLI 1.0.80 with Herdr 0.8.2 was live-verified for launch, prompt, interr
 ### Status v2 and background-work boundary
 
 `rozoro status` is read-only: it never contacts Herdr and never writes any
-cursor (the old `.seen-blocks` miss-detector it used to advance is gone). The
-watcher owns `state/<id>.runtime.json`, while the append-only handoff and
-`.acked-blocks-v2` own task reporting and FIFO acknowledgement.
+cursor (the old `.seen-blocks` miss-detector it used to advance is gone). For
+managed Pi and supported Claude, the resident daemon owns the runtime
+projection; `state/<id>.runtime.json` and its watcher remain only as the
+explicit legacy-diagnostic fallback (see
+[`docs/event-bus-cutover.md`](docs/event-bus-cutover.md)). The append-only
+handoff and `.acked-blocks-v2` own task reporting and FIFO acknowledgement.
 `runtime_status`, `foreground_status`, `background_activity`, `task_status`, and
 `turn_report_status` are independent axes; `done` is a runtime/crew assertion,
 not user acceptance.
 
 A crew may report `verdict: waiting` only with useful reason/pending text and no
-requested input. **Herdr 0.8.2 does not expose normalized background jobs**, so
-this Stage 1 release reports background support/count as unknown and treats every
-waiting report as `inconsistent-wait` (actionable). It does not inspect terminal
-text or Claude footers. Certified wait suppression and final-job wake are Stage
-2, gated on a Herdr release providing harness-neutral capability discovery,
-synchronized active counts/opaque job IDs, ordered revisions and final-zero
-success/failure/cancellation events. Acceptance and timeouts remain driver/user
-policy.
+requested input. Supported Claude hooks publish certified
+`background.start`/`background.stop`/`background.snapshot` events through the
+daemon, so a genuine background job reports `waiting-background` instead of
+`inconsistent-wait`. **Herdr 0.8.2 does not expose normalized background jobs**,
+so managed Pi and Herdr-only harnesses (Copilot, Codex, legacy `rzr-watch`)
+still report background support/count as unknown and treat every waiting
+report as `inconsistent-wait` (actionable); status does not inspect terminal
+text or Claude footers as a substitute. Certified wait suppression and
+final-job wake for those harnesses are gated on a Herdr release providing
+harness-neutral capability discovery, synchronized active counts/opaque job
+IDs, ordered revisions and final-zero success/failure/cancellation events.
+Acceptance and timeouts remain driver/user policy.

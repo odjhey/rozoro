@@ -18,6 +18,8 @@ def serve(conn):
     if mode == "malformed": conn.sendall(b'{"result":{"type":"wrong"}}\n'); return
     conn.sendall(b'{"id":"rozoro-eventwait","result":{"type":"subscription_started"}}\n')
     if mode == "timeout": time.sleep(2); return
+    if mode == "delayed":
+        time.sleep(0.35)
     if mode == "flood":
         msg = {"event":"pane.agent_status_changed","data":{"pane_id":"p1","workspace_id":"w1","agent_status":"working","agent":"agent"}}
         wire = (json.dumps(msg) + "\n").encode()

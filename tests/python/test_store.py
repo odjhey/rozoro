@@ -425,6 +425,19 @@ class StoreTests(unittest.TestCase):
             self.assertEqual((snapshot["generation"], snapshot["availability"], snapshot["actionable_reason"]),
                              (1, "quiescent", "quiescent"))
 
+    def test_health_snapshot_pending_count_counts_undelivered_tasks_with_no_drivers(self):
+        def reducer(tx, item, durable_seq):
+            tx.upsert_task_projection("task-1", durable_seq, availability="quiescent")
+            return "quiescent"
+        def actionable(tx, item, durable_seq, reduced):
+            return ActionableChange("task-1", "quiescent")
+        with EventStore(self.db) as store:
+            store.accept_event(event(), reducer=reducer, actionable=actionable)
+            self.assertEqual(store._connection.execute(
+                "SELECT count(*) FROM watchtower_deliveries"
+            ).fetchone()[0], 0)
+            self.assertEqual(store.health_snapshot()["pending_count"], 1)
+
     def test_generation_snapshots_remain_exact_after_newer_projection(self):
         def reducer(availability):
             def apply(tx, item, durable_seq):

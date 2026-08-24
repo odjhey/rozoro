@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """Run the Rozoro monitor in the foreground."""
+import sys
 
-from __future__ import annotations
+if sys.version_info < (3, 11):
+    print(
+        "rozorod: Python >=3.11 is required (Python 3.10 is not yet supported; "
+        "EOL Python 3.9 is out of policy); install Homebrew Python with "
+        "`brew install python` and ensure its python3 precedes older interpreters on PATH "
+        f"(found {sys.version.split()[0]} at {sys.executable})",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 import argparse
 import asyncio
 import os
 import signal
-import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

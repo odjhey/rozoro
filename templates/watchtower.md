@@ -48,41 +48,15 @@ are passed to the crew verbatim.
    an immutable task key, then renders a durable brief (with
    the handoff protocol), spawns the crew, links its session. Prefer this over raw
    `./bin/rozoro spawn`.
-2. Sense without blocking. In Pi, this repo's `rozoro-watchtower` extension owns
-   the Herdr push subscriber in the background and injects a `[rozoro event]`
-   message on actionable edges. **Never run `./bin/rozoro watch` in a foreground bash
-   tool call**: that occupies your turn and queues operator messages. The
-   extension starts automatically for this watchtower prompt; `/rozoro-monitor
-   status` reports it and `/rozoro-monitor on` repairs it. Its direct event names
-   the validated task key; run the instructed `./bin/rozoro status <id>`. This Pi
-   path needs no registration and has no wake ledger to reconcile. Outside Pi
-   (Codex or Claude), register your validated wake target once with
-   `./bin/rozoro register --harness <h>`, then run `./bin/rozoro watch --once
-   --wake <id>` only through a genuinely external background waiter — that nudge
-   is durable (at-least-once). When it arrives, run `./bin/rozoro reconcile` to
-   read verdicts and ack it.
-   `state/<id>.status` remains the non-blocking current-state snapshot.
-
-   **Claude registration.** `./bin/rozoro register --harness claude` requires the
-   herdr pane to report `interactive_ready`, which a Claude pane only does once
-   it reaches its own idle prompt — never mid-turn. So for a Claude watchtower,
-   register by hand at your first idle prompt:
-
-   ```
-   !./bin/rozoro register --harness claude
-   ```
-
-   This is the one documented registration path — not a fallback. It always
-   works once you're idle, requires no setup, and doesn't depend on any
-   settings file loading correctly. Do it once per session, before relying on
-   `./bin/rozoro watch --wake`.
-
-   A Claude watchtower is launched with `ROZORO_ROLE=watchtower` in its
-   environment. That marker is session identity, not a registration
-   mechanism: it distinguishes this session as a watchtower from a
-   rozoro-spawned crew or a plain dev session opened in the same checkout.
-   Nothing reads it yet — it's reserved for watchtower-scoped tooling, such
-   as the planned long-lived monitor daemon (#25).
+2. Sense without blocking. The resident `rozorod` event bus is the single
+   semantic owner for managed Pi and supported Claude. Pi's extension and the
+   Claude watchtower poller register with `monitor.sock`, receive a coalesced
+   generation, and deliver only the fixed reconciliation nudge. On that nudge run
+   `./bin/rozoro reconcile`; then inspect named tasks with `./bin/rozoro status
+   <id>`. `/rozoro-monitor status` shows Pi adapter health and `./bin/rozoro
+   monitor status --json` shows daemon, Herdr, adapter, delivery, retry, and spool
+   health. Never run `./bin/rozoro watch` for normal Pi/Claude management; it is
+   retained only for diagnostics and legacy harness compatibility.
 3. On each edge, `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
    raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
    `needs-action` → answer with `./bin/rozoro send <id> "..."`; a no-new-block on an idle

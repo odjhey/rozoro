@@ -1,6 +1,6 @@
 # Claude hook capability proof
 
-Status: live characterization; no production wiring
+Status: certified capability used by production event-bus wiring
 
 ## Tested target
 

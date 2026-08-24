@@ -74,6 +74,12 @@ case "$HARNESS" in
   claude|codex|copilot|pi) ;;
   *) rzr_die "resume does not support harness '$HARNESS'; relaunch it your own way" ;;
 esac
+EVENT_BUS=false
+[ "$HARNESS" = claude ] && EVENT_BUS=true
+if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
+  "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
+fi
+[ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
 PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
 if jq -e 'has("profile")' "$SESS" >/dev/null 2>&1; then
   jq -e '
@@ -100,6 +106,10 @@ rzr_profile_validate "$HARNESS" "$MODEL" "$EFFORT" "$FAST"
 CWD="${CWD_OV:-$(jq -r '.cwd // empty' "$SESS" 2>/dev/null)}"
 [ -n "$CWD" ] || rzr_die "no cwd recorded in $SESS and none passed; give --cwd <dir>"
 CWD="$(cd "$CWD" && pwd)" || rzr_die "bad cwd '$CWD'"
+EVENT_SETTINGS=""
+if [ "$EVENT_BUS" = true ]; then
+  EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$UUID")" || exit 1
+fi
 
 if [ -n "$BRIEF" ]; then
   [ -f "$BRIEF" ] || rzr_die "no brief file at $BRIEF"
@@ -110,6 +120,18 @@ fi
 # for Claude because `claude --resume` does not re-apply its original system
 # prompt, and keeps the contract explicit for Codex and Pi resumes too. The follow-up
 # itself remains verbatim after the delimiter.
+if [ "$HARNESS" = pi ]; then
+  SYSFILE="$(rzr_task_dir "$ID")/sysprompt.md"
+  if [ ! -s "$SYSFILE" ]; then
+    rzr_render_handoff_protocol "$ID"
+    { printf 'rozoro-task: %s\n\n' "$ID"; cat "$(rzr_handoff_protocol_path "$ID")"; } > "$SYSFILE"
+    chmod 600 "$SYSFILE"
+  elif ! grep -Fxq "rozoro-task: $ID" "$SYSFILE"; then
+    TMP="$SYSFILE.task-marker.$$"
+    { printf 'rozoro-task: %s\n\n' "$ID"; cat "$SYSFILE"; } > "$TMP"
+    chmod 600 "$TMP"; mv "$TMP" "$SYSFILE"
+  fi
+fi
 if [ -n "$PROMPT" ]; then
   rzr_render_handoff_protocol "$ID"
   HANDOFF="$(rzr_handoff_protocol_path "$ID")"
@@ -151,6 +173,7 @@ do_resume() {
   rzr_meta_set "$ID" fast "$FAST"
   rzr_meta_set "$ID" permission_mode "${PERMMODE:-}"
   rzr_meta_set "$ID" session "$UUID"
+  rzr_meta_set "$ID" event_bus "$EVENT_BUS"
   rzr_meta_set "$ID" resumed "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
   echo "rzr: resuming '$ID' (session $UUID) -> tab ${tab:-?} pane $pane (cwd $CWD)"
@@ -164,6 +187,7 @@ do_resume() {
       [ -n "$PERMMODE" ] && pass+=(--permission-mode "$PERMMODE")
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
+      [ -z "$EVENT_SETTINGS" ] || pass+=(--settings "$EVENT_SETTINGS")
       ;;
     codex)
       pass=(resume "$UUID")
@@ -178,7 +202,7 @@ do_resume() {
       [ -n "$EFFORT" ] && pass+=(--effort "$EFFORT")
       ;;
     pi)
-      pass=(--session "$UUID")
+      pass=(--extension "$RZR_BIN/../.pi/extensions/rozoro-watchtower.ts" --session "$UUID")
       [ -n "$PERMMODE" ] && pass+=(--approve)
       [ -n "$MODEL" ] && pass+=(--model "$MODEL")
       [ -n "$EFFORT" ] && pass+=(--thinking "$EFFORT")

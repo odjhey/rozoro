@@ -21,7 +21,7 @@ class ProtocolFixturesTest(unittest.TestCase):
             {message["type"] for message in messages},
             {"session.register", "turn.start", "background.start", "background.stop",
              "background.snapshot", "turn.stop", "session.end", "health", "monitor.stop",
-             "health.result", "watchtower.register",
+             "health.result", "watchtower.register", "notification.pending",
              "notification", "notification.delivered", "reconcile", "reconcile.result",
              "ack-generation", "ok", "ack", "frame.error", "event.error", "request.error"},
         )
