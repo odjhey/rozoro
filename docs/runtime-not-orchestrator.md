@@ -1,286 +1,306 @@
-# Rozoro: runtime, not orchestrator
+# Rozoro: preserve the workflow, test the substrate
 
-Status: proposed product boundary
+Status: proposed product direction / implementation pause
 Date: 2026-08-24
 
 ## Decision
 
-Rozoro should no longer define itself as an agent orchestrator or as a control tower that owns a fleet workflow.
+Do **not** begin a `rozoro-core` extraction yet.
 
-The target product is a **durable local runtime and message bus for AI harness sessions**. Rozoro starts or attaches to a harness-level conversation, gives it a stable task/session address, observes runtime and lifecycle facts, transports data and control messages, persists events and mailbox state, and can resume the exact native conversation later.
+Preserve the current Rozoro experience that is already useful in day-to-day work, while treating the proposed lower-level runtime/message-bus boundary as a hypothesis to test rather than a new subsystem to build immediately.
 
-Everything that requires understanding **what work should happen next** lives above Rozoro.
+Before extracting harness/session infrastructure from the current implementation, run a focused spike against:
 
-A useful one-line description is:
+- [Agent Client Protocol (ACP)](https://github.com/agentclientprotocol/agent-client-protocol), which already standardizes a substantial part of coding-agent session communication; and
+- [acpx](https://github.com/openclaw/acpx), a headless client for stateful ACP sessions that already covers persistent session operation across coding agents.
 
-> Start, address, observe, message, and resume durable AI sessions across harnesses.
+The question is no longer "how should we build `rozoro-core`?". The question is:
 
-The architectural rule is:
+> **What capability remains uniquely worth owning in Rozoro after ACP/acpx and harness-native orchestration are used as far as they can go?**
 
-> **One Rozoro session corresponds to one harness-level conversation/process. Anything recursively below that conversation belongs to the harness.**
+Until that question is answered with working evidence, current Rozoro remains the operational product.
 
-## Why change the boundary
+## Preserve current Rozoro
 
-The original Rozoro pitch solved a real usability problem: one driver spawned, watched, messaged, and reaped several independent agent sessions so the operator did not have to babysit terminal tabs.
+This direction is deliberately compatibility-first. The existing workflow should continue to work while the alternative substrate is evaluated.
 
-That boundary is becoming less defensible as harnesses add their own subagent trees, background agents, worktree isolation, routing, fan-out/fan-in, agent-team semantics, and session UIs. Reimplementing those features in Rozoro creates a permanent race with Claude, Pi, Codex, and other harness ecosystems.
+In particular, preserve:
 
-Rozoro has a stronger cross-harness boundary that those features do not replace: a durable local address and lifecycle/message/event substrate that is independent of which harness is running the conversation and independent of which process is driving it.
+- the current `./bin/rozoro` commands and operator workflow;
+- Herdr-backed spawning and inspectable tabs/panes;
+- task folders and durable task identity;
+- exact native-session linkage and resume behavior;
+- `rozorod`, its event store, projections, wake generations, and reconciliation path;
+- DATA versus CONTROL separation;
+- current handoff/report semantics used by the watchtower;
+- the current watchtower workflow and its coder/reviewer/tester routing conventions;
+- compatibility with existing `$ROZORO_HOME` state.
 
-This also makes non-agent producers first-class. A GitHub listener, CI job, cron job, shell script, desktop UI, or another agent can publish an event or message to a durable task address without becoming the workflow manager.
+No migration should make the working setup less useful merely to achieve a cleaner architecture.
 
-## Target architecture
+A useful rule for every exploratory or migration change is:
+
+> **Can today's Rozoro workflow still run after this change?**
+
+Until a deliberate breaking migration is approved, the answer must remain yes.
+
+## Why the earlier `rozoro-core` proposal is paused
+
+The previous version of this decision proposed extracting a harness-neutral local runtime that would own session identity, lifecycle, messaging, control, resume, and harness adapters.
+
+That is directionally attractive, but the ecosystem now covers much of that surface already.
+
+ACP provides a standard protocol boundary for coding-agent clients and agents. acpx provides a practical stateful/headless client around ACP sessions. Rebuilding our own Claude/Codex/Pi session protocol and adapter layer before proving gaps in those projects would create unnecessary ownership and maintenance cost.
+
+Therefore:
+
+- do **not** create a new harness abstraction simply because current Rozoro is coupled to Herdr;
+- do **not** extract `ClaudeAdapter`, `CodexAdapter`, `PiAdapter`, etc. until the ACP path has been tested;
+- do **not** introduce `HerdrHost` / `TmuxHost` as a new abstraction solely for architectural neatness;
+- do **not** delete current Herdr integration while it remains the proven operational path.
+
+The target architecture remains intentionally unresolved until the spike produces evidence.
+
+## What still appears valuable
+
+The product-boundary insight from the earlier proposal still stands: Rozoro should be suspicious of features that duplicate harness-native agent orchestration.
+
+Harnesses increasingly own:
+
+- nested subagents;
+- agent teams/trees;
+- fan-out/fan-in inside a harness conversation;
+- worktree-aware child-agent execution;
+- native session UIs and background agents;
+- planning/delegation mechanics that are specific to that harness.
+
+Rozoro should not race those ecosystems merely to offer another multi-agent framework.
+
+What may remain valuable is a thinner layer above ACP/acpx that is specific to our operating problem:
+
+- durable **task addresses** that are meaningful outside the native agent session;
+- a mailbox/inbox for independently produced events and messages;
+- attribution, ordering, acknowledgement, and supersession of those items;
+- mapping a stable task address to whichever coding-agent session currently owns it;
+- external producers such as GitHub, CI, cron/background jobs, scripts, or future UIs;
+- compatibility with the existing watchtower experience while orchestration policy remains outside the substrate.
+
+This is a hypothesis, not yet a commitment to build a new core.
+
+## The likely boundary, if the spike validates it
+
+The current working hypothesis is:
 
 ```text
-                         intelligence / workflow policy
+                    workflow / judgment
 
-       Claude native      Pi native       Codex native      optional clients
-       subagents/teams     extensions      capabilities      watchtower, UI,
-       workflows/etc.                                      scripts, automation
-             |                |                |                  |
-             +----------------+----------------+------------------+
-                                      |
-                               Rozoro protocol
-                                      |
-                         +------------v------------+
-                         |        rozorod          |
-                         |                         |
-                         | task/session identity   |
-                         | lifecycle projections   |
-                         | durable event log       |
-                         | mailbox / acknowledgement|
-                         | DATA message delivery   |
-                         | CONTROL actuation       |
-                         | native resume linkage   |
-                         +------------+------------+
-                                      |
-                                   Herdr
-                                      |
-                         terminals / processes / OS
+       harness-native agents     optional watchtower
+       teams / trees / planning  routing / prioritization
+                  |                       |
+                  +-----------+-----------+
+                              |
+                  stable task/mailbox layer
+                       (possible Rozoro)
+                              |
+                         ACP / acpx
+                              |
+                   coding harness sessions
 ```
 
-Harness adapters translate native lifecycle/session capabilities into the Rozoro runtime model. They must not translate native workflow policy into a Rozoro workflow engine.
+In this model ACP/acpx owns as much of the coding-session protocol and persistence problem as possible.
 
-## What Rozoro core owns
-
-Rozoro core may own only concepts that remain meaningful without understanding the task domain:
-
-- durable task/session identity and addressing;
-- starting, attaching, stopping, restarting, and resuming harness-level sessions;
-- native session linkage required to resume the exact conversation;
-- harness adapters and capability detection;
-- process/liveness and harness-supported foreground/background lifecycle facts;
-- durable event storage and projections;
-- DATA-plane message delivery to a conversation;
-- CONTROL-plane actuation such as interrupt, cancel, key, stop, and restart;
-- mailbox/inbox ordering, attribution, delivery, acknowledgement, and supersession primitives;
-- launch profiles that describe **how a harness process starts**, not what role it plays in a workflow;
-- operator- and program-facing APIs/CLI/socket interfaces for the above.
-
-The DATA/CONTROL distinction remains a core invariant:
+Rozoro would only own the application-level indirection that ACP sessions do not necessarily provide:
 
 ```text
-send      = tell the conversation something
-control   = tell the runtime/process something
+GitHub review ----+
+CI failure -------+----> task: pr-63 ----> current ACP session
+human message ----+
+background job ---+
 ```
 
-## What Rozoro core does not own
+External producers address `pr-63`; they do not need to know whether the current owner is Claude, Codex, Pi, or which native session identifier is active.
 
-The following are explicitly outside core:
+If ACP/acpx already provides this adequately, even this layer should be reduced further or contributed upstream rather than rebuilt locally.
+
+## What does not belong in a future substrate
+
+Whether the eventual substrate is ACP/acpx directly or a thin Rozoro layer around it, it should not own:
 
 - task decomposition;
 - planner/coder/reviewer/tester workflow graphs;
 - deciding which agent should act next;
-- fan-out/fan-in orchestration;
 - nested agent trees;
 - agent-team semantics;
 - worktree strategy or branch policy;
 - PR review or merge policy;
 - test-gate policy;
 - business priority;
-- deciding whether an implementation is correct;
-- deciding whether a task is accepted or complete;
-- repository-specific instructions;
-- role/persona taxonomies that imply workflow state.
+- correctness judgment;
+- acceptance judgment;
+- repository-specific instructions.
 
-The litmus test is:
+Those belong to one of three higher layers:
 
-> If a feature must understand what the agent is trying to accomplish, it probably lives above Rozoro. If it only needs to know where a session is, whether it is alive, what runtime event occurred, or how something can talk to it, it probably belongs in Rozoro.
+1. **Harness-native orchestration** for child agents, trees, teams, and within-session delegation.
+2. **Repository-local policy** for worktrees, branch/PR/test/merge rules, CI, and project instructions.
+3. **Optional watchtower/client policy** for cross-session decomposition, routing, triage, and prioritization when that operating model is useful.
 
-## Where the removed features live
+The current watchtower therefore remains useful. The architectural correction is only that it should eventually be a client of stable session/task primitives rather than defining universal runtime semantics.
 
-Removing orchestration from core does **not** mean deleting useful operating behavior. It relocates that behavior to the layer that can own it without coupling the runtime to one harness or one engineering workflow.
+## Relationship to no-mistakes
 
-| Former / tempting Rozoro concern | New owner | Notes |
-|---|---|---|
-| Nested subagents and child-agent trees | **Harness-native orchestration** | Claude subagents/teams/workflows, Pi extensions, or equivalent native mechanisms. Rozoro sees the parent harness-level conversation, not its internal children. |
-| Fan-out/fan-in inside one harness conversation | **Harness-native orchestration** | Use the harness capability when available instead of rebuilding a graph engine in Rozoro. |
-| Child worktree creation/isolation | **Harness or repo tooling** | Worktrees are implementation/workflow policy, not session-runtime identity. |
-| Task decomposition | **Driver/watchtower application or harness-native planner** | A client may decompose work and create multiple independent Rozoro sessions when separate lifecycle/context/accountability is actually useful. |
-| Coder -> reviewer -> tester routing | **Optional watchtower application / skill** | Keep the proven operating model as a client of Rozoro, not as Rozoro state-machine semantics. |
-| Cross-task prioritization | **Operator + optional watchtower application** | The operator owns business priority; a client can consume mailbox events and propose/execute routing policy. |
-| Review/test/merge rules | **Target repository** | `AGENTS.md`, `CLAUDE.md`, skills, scripts, CI, and repository policy remain authoritative. |
-| Crew personas/roles | **Prompt/skill or harness configuration** | If needed, they are application-level behavior. A core launch profile only describes process startup. |
-| Acceptance / "done" judgment | **Operator or application layer** | Runtime `idle`/`turn-complete`/`stopped` are facts; accepted/correct/ready-to-merge are judgments. |
-| GitHub/CI/background-job reactions | **External producer + Rozoro mailbox/message API** | The producer publishes to a durable task address. It does not need to impersonate or spawn a manager agent. |
+This direction also keeps a clean boundary with [no-mistakes](https://github.com/kunchenguid/no-mistakes).
 
-### The optional watchtower still exists
+- no-mistakes owns validation and delivery of a **code change**: review, test, docs, lint, fixes/escalation, push, PR, and CI gates.
+- the possible Rozoro task/mailbox layer owns continuity and communication around a **live task/session**.
+- ACP/acpx owns as much as practical of the coding-agent session protocol and persistence underneath.
 
-The watchtower should survive as an **application of Rozoro**, not as the product definition.
-
-It may be implemented as a prompt/skill/client that consumes stable Rozoro primitives and adds policy such as:
-
-- decompose a checked plan into independent work;
-- choose when separate sessions are useful;
-- assign coder/reviewer/tester roles;
-- triage mailbox items across many tasks;
-- preserve operator priority;
-- route reviewer/test feedback back to the relevant session;
-- decide when evidence is sufficient to ask the operator for acceptance.
-
-Conceptually:
+A possible composition is:
 
 ```text
-+------------------------+
-| optional watchtower    |
-|------------------------|
-| decomposition          |
-| priorities             |
-| coder/review/test loop |
-| completion judgment    |
-+-----------+------------+
-            |
-       Rozoro protocol
-            |
-+-----------v------------+
-| Rozoro core            |
-|------------------------|
-| sessions               |
-| identities             |
-| messages               |
-| events                 |
-| mailbox                |
-| lifecycle              |
-+------------------------+
+optional orchestration / watchtower
+              |
+     Rozoro task/mailbox ?
+              |
+          ACP / acpx
+              |
+      coding harness session
+              |
+         no-mistakes
+     when a change is ready
 ```
 
-A Claude driver, Pi driver, purpose-built client, or future desktop application can all implement the watchtower policy against the same core.
+The layers are not required to be strictly nested at runtime; the diagram expresses responsibility.
 
-### Repository policy remains repository-local
+## ACP/acpx spike
 
-Rules that only make sense for a particular checkout remain in that checkout. Examples include how to create or select worktrees, whether a PR may merge, which tests are required, branch conventions, release gates, and project-specific review standards.
+The next architectural work should be a small, disposable spike rather than a refactor of current Rozoro.
 
-Rozoro launches the conversation in the target `--cwd`; the harness and repository rules determine how the work is performed.
+### Goal
 
-## Tasks become durable addresses/mailboxes
+Determine what ACP/acpx already replaces and identify only the missing capabilities that matter to the current Rozoro experience.
 
-The durable Rozoro abstraction should be the **task/session address**, not a crew role.
+### Minimum experiment
 
-For example, the durable address `pr-63` can receive independently produced information:
+Run equivalent operations against Claude, Codex, and Pi where practical:
+
+1. create three independently addressable sessions;
+2. send initial work to each;
+3. observe structured session/turn state without scraping terminal output;
+4. send a follow-up to an existing session;
+5. terminate the launching shell/helper where supported;
+6. reconnect and continue the same native conversation;
+7. cancel/interrupt a running turn where supported;
+8. consume machine-readable lifecycle/session events;
+9. determine what state survives process restart;
+10. determine whether named application tasks can be cleanly mapped to ACP/acpx sessions.
+
+### Task/mailbox proof
+
+Then test the part that may remain uniquely useful:
 
 ```text
-GitHub review ----+
-CI failure -------+----> pr-63 mailbox ----> attached/resumed harness session
-human message ----+
-another process --+
+external producer
+      |
+      v
+ durable task address: pr-63
+      |
+      v
+ whichever ACP session owns pr-63
 ```
 
-Producers should not need to know the Claude/Pi/Codex/Copilot native session identifier. Rozoro resolves the durable task address to the current native session linkage and preserves the history across stop/resume cycles.
+At minimum prove:
 
-The mailbox owns mechanical properties such as stable identity, ordering, attribution, delivery state, acknowledgement, and supersession. Rozoro must not infer business priority or correctness from those items.
+- a stable task ID independent of the ACP/native session ID;
+- durable delivery of an externally generated message/event;
+- exact attribution to the intended task when many tasks are active;
+- reconnect/resume without external producers changing their address;
+- acknowledgement that is independent of session transport acknowledgement.
 
-This is the basis for supporting many simultaneous tasks without requiring one resident manager agent to receive every event at the same instant.
+### Decision output
 
-## Runtime facts versus application judgments
+The spike should end with a capability matrix:
 
-Core status should prefer mechanical facts:
+| Capability | Current Rozoro | ACP | acpx | Thin Rozoro layer needed? |
+|---|---:|---:|---:|---:|
+| create session | | | | |
+| named/persistent session | | | | |
+| prompt/follow-up | | | | |
+| structured lifecycle | | | | |
+| cancel/control | | | | |
+| exact resume | | | | |
+| multi-harness support | | | | |
+| stable application task address | | | | |
+| external producer mailbox | | | | |
+| attribution/ordering/ack | | | | |
+| current watchtower compatibility | | | | |
 
-```text
-session:       alive
-foreground:    idle
-background:    none
-input:         available
-last_event:    turn.completed
-```
+Only capabilities in the final column should become candidates for new Rozoro substrate work.
 
-Application-level reports may still be transported and persisted, but core should treat their payload as opaque data. For example, a client may publish:
+## Herdr and tmux are also deferred
 
-```json
-{
-  "type": "report",
-  "task": "pr-63",
-  "payload": {
-    "verdict": "needs-action",
-    "summary": "reviewer found a blocker"
-  }
-}
-```
+The previous discussion suggested separating hosting from harness semantics with Herdr/tmux/local host adapters.
 
-Rozoro may store and deliver this report. It should not define `needs-action` as a universal workflow state or decide what should happen next.
+That remains plausible, but it is **not yet justified**.
 
-## Target product surface
+If ACP/acpx can operate sessions headlessly and provide the structured lifecycle/control path we need, Herdr or tmux may be primarily an inspectability/terminal UX choice rather than part of runtime correctness.
 
-The eventual CLI should converge on boring runtime nouns and verbs:
+Therefore:
 
-```text
-rozoro start
-rozoro attach
-rozoro list
-rozoro status
-rozoro send
-rozoro control
-rozoro stop
-rozoro resume
-rozoro events
-rozoro inbox
-rozoro ack
-rozoro profile
-rozoro doctor
-```
+- Herdr remains the current default and supported operational path;
+- no Herdr removal is proposed;
+- no tmux adapter should be built until the ACP/acpx spike identifies a concrete hosting gap;
+- if a host abstraction is later needed, extract it from proven requirements rather than inventing it in advance.
 
-Existing commands do not need to be renamed immediately. This is a product-boundary target, not a demand for a flag-day migration.
+## Current product versus exploration
 
-`crew` should eventually become `profile` where it means launch configuration. Terms such as `watchtower`, `planner`, `coder`, `reviewer`, and `tester` should not appear in core schemas or runtime state except as opaque user/application labels.
+### Current product
 
-## Migration implications
+Current Rozoro remains a **highly opinionated way to deliver tasks to multiple coding harness sessions** through Herdr, with durable local state and a watchtower-oriented operating model.
 
-This decision should drive a deliberate cleanup rather than an immediate destructive rewrite:
+That is the thing we can use today.
 
-1. Preserve shipped runtime/event-bus/session-resume behavior that fits the new boundary.
-2. Separate mailbox/event transport semantics from watchtower-specific policy.
-3. Move watchtower prompt/directive material into an optional application/skill area.
-4. Stop adding workflow semantics to core status, schemas, and CLI.
-5. Prefer harness-native subagent/workflow features whenever work stays inside one harness-level conversation.
-6. Create independent Rozoro sessions only when independent lifecycle, context, cross-harness execution, durable addressability, or accountability is useful.
-7. Rename `crew` concepts opportunistically when they are only launch profiles; maintain compatibility rather than forcing a flag day.
-8. Delete or demote core documentation that presents Rozoro itself as the intelligence/manager after equivalent userland guidance exists.
+### Exploration
 
-No shipped persistence or session data needs to be discarded merely because the conceptual boundary changes.
+The project is evaluating whether its longer-term durable substrate should become much thinner by delegating session protocol/persistence to ACP/acpx and retaining only task/mailbox behavior that is demonstrably missing.
 
-## Relationship to the existing watchtower documentation PR
+The exploration must not be presented as shipped architecture.
 
-PR #46 correctly separates workflow policy from lower-level lifecycle primitives in its proposed workflow-boundary ADR, but its broader product framing still centers one primary watchtower coordinating a large crew fleet.
+## Relationship to PR #46
 
-This decision goes further: **the watchtower is optional userland policy, not a core Rozoro actor or scaling unit**. The durable event/mailbox/session substrate proposed there remains useful, while watchtower-specific priority, routing, and workflow semantics move above the core.
+PR #46 documents the richer watchtower/mailbox product model and correctly separates repository workflow policy from lower-level lifecycle primitives.
 
-If PR #46 lands, its watchtower-centric ADRs and language should be reconciled against this decision rather than treated as permanent core architecture.
+This decision does not require throwing that operational model away. Instead:
+
+- preserve the watchtower workflow as the current opinionated product experience;
+- preserve the durable event/mailbox lessons from #46;
+- avoid hardening watchtower-specific semantics into a newly extracted core before ACP/acpx is evaluated;
+- reconcile #46 later against whatever the spike proves.
 
 ## Consequences
 
-Benefits:
+### Benefits
 
-- Rozoro stops competing with rapidly improving harness-native orchestration.
-- Claude, Pi, Codex, and future harnesses can use their strongest native delegation model without Rozoro modelling their internal trees.
-- Cross-harness sessions still share one durable identity/event/message surface.
-- Background jobs and external automation become first-class producers.
-- The existing watchtower workflow remains possible without contaminating the runtime with one workflow design.
-- The product becomes easier to test: core correctness is about identity, durability, ordering, delivery, lifecycle, and actuation rather than agent judgment.
+- Current Rozoro remains usable at work while architecture is explored.
+- We avoid duplicating ACP/acpx without evidence that duplication is necessary.
+- We avoid premature Herdr/tmux/harness adapter abstractions.
+- Harness-native orchestration can improve independently of Rozoro.
+- The likely unique value—stable task addressing, external event delivery, mailbox semantics, and cross-session continuity—can be tested directly.
+- A failed hypothesis is cheap: if ACP/acpx solves almost everything, Rozoro can shrink rather than defend unnecessary infrastructure.
 
-Costs:
+### Costs
 
-- Some current terminology and documentation becomes transitional.
-- The optional watchtower/client layer needs an explicit home and interface.
-- Harness-specific orchestration behavior will differ by harness instead of being normalized by Rozoro.
-- Users who want an opinionated end-to-end multi-agent workflow will need a client/skill on top of core.
+- The internal architecture remains transitional for longer.
+- Current Herdr coupling remains in place during the spike.
+- Some recent architectural ideas are deliberately left unresolved.
+- We need experimental evidence before committing to a cleaner decomposition.
 
-These costs are intentional. Rozoro should normalize the **runtime boundary**, not the intelligence above it.
+These costs are preferable to extracting and maintaining a new `rozoro-core` that existing ecosystem components may already provide.
+
+## Decision rule
+
+Do not build substrate because it feels architecturally clean.
+
+First prove that current Rozoro needs a capability that ACP, acpx, harness-native orchestration, repository-local tooling, and no-mistakes do not already provide well enough.
+
+Then build only that gap.
