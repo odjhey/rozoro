@@ -10,6 +10,30 @@ load test_helper/common
   done
 }
 
+@test "CI validates pull requests without duplicate branch push runs" {
+  workflow="$REPO_ROOT/.github/workflows/test.yml"
+
+  run grep -Fx "  pull_request:" "$workflow"
+  assert_success
+
+  run awk '
+    /^  push:/ { in_push = 1; next }
+    /^  [[:alnum:]_]+:/ { in_push = 0 }
+    in_push { print }
+  ' "$workflow"
+  assert_success
+  [ "$output" = $'    branches:\n      - master' ]
+}
+
+@test "CI concurrency cancels only superseded runs for the same PR or branch" {
+  workflow="$REPO_ROOT/.github/workflows/test.yml"
+
+  run grep -Fx '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' "$workflow"
+  assert_success
+  run grep -Fx "  cancel-in-progress: true" "$workflow"
+  assert_success
+}
+
 @test "Pi watchtower event-bus adapter is covered by Node tests" {
   run node --experimental-strip-types --test \
     "$REPO_ROOT/tests/pi-event-bus-adapter.test.ts" \
