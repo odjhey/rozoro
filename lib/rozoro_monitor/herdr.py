@@ -38,6 +38,7 @@ class Subscription(Protocol):
 SubscriberFactory = Callable[[tuple[str, ...]], Subscription]
 LevelReader = Callable[[str], Awaitable[PaneLevel]]
 Reconciler = Callable[[str, PaneLevel], Awaitable[None]]
+Retirer = Callable[[str], Awaitable[None]]
 
 def inventory(state_dir: str | os.PathLike[str]) -> Inventory:
     """Boundedly read private, no-follow regular metadata entries.
@@ -87,10 +88,11 @@ def inventory(state_dir: str | os.PathLike[str]) -> Inventory:
 
 class MembershipMonitor:
     def __init__(self, state_dir, subscriber: SubscriberFactory, level_reader: LevelReader,
-                 reconcile: Reconciler, *, scan_interval=30.0, hint_interval=.20,
+                 reconcile: Reconciler, *, retire: Retirer | None = None,
+                 scan_interval=30.0, hint_interval=.20,
                  debounce=.15, drain_interval=.05):
         if min(scan_interval, hint_interval) <= 0 or min(debounce, drain_interval) < 0: raise ValueError("invalid timing")
-        self.state_dir=Path(state_dir); self.subscriber=subscriber; self.level_reader=level_reader; self.reconcile=reconcile
+        self.state_dir=Path(state_dir); self.subscriber=subscriber; self.level_reader=level_reader; self.reconcile=reconcile; self.retire=retire
         self.scan_interval=scan_interval; self.hint_interval=hint_interval; self.debounce=debounce; self.drain_interval=drain_interval
         self.members: dict[str,Member]={}; self._subscription=None; self._consumer=None; self._runner=None; self._hints=None
         self._wake=asyncio.Event(); self.connected=False; self.last_error=None; self.last_scan_errors=()
@@ -159,6 +161,12 @@ class MembershipMonitor:
             self.members=previous; self._active_token=previous_token; self._route_generation=previous_routes
             if consumer: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             await new.close(); raise
+        # A valid metadata removal is controlled retirement, not an unexpected
+        # pane-loss edge. Apply it only after the replacement stream and level
+        # scan succeeded, so failed routing changes cannot retire members.
+        if self.retire:
+            for task in sorted(set(previous) - set(found)):
+                await self.retire(task)
         old,old_consumer=self._subscription,self._consumer
         self._subscription,self._consumer=new,consumer
         self.connected=bool(found) and levels_ok and not consumer.done()

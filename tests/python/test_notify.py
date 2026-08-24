@@ -20,6 +20,11 @@ def event(number, task="task-1"):
     return value
 
 
+def accept_fact(store, item):
+    """Create an explicit semantic fact; delivery tests do not test lifecycle policy."""
+    return store.accept_event(item, actionable=lambda tx, event, seq, reduced: ActionableChange(event["task_id"], "quiescent"))
+
+
 class Clock:
     def __init__(self): self.now = 10.0
     def __call__(self): return self.now
@@ -88,7 +93,7 @@ class CoalescerTests(unittest.TestCase):
             actuator = Actuator()
             coalescer = self.ready(store, actuator)
             for number in range(1, 21):
-                store.accept_event(event(number))
+                accept_fact(store, event(number))
                 coalescer.poll()
             self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 20)
             self.assertEqual(actuator.notifications, [])
@@ -104,7 +109,7 @@ class CoalescerTests(unittest.TestCase):
         with EventStore(self.db) as store:
             actuator = Actuator()
             coalescer = self.ready(store, actuator)
-            store.accept_event(event(1))
+            accept_fact(store, event(1))
             coalescer.poll()
             store.accept_event(
                 event(2),
@@ -124,7 +129,7 @@ class CoalescerTests(unittest.TestCase):
             actuator = Actuator(DeliveryStatus.DEFERRED, DeliveryStatus.ERROR,
                                 TimeoutError("timeout"), DeliveryStatus.DELIVERED)
             coalescer = self.ready(store, actuator)
-            store.accept_event(event(1))
+            accept_fact(store, event(1))
             coalescer.poll(); self.clock.advance(DEFAULT_COLLECTION_WINDOW)
             results = [coalescer.poll(), coalescer.poll(), coalescer.poll(), coalescer.poll()]
             self.assertEqual([r.status for r in results], [DeliveryStatus.DEFERRED, DeliveryStatus.ERROR,
@@ -140,8 +145,8 @@ class CoalescerTests(unittest.TestCase):
         with EventStore(self.db) as store:
             actuator = Actuator()
             coalescer = self.ready(store, actuator)
-            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350); coalescer.poll()
-            store.accept_event(event(2))
+            accept_fact(store, event(1)); coalescer.poll(); self.clock.advance(.350); coalescer.poll()
+            accept_fact(store, event(2))
             self.clock.advance(1); coalescer.poll()
             self.assertEqual([n.generation for n in actuator.notifications], [1])
             store.ack_generation("driver", "watch", coalescer.epoch, 1)
@@ -153,7 +158,7 @@ class CoalescerTests(unittest.TestCase):
             actuator = ReentrantActuator(DeliveryStatus.DEFERRED)
             coalescer = self.ready(store, actuator)
             actuator.coalescer = coalescer
-            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            accept_fact(store, event(1)); coalescer.poll(); self.clock.advance(.350)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.DEFERRED)
             self.assertIsNone(actuator.nested_result)
             self.assertEqual(actuator.calls, 1)
@@ -165,7 +170,7 @@ class CoalescerTests(unittest.TestCase):
         with EventStore(self.db) as store:
             actuator = BlockingActuator(DeliveryStatus.DELIVERED)
             coalescer = self.ready(store, actuator)
-            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            accept_fact(store, event(1)); coalescer.poll(); self.clock.advance(.350)
             first = []
             worker = threading.Thread(target=lambda: first.append(coalescer.poll()))
             worker.start()
@@ -179,7 +184,7 @@ class CoalescerTests(unittest.TestCase):
             self.assertIsNone(coalescer.poll())
             # ACK and a new generation prove the claim was released normally.
             store.ack_generation("driver", "watch", coalescer.epoch, 1)
-            store.accept_event(event(2)); coalescer.poll(); self.clock.advance(.350)
+            accept_fact(store, event(2)); coalescer.poll(); self.clock.advance(.350)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
             self.assertEqual(actuator.calls, 2)
 
@@ -188,10 +193,10 @@ class CoalescerTests(unittest.TestCase):
             # N was delivered on an old connection; N+1 arrived while its wake
             # remained outstanding.
             old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
-            store.accept_event(event(1))
+            accept_fact(store, event(1))
             store.offer_notification("driver", "old-watch", old_epoch)
             store.confirm_delivery("driver", "old-watch", old_epoch, 1)
-            store.accept_event(event(2))
+            accept_fact(store, event(2))
 
             actuator = BlockingActuator(DeliveryStatus.DELIVERED)
             coalescer = self.ready(store, actuator, "watch")
@@ -212,7 +217,7 @@ class CoalescerTests(unittest.TestCase):
             # still blocked. It batches into that first window and must not
             # move eligibility to t=10.450.
             self.clock.advance(.100)
-            store.accept_event(event(3))
+            accept_fact(store, event(3))
             self.assertIsNone(coalescer.poll())
             self.assertEqual(coalescer.deadline, 10.350)
             self.assertEqual(actuator.calls, 1)
@@ -235,10 +240,10 @@ class CoalescerTests(unittest.TestCase):
     def test_claimed_n_cannot_actuate_n_plus_one_selected_after_concurrent_ack(self):
         with EventStore(self.db) as store:
             old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
-            store.accept_event(event(1))
+            accept_fact(store, event(1))
             store.offer_notification("driver", "old-watch", old_epoch)
             store.confirm_delivery("driver", "old-watch", old_epoch, 1)
-            store.accept_event(event(2))
+            accept_fact(store, event(2))
 
             actuator = Actuator()
             coalescer = self.ready(store, actuator, "watch")
@@ -282,10 +287,10 @@ class CoalescerTests(unittest.TestCase):
     def test_claim_publishes_frontier_before_paused_retry_offer_returns(self):
         with EventStore(self.db) as store:
             old_epoch = store.register_driver("driver", "old-watch", "pi")["epoch"]
-            store.accept_event(event(1))
+            accept_fact(store, event(1))
             store.offer_notification("driver", "old-watch", old_epoch)
             store.confirm_delivery("driver", "old-watch", old_epoch, 1)
-            store.accept_event(event(2))
+            accept_fact(store, event(2))
 
             actuator = Actuator(DeliveryStatus.DEFERRED, DeliveryStatus.DEFERRED,
                                 DeliveryStatus.DELIVERED)
@@ -334,7 +339,7 @@ class CoalescerTests(unittest.TestCase):
         with EventStore(self.db) as store:
             actuator = Actuator("invalid", RuntimeError("disconnect"), DeliveryStatus.DELIVERED)
             coalescer = self.ready(store, actuator)
-            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350)
+            accept_fact(store, event(1)); coalescer.poll(); self.clock.advance(.350)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.ERROR)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.ERROR)
             self.assertEqual(coalescer.poll().status, DeliveryStatus.DELIVERED)
@@ -344,7 +349,7 @@ class CoalescerTests(unittest.TestCase):
         with EventStore(self.db) as store:
             first = Actuator()
             coalescer = self.ready(store, first)
-            store.accept_event(event(1)); coalescer.poll(); self.clock.advance(.350); coalescer.poll()
+            accept_fact(store, event(1)); coalescer.poll(); self.clock.advance(.350); coalescer.poll()
         with EventStore(self.db) as store:
             before = tuple(store._connection.execute(
                 "SELECT (SELECT COUNT(*) FROM events),(SELECT value FROM daemon_metadata WHERE key='latest_generation')"

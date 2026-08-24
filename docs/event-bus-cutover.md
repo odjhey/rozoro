@@ -51,6 +51,38 @@ ledger to bypass the refusal.
 Existing `tasks/<id>/brief.md`, append-only `handoff.md`, `session.json`, ACK
 cursors, task identities, and `.meta` membership are not migrated or rewritten.
 
+## Schema 7 lifecycle-correctness migration
+
+Schema 7 is an atomic, evidence-preserving repair. Before the first new-binary
+start, stop producers and reconcile until every driver's latest, delivered, and
+ACK generations are equal. The spool must be empty and no unconfirmed delivery
+offer may remain. Startup refuses the migration if any precondition is false.
+
+With the old daemon cleanly stopped, take a SQLite-safe backup (including WAL
+state, preferably with SQLite's backup API), then start the new daemon. Migration
+retains every event envelope, durable sequence, historical generation/snapshot,
+delivery audit, authority identity, task file, handoff, session link, and report
+ACK cursor. It populates active membership from validated owner-private metadata,
+retires absent projection history from future snapshots, repairs current report
+authority read-only, and quarantines the mutable timestamp-scale Pi gap signature.
+It does not create a notification.
+
+After verifying schema/version, row counts, equal cursors, and active membership,
+perform one controlled reload of live Pi crew/watchtower adapters. Their durable
+producer custody then starts or continues at a contiguous baseline. Quarantined
+sessions remain unknown until that registration is accepted; Herdr text is never
+used to invent lifecycle state. Complete the documented Pi+Claude live soak
+before beginning adapter PR17. This implementation does not perform that live
+rollout.
+
+A migration exception rolls the complete transaction back to schema 6. Schema-6
+binaries refuse schema 7 rather than guessing. To roll back after successful
+migration, first restore equal cursors and empty spool/offers, stop cleanly, and
+restore the complete pre-migration backup. Never open schema 7 with an old binary.
+Without a backup, the supported fallback is an explicit event-bus DB reset at
+equal cursors; that intentionally discards monitor history but does not edit task
+folders, handoffs, links, or report ACK cursors.
+
 ## Fresh install and health
 
 The monitor requires Python >=3.11. Python 3.10 is not yet supported, and EOL

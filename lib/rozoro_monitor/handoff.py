@@ -104,6 +104,10 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
             acked = sum(1 for block in blocks if block["legacy_index"] <= old)
     open_items = []
     for block in blocks:
+        # Malformed text remains immutable diagnostic evidence, but it has no
+        # authority to manufacture an actionable FIFO item.
+        if not block["valid"]:
+            continue
         fields = block["fields"]
         needed = fields.get("inputs-needed", "").strip().lower()
         if block["index"] > acked and (fields.get("verdict", "").lower() in OPEN or needed not in NONE):

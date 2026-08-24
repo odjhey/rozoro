@@ -367,6 +367,10 @@ class ServerProcessTests(unittest.TestCase):
                     "producer_seq": 1, "session_id": "crew-session", "harness": "claude",
                     "role": "crew", "task_id": "task-1"}
         self.assertEqual(self.exchange(producer)["type"], "ack")
+        settled = {"v": 1, "type": "turn.stop", "event_id": "crew-stop",
+                   "producer_seq": 2, "session_id": "crew-session", "harness": "claude",
+                   "role": "crew", "task_id": "task-1", "background_active": False}
+        self.assertEqual(self.exchange(settled)["type"], "ack")
 
         clients = []
         streams = []

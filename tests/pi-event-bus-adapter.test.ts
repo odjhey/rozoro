@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,24 +139,17 @@ test("uses prose-free registration, publishes only certified Pi lifecycle, and c
 	client.close(); client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
 });
 
-test("durable producer sequence continues contiguously when a session id is resumed", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-")); const path = join(dir, "monitor.sock");
+test("durable Pi custody is contiguous and reload continues at the exact next sequence", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "rozoro-pi-custody-")); const path = join(dir, "monitor.sock");
 	const frames: Record<string, unknown>[] = []; const fake = await fakeServer(path, frames);
-	const cursor = join(dir, "producer-seq", "resumed.seq");
-	const lifecycle = () => frames.filter((f) => ["session.register","turn.start","turn.stop"].includes(f.type as string));
-	const settled = (value: string) => existsSync(cursor) && readFileSync(cursor, "ascii") === value;
-	const open = () => new RozoroEventBusClient({socketPath:path,sessionId:"resumed",driverId:"driver-1",onNotification:()=>{}});
-	const first = open();
-	first.start(); await waitFor(() => frames.some((f) => f.type === "session.register"));
-	first.publish("turn.start"); first.publish("turn.stop");
-	await waitFor(() => settled("3"));
-	first.close();
-	const second = open();
-	second.start(); await waitFor(() => lifecycle().length > 3);
-	second.publish("turn.start"); second.publish("turn.stop");
-	await waitFor(() => settled("6"));
-	assert.deepEqual(lifecycle().map((f) => f.producer_seq), [1, 2, 3, 4, 5, 6]);
-	second.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
+	let client = new RozoroEventBusClient({socketPath:path,sessionId:"durable",role:"crew",taskId:"task-durable"});
+	client.start(); client.publish("turn.start"); client.publish("turn.stop");
+	await waitFor(() => frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).length === 3);
+	client.close();
+	client = new RozoroEventBusClient({socketPath:path,sessionId:"durable",role:"crew",taskId:"task-durable"}); client.start();
+	await waitFor(() => frames.filter((frame) => frame.type === "session.register").length === 2);
+	assert.deepEqual(frames.filter((frame) => ["session.register","turn.start","turn.stop"].includes(frame.type as string)).map((frame) => frame.producer_seq), [1,2,3,4]);
+	client.close(); await closeServer(fake.server, fake.sockets); await rm(dir, {recursive:true,force:true});
 });
 
 test("stable driver identity matches fixed reconcile environment across resume", () => {

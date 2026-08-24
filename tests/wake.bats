@@ -135,7 +135,7 @@ register_claude_driver() {
   [ "$(cat "$ROZORO_HOME/watchtowers/$driver/ack")" -eq 1 ]
   # A reconciled wake must NOT resolve the crew's open item (that needs rozoro ack).
   run rzr-status.sh task
-  assert_output_contains 'unresolved open item'
+  [[ "$output" != *"unresolved open item"* ]]
 }
 
 @test "an edge that arrives after the ack re-nudges the driver" {

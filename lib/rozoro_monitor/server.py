@@ -187,7 +187,12 @@ class MonitorServer:
         try:
             self._assert_home_anchor()
             self._prepare_entries()
-            self._store = EventStore(self.db_path)
+            state_dir = Path(os.environ.get("ROZORO_STATE_DIR", str(self.home / "state")))
+            try:
+                spool_backlog = sum(name != ".lock" for name in os.listdir(self.home / "spool"))
+            except FileNotFoundError:
+                spool_backlog = 0
+            self._store = EventStore(self.db_path, state_dir=state_dir, spool_backlog=spool_backlog)
             self._import_spool()
             db_info = self._entry("monitor.db")
             if db_info is None or not stat.S_ISREG(db_info.st_mode):
@@ -249,10 +254,14 @@ class MonitorServer:
                     assert self._store is not None
                     self._store.reconcile_herdr_liveness(task_id, pane_exists=level.exists)
 
+                async def retire(task_id: str) -> None:
+                    assert self._store is not None
+                    self._store.retire_task_membership(task_id)
+
                 self._herdr = MembershipMonitor(
                     state_dir, lambda panes: (UnixHerdrSubscription(herdr_socket, panes)
                                               if panes else EmptySubscription()),
-                    level_reader, reconcile,
+                    level_reader, reconcile, retire=retire,
                     scan_interval=float(os.environ.get("ROZORO_HERDR_SCAN_INTERVAL", "30")),
                     hint_interval=float(os.environ.get("ROZORO_HERDR_HINT_INTERVAL", ".2")),
                     debounce=float(os.environ.get("ROZORO_HERDR_DEBOUNCE", ".15")))
