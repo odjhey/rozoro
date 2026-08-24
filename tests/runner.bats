@@ -7,11 +7,24 @@ make_engine() {
   mkdir -p "$TEST_ROOT/engines"
   cat > "$TEST_ROOT/engines/$name" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = info ]; then
+  exit 0
+fi
 {
   printf 'call'
   printf '\t%s' "$@"
   printf '\n'
 } >> "$ENGINE_LOG"
+SH
+  chmod +x "$TEST_ROOT/engines/$name"
+}
+
+make_unavailable_engine() {
+  name="$1"
+  mkdir -p "$TEST_ROOT/engines"
+  cat > "$TEST_ROOT/engines/$name" <<'SH'
+#!/usr/bin/env bash
+exit 125
 SH
   chmod +x "$TEST_ROOT/engines/$name"
 }
@@ -33,6 +46,21 @@ SH
 }
 
 @test "runner falls back to Docker without Podman-only options" {
+  make_engine docker
+  export ENGINE_LOG="$TEST_ROOT/engine.log"
+
+  run env PATH="$TEST_ROOT/engines:$PATH" bash "$REPO_ROOT/tests/run.sh"
+  assert_success
+  [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  assert_file_contains "$ENGINE_LOG" $'call\tbuild'
+  assert_file_contains "$ENGINE_LOG" $'call\trun'
+  case "$(cat "$ENGINE_LOG")" in
+    *label=disable*) return 1 ;;
+  esac
+}
+
+@test "runner skips unavailable Podman and uses Docker" {
+  make_unavailable_engine podman
   make_engine docker
   export ENGINE_LOG="$TEST_ROOT/engine.log"
 
