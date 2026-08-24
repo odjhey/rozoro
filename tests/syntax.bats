@@ -10,6 +10,21 @@ load test_helper/common
   done
 }
 
+@test "CI validates pull requests without duplicate branch push runs" {
+  workflow="$REPO_ROOT/.github/workflows/test.yml"
+
+  run grep -Fx "  pull_request:" "$workflow"
+  assert_success
+
+  run awk '
+    /^  push:/ { in_push = 1; next }
+    /^  [[:alnum:]_]+:/ { in_push = 0 }
+    in_push { print }
+  ' "$workflow"
+  assert_success
+  [ "$output" = $'    branches:\n      - master' ]
+}
+
 @test "Pi watchtower event-bus adapter is covered by Node tests" {
   run node --experimental-strip-types --test \
     "$REPO_ROOT/tests/pi-event-bus-adapter.test.ts" \
