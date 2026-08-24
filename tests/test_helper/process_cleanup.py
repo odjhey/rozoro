@@ -62,9 +62,9 @@ def _record(pid: int, home: Path, argv: list[str], pgid: Optional[int] = None,
     return value
 
 
-def register(process: subprocess.Popen, home: Path) -> subprocess.Popen:
+def register(process: subprocess.Popen, home: Path, argv: Optional[list] = None) -> subprocess.Popen:
     expected = _daemon_argv(home)
-    if _normalize_argv(process.args) != expected:
+    if _normalize_argv(argv if argv is not None else process.args) != expected:
         raise RuntimeError(f"refusing non-daemon argv for pid {process.pid}")
     _owned[process.pid] = {"pid": process.pid, "birth": "popen", "process": process,
                            "pgid": os.getpgid(process.pid), "home": expected[3],

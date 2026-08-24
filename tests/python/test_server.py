@@ -49,11 +49,14 @@ class ServerProcessTests(unittest.TestCase):
         return self.home / "monitor.sock"
 
     def start(self, wait=True, env=None, nofile=None):
-        argv = [sys.executable, str(DAEMON), "--home", str(self.home)]
+        daemon_argv = [sys.executable, str(DAEMON), "--home", str(self.home)]
+        argv = daemon_argv
         if nofile is not None:
             # preexec_fn is unsafe when the test process uses threads (PLW1509);
             # apply the fd limit via a shell ulimit before exec instead of a fork callback.
-            argv = ["bash", "-c", 'ulimit -n "$1"; shift; exec "$@"', "bash", str(nofile), *argv]
+            # The wrapper's own argv never appears in ps/cmdline: bash execs into
+            # daemon_argv, replacing its process image under the same pid.
+            argv = ["bash", "-c", 'ulimit -n "$1"; shift; exec "$@"', "bash", str(nofile), *daemon_argv]
         process = subprocess.Popen(
             argv,
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -61,7 +64,7 @@ class ServerProcessTests(unittest.TestCase):
             start_new_session=True,
         )
         self.processes.append(process)
-        process_cleanup.register(process, self.home)
+        process_cleanup.register(process, self.home, argv=daemon_argv)
         if wait:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
