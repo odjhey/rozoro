@@ -750,17 +750,27 @@ class EventStore:
                 before_tuple = None if before_projection is None else tuple(before_projection)
                 after_tuple = None if after_projection is None else tuple(after_projection)
                 reason = None if after_projection is None else after_projection["actionable_reason"]
-                # Pi registration establishes producer identity before its first
-                # lifecycle turn. A missing report at that point is not completed
-                # work and must not manufacture a watchtower wake.
-                pi_registration = (
-                    event.get("harness") == "pi" and event["type"] == "session.register"
+                # Pi registration and the first running turn establish producer
+                # identity before the crew can write its handoff. A missing report
+                # while that turn is busy is not completed work and must not
+                # manufacture a watchtower wake.
+                pi_startup_missing_report = (
+                    event.get("harness") == "pi"
+                    and reason == "missing-report"
+                    and (
+                        event["type"] == "session.register"
+                        or (
+                            event["type"] == "turn.start"
+                            and after_projection is not None
+                            and after_projection["availability"] == "busy"
+                        )
+                    )
                 )
                 change = (ActionableChange(
                               event["task_id"], reason,
                               "urgent" if reason in {"blocked", "failed", "needs-action"} else "normal",
                           )
-                          if not pi_registration and reason is not None and reason != "none"
+                          if not pi_startup_missing_report and reason is not None and reason != "none"
                           and before_tuple != after_tuple else None)
             else:
                 change = None
