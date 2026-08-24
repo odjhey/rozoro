@@ -112,11 +112,11 @@ HANDOFF="$(rzr_handoff_protocol_path "$ID")"
 SYSFILE=""
 SESSION_ID=""
 EVENT_BUS=false
-[ "$HARNESS" = claude ] && EVENT_BUS=true
+case "$HARNESS" in claude|codex) EVENT_BUS=true ;; esac
 if [ "$EVENT_BUS" = true ] || [ "$HARNESS" = pi ]; then
   "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
 fi
-[ "$EVENT_BUS" != true ] || rzr_claude_event_capability || exit 1
+[ "$HARNESS" != claude ] || rzr_claude_event_capability || exit 1
 case "$HARNESS" in
   pi|copilot)
     # Caller-selected UUIDs remove discovery races and provide exact identity.
@@ -126,7 +126,7 @@ case "$HARNESS" in
     [ "$EVENT_BUS" = true ] && SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;;
 esac
 EVENT_SETTINGS=""
-if [ "$EVENT_BUS" = true ]; then
+if [ "$HARNESS" = claude ]; then
   EVENT_SETTINGS="$(rzr_claude_event_settings "$ID" "$SESSION_ID")" || exit 1
 fi
 if [ "$HARNESS" = claude ] || [ "$HARNESS" = pi ]; then
@@ -220,6 +220,14 @@ do_spawn() {
     rzr_die "herdr agent start ($HARNESS) failed in pane $pane: $out; the tab exists - inspect it, then './bin/rozoro teardown $ID' or retry"
   fi
   rzr_meta_set "$ID" agent_start ok
+
+  if [ "$HARNESS" = codex ]; then
+    codex_store="${CODEX_HOME:-$HOME/.codex}/sessions"
+    "$RZR_BIN/rzr-codex-event-adapter.py" --task "$ID" --cwd "$CWD" \
+      --store "$codex_store" --socket "$ROZORO_HOME/monitor.sock" \
+      >>"$FOLDER/codex-event-adapter.log" 2>&1 &
+    rzr_meta_set "$ID" event_adapter_pid "$!"
+  fi
 
   if [ -n "$PROMPT" ]; then
     rzr_herdr agent prompt "$pane" "$PROMPT" >/dev/null 2>&1 \
