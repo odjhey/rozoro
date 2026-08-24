@@ -78,11 +78,12 @@ fake_status() {
 }
 
 # Configure a pane's full agent-get shape for registration/gating tests:
-#   fake_pane <pane> <status> [kind] [interactive_ready:true|false]
+#   fake_pane <pane> <status> [kind] [interactive_ready:true|false] [agent_session]
 fake_pane() {
   pane="$1"; printf '%s\n' "$2" > "$FAKE_HERDR_ROOT/status.$pane"
   [ $# -ge 3 ] && printf '%s\n' "$3" > "$FAKE_HERDR_ROOT/kind.$pane"
   printf '%s\n' "${4:-true}" > "$FAKE_HERDR_ROOT/ready.$pane"
+  [ $# -lt 5 ] || printf '%s\n' "$5" > "$FAKE_HERDR_ROOT/session.$pane"
 }
 
 start_event_server() {

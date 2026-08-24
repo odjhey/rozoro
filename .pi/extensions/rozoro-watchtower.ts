@@ -59,14 +59,20 @@ export default function (pi: ExtensionAPI) {
 
 		const paneId = process.env.HERDR_PANE_ID;
 		if (!paneId) throw new Error("Rozoro event-bus Pi watchtower requires HERDR_PANE_ID");
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Rozoro event-bus Pi watchtower requires a persistent Pi session file");
 		const expectedDriverId = herdrDriverId(paneId);
 		const deadline = Date.now() + REGISTRATION_TIMEOUT_MS;
 		let registration;
 		for (;;) {
-			registration = await pi.exec(join(repoRoot, "bin", "rozoro"), ["register", "--harness", "pi", "--backend", "herdr"], { signal });
+			registration = await pi.exec(join(repoRoot, "bin", "rozoro"), [
+				"register", "--harness", "pi", "--backend", "herdr", "--agent-session", sessionFile,
+			], { signal });
 			if (registration.code === 0) break;
 			const error = registration.stderr.trim();
-			if (!error.includes("not interactive_ready yet") || Date.now() >= deadline) {
+			const awaitingHerdrIdentity = error.includes("does not report a live agent") ||
+				error.includes("does not report a harness") || error.includes("does not report Pi agent_session");
+			if (!awaitingHerdrIdentity || Date.now() >= deadline) {
 				throw new Error(`Rozoro watchtower target registration failed: ${error}`);
 			}
 			await sleep(Math.min(REGISTRATION_RETRY_MS, Math.max(0, deadline - Date.now())), signal);

@@ -12,7 +12,7 @@ const api:any = {
 };
 extension(api);
 const prompt=await readFile(sysfile,"utf8");
-const ctx:any={getSystemPrompt:()=>prompt,sessionManager:{getSessionId:()=>sessionId},ui:{setStatus(){},notify(message:string){console.error(message)}}};
+const ctx:any={getSystemPrompt:()=>prompt,sessionManager:{getSessionId:()=>sessionId,getSessionFile:()=>process.env.PI_SESSION_FILE},ui:{setStatus(){},notify(message:string){console.error(message)}}};
 const emit=async(name:string,...args:any[])=>{for(const fn of handlers.get(name)??[]) await fn(...args)};
 const settleMs = Number(process.env.ROZORO_PI_PROCESS_SETTLE_MS || 400);
 await emit("session_start",{},ctx); await new Promise(r=>setTimeout(r,settleMs));

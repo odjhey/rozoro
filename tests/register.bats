@@ -39,12 +39,31 @@ load test_helper/common
   assert_output_contains 'does not match'
 }
 
-@test "registration refuses a pane that is not interactive_ready" {
+@test "registration refuses a non-Pi pane that is not interactive_ready" {
   export HERDR_PANE_ID=driver-pane
   fake_pane driver-pane working claude false
   run rzr-register.sh --harness claude
   assert_failure
   assert_output_contains 'not interactive_ready'
+}
+
+@test "manual Pi registration uses exact Herdr agent_session without interactive_ready" {
+  export HERDR_PANE_ID=driver-pane
+  session="$TEST_ROOT/pi-session.jsonl"; : > "$session"; chmod 600 "$session"
+  fake_pane driver-pane idle pi false "$session"
+  run rzr-register.sh --harness pi --backend herdr --agent-session "$session"
+  assert_success
+  [ "$(jq -r .identity "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json")" = driver-pane ]
+}
+
+@test "manual Pi registration refuses stale agent_session identity" {
+  export HERDR_PANE_ID=driver-pane
+  : > "$TEST_ROOT/current.jsonl"; chmod 600 "$TEST_ROOT/current.jsonl"
+  fake_pane driver-pane idle pi false "$TEST_ROOT/stale.jsonl"
+  run rzr-register.sh --harness pi --backend herdr --agent-session "$TEST_ROOT/current.jsonl"
+  assert_failure
+  assert_output_contains 'does not match this process session file'
+  [ ! -e "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json" ]
 }
 
 @test "codex backend registers a resident thread with queue capability" {
