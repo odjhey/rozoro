@@ -96,11 +96,9 @@ case "$VERB" in
     BRIEF="$(rzr_task_dir "$ID")/brief.md"
 
     echo "rzr: restarting '$ID' - tearing down, then re-spawning fresh (a NEW conversation, not a resume)"
-    # --force past teardown's unlanded-work guard: restart re-spawns into the SAME
-    # cwd, and teardown only drops the tab + record (never the working tree), so any
-    # uncommitted work is still on disk for the fresh crew — nothing is lost, and we
-    # must not let the guard block an intentional restart of a crashed session.
-    "$RZR_BIN/rzr-teardown.sh" "$ID" --force >/dev/null
+    # Teardown owns only the tab and live Rozoro state. It never inspects or
+    # mutates the cwd, so the fresh crew restarts against the exact same files.
+    "$RZR_BIN/rzr-teardown.sh" "$ID" >/dev/null
 
     spawn_args=("$ID" --cwd "$CWD")
     # `rzr-resume` records the lifecycle origin as crew=resumed, which is not a

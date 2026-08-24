@@ -39,6 +39,29 @@ register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
 # would print filesystem info with a zero exit, masking the real permission bits.
 file_perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
+# Stable byte/shape snapshot of a directory, including VCS metadata. Timestamps
+# are intentionally excluded: teardown must not change names, modes, links, or
+# file bytes, while merely reading a directory may update access times.
+directory_snapshot() {
+  python3 - "$1" <<'PY'
+import hashlib, os, stat, sys
+root = os.fsencode(sys.argv[1])
+for parent, dirs, files in os.walk(root):
+    dirs.sort(); files.sort()
+    for name in dirs + files:
+        path = os.path.join(parent, name)
+        rel = os.path.relpath(path, root)
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode):
+            payload = b"link:" + os.readlink(path)
+        elif stat.S_ISREG(mode):
+            with open(path, "rb") as handle: payload = handle.read()
+        else:
+            payload = b""
+        print(os.fsdecode(rel), oct(stat.S_IMODE(mode)), hashlib.sha256(payload).hexdigest())
+PY
+}
+
 assert_success() {
   [ "$status" -eq 0 ] || { printf 'expected success, got %s:\n%s\n' "$status" "$output" >&2; return 1; }
 }

@@ -207,6 +207,83 @@ JSON
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\ttab\tclose\tt1'
 }
 
+teardown_preserves_cwd() {
+  id="$1" cwd="$2"
+  write_meta "$id" 'pane=p1' 'tab=t1' "cwd=$cwd"
+  mkdir -p "$ROZORO_HOME/tasks/$id"
+  printf 'resume-custody\n' > "$ROZORO_HOME/tasks/$id/session.json"
+  before="$(directory_snapshot "$cwd")"
+  run rzr-teardown.sh "$id"
+  assert_success
+  [ "$(directory_snapshot "$cwd")" = "$before" ]
+  [ "$(cat "$ROZORO_HOME/tasks/$id/session.json")" = resume-custody ]
+}
+
+@test "teardown is VCS-agnostic and leaves every cwd byte untouched" {
+  non_vcs="$TEST_ROOT/non-vcs"
+  mkdir -p "$non_vcs/subdir"
+  printf 'ordinary bytes\n' > "$non_vcs/subdir/file"
+  teardown_preserves_cwd non-vcs "$non_vcs"
+
+  no_upstream="$TEST_ROOT/no-upstream"
+  mkdir -p "$no_upstream/.git/refs/heads" "$no_upstream/.git/objects"
+  printf 'ref: refs/heads/main\n' > "$no_upstream/.git/HEAD"
+  printf '[core]\n\trepositoryformatversion = 0\n' > "$no_upstream/.git/config"
+  printf '1111111111111111111111111111111111111111\n' > "$no_upstream/.git/refs/heads/main"
+  printf 'tracked\n' > "$no_upstream/tracked"
+  teardown_preserves_cwd no-upstream "$no_upstream"
+
+  dirty="$TEST_ROOT/dirty"
+  cp -R "$no_upstream" "$dirty"
+  printf 'index bytes\n' > "$dirty/.git/index"
+  printf 'modified\n' >> "$dirty/tracked"
+  printf 'untracked\n' > "$dirty/untracked"
+  teardown_preserves_cwd dirty "$dirty"
+
+  detached="$TEST_ROOT/detached"
+  cp -R "$no_upstream" "$detached"
+  printf '1111111111111111111111111111111111111111\n' > "$detached/.git/HEAD"
+  teardown_preserves_cwd detached "$detached"
+
+  ahead="$TEST_ROOT/ahead"
+  cp -R "$no_upstream" "$ahead"
+  mkdir -p "$ahead/.git/refs/remotes/origin"
+  printf '2222222222222222222222222222222222222222\n' > "$ahead/.git/refs/heads/main"
+  printf '1111111111111111111111111111111111111111\n' > "$ahead/.git/refs/remotes/origin/main"
+  printf '[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n' >> "$ahead/.git/config"
+  printf 'unpushed\n' >> "$ahead/tracked"
+  teardown_preserves_cwd ahead "$ahead"
+
+  jj="$TEST_ROOT/jj"
+  mkdir -p "$jj/.jj/repo/store" "$jj/src"
+  printf 'jj metadata\n' > "$jj/.jj/repo/store/state"
+  printf 'dirty jj work\n' > "$jj/src/file"
+  teardown_preserves_cwd jj "$jj"
+}
+
+@test "deprecated teardown force remains a harmless compatibility no-op" {
+  cwd="$TEST_ROOT/force-compat"
+  mkdir -p "$cwd"
+  printf 'preserved\n' > "$cwd/file"
+  write_meta task 'pane=p1' 'tab=t1' "cwd=$cwd"
+  before="$(directory_snapshot "$cwd")"
+  run rzr-teardown.sh task --force
+  assert_success
+  assert_output_contains '--force is deprecated and unnecessary'
+  [ "$(directory_snapshot "$cwd")" = "$before" ]
+}
+
+@test "teardown keep-tab and unknown-task protections are unchanged" {
+  write_meta task 'pane=p1' 'tab=t1'
+  run rzr-teardown.sh task --keep-tab
+  assert_success
+  ! grep -F $'CALL\ttab\tclose\tt1' "$FAKE_HERDR_LOG"
+
+  run rzr-teardown.sh unknown
+  assert_failure
+  assert_output_contains "no such task 'unknown'"
+}
+
 @test "Pi session link uses the preallocated native UUID" {
   uuid='11111111-2222-4333-8444-555555555555'
   write_meta task 'harness=pi' "session=$uuid"

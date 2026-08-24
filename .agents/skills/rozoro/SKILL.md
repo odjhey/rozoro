@@ -74,7 +74,7 @@ default harness. It does not create or rewrite the optional
 | **Steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, Copilot, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
-| **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — refuses if the crew's `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits); `--force` to discard anyway |
+| **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — closes the tracked tab/runtime record only; durable task/session data and every repository/worktree file remain untouched |
 | **Read state** | `./bin/rozoro status <id>` — daemon-backed schema-v2-compatible projection plus unresolved OPEN items; fails loudly when the resident monitor is down; status reads never advance observation state |
 | **Resolve open items** | `./bin/rozoro ack <id> [--through <n>]` — after you've handled the open items status surfaced, ack them so status stops resurfacing them (advances a cursor; never edits the append-only handoff) |
 | **Sense** (don't block) | Managed Pi and supported-Claude watchtowers use the resident daemon/event bus. Their thin adapters deliver one fixed wake; run `./bin/rozoro reconcile` and then `status`. Use `monitor status --json` for health. `rzr-watch` is diagnostics/legacy compatibility only, never normal Pi/Claude management. |
@@ -229,12 +229,12 @@ answer itself, but whether the answer already exists.
      accepted (landed/merged, or the user explicitly signs off), or the user says
      to drop it. When unsure whether more is coming, leave it idle — an idle crew
      costs nothing; a prematurely reaped one costs a cold re-spawn.
-   - **Teardown itself refuses on unlanded work.** If the crew's `cwd` still has
-     uncommitted/untracked changes or unpushed commits, `./bin/rozoro teardown` exits
-     with an error instead of closing the tab — the standard behavior only
-     verifying `done` on the handoff should not accidentally cover. Land the
-     work (or have the crew do so) and retry; `--force` is the explicit override
-     for a deliberate discard, not the default path.
+   - **Apply conservative operator policy before teardown.** Rozoro core is
+     VCS-agnostic: it cannot certify acceptance, landed work, pending input, or
+     recent focus, and teardown never inspects or changes the cwd. Verify delivery
+     with repository-specific tools and avoid reaping while review, operator input,
+     or recent interaction may still need the live context. These are watchtower/
+     operator decisions, not teardown refusal semantics.
 
    The `tasks/<id>/` folder (brief + handoff + session link) survives teardown, so
    even a reaped task is recoverable — but recovery is strictly worse than a crew
