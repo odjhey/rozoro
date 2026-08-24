@@ -29,6 +29,13 @@ with tempfile.TemporaryDirectory() as temporary:
     python_bin = Path(temporary) / "bin"
     python_bin.mkdir()
     (python_bin / "python3").symlink_to(sys.executable)
+    # The public `rozoro` rollback CLI is a herdr orchestrator front-end that
+    # refuses to run unless `herdr` is on PATH, even though the rollback verb
+    # only drives the pure-Python daemon bridge. CI hosts do not install herdr,
+    # so expose the repository's fake (as the bats suite does via tests/fakes)
+    # to exercise the real public CLI path deterministically.
+    (python_bin / "herdr").symlink_to(ROOT / "tests/fakes/herdr")
+    os.environ["FAKE_HERDR_ROOT"] = str(Path(temporary) / "fake-herdr")
     os.environ["PATH"] = f"{python_bin}{os.pathsep}{os.environ['PATH']}"
     home = Path(temporary) / "rozoro"
     home.mkdir(mode=0o700)
