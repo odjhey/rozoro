@@ -148,7 +148,11 @@ class MembershipMonitor:
         changed=(set(previous)|set(found) if rebuild else
                  {task for task in set(previous)|set(found) if previous.get(task) != found.get(task)})
         staged={}; levels_ok=True
+        activated=[]
         try:
+            if self.activate:
+                for task in sorted(set(found)-set(previous)):
+                    await self.activate(task); activated.append(task)
             for task in sorted(changed & set(found)):
                 member=found[task]; generation=self._route_generation.get(task,0)+1
                 sub=self.subscriber((member.pane_id,)); await sub.start()
@@ -165,10 +169,10 @@ class MembershipMonitor:
             self._route_generation=previous_generations
             for sub,consumer,_,_ in staged.values():
                 consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True); await sub.close()
+            if self.retire:
+                for task in reversed(activated): await self.retire(task)
             raise
         self.members=dict(found)
-        if self.activate:
-            for task in sorted(set(found)-set(previous)): await self.activate(task)
         if self.retire:
             for task in sorted(set(previous)-set(found)): await self.retire(task)
         old_routes={task:self._routes.pop(task) for task in changed if task in self._routes}

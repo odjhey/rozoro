@@ -65,6 +65,24 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
         self.levels['p1']=PaneLevel('p1','idle',True); await self.monitor.scan()
         self.assertIn(('a',True,'idle'),self.seen)
 
+    async def test_new_membership_activates_before_gone_and_rolls_back_staging_failure(self):
+        events=[]
+        async def activate(task): events.append(('activate',task))
+        async def retire(task): events.append(('retire',task))
+        async def reconcile(task,level): events.append(('reconcile',task,level.exists))
+        async def level(pane):
+            if pane == 'bad': raise ConnectionError('level failed')
+            return PaneLevel(pane,'unknown',False)
+        monitor=MembershipMonitor(self.state,lambda panes: FakeSubscription(panes,[]),level,reconcile,
+                                  activate=activate,retire=retire,scan_interval=99,debounce=0)
+        (self.state/'a.meta').write_text('pane=p1\n')
+        await monitor.scan(force=True)
+        self.assertLess(events.index(('activate','a')),events.index(('reconcile','a',False)))
+        (self.state/'b.meta').write_text('pane=bad\n')
+        with self.assertRaises(ConnectionError): await monitor.scan()
+        self.assertEqual(events[-2:],[('activate','b'),('retire','b')])
+        await monitor.close()
+
     async def test_unrelated_event_not_interrupted_by_metadata_rewrite(self):
         (self.state/'a.meta').write_text('pane=p1\n'); (self.state/'b.meta').write_text('pane=p2\n')
         await self.monitor.start(); sub=next(item for item in self.subs if item.panes == ('p1',)); count=len(self.subs)
