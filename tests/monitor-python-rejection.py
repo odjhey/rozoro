@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     assert start.returncode == 2, start
     assert expected in start.stderr, start
-    assert "brew install python" in start.stderr and "first on PATH" in start.stderr, start
+    assert "brew install python" in start.stderr and "precedes the stock interpreter on PATH" in start.stderr, start
     assert not home.exists(), list(home.parent.iterdir())
 
     daemon = subprocess.run(
@@ -29,5 +29,5 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     assert daemon.returncode == 2, daemon
     assert expected in daemon.stderr, daemon
-    assert "brew install python" in daemon.stderr and "first on PATH" in daemon.stderr, daemon
+    assert "brew install python" in daemon.stderr and "precedes the stock interpreter on PATH" in daemon.stderr, daemon
     assert not home.exists(), list(home.parent.iterdir())
