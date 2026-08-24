@@ -18,8 +18,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check stock macOS Bash compatibility
         run: |
-          for file in bin/* hooks/*.sh tests/run.sh tests/fakes/herdr tests/test_helper/common.bash; do
+          for file in bin/* hooks/* tests/run.sh tests/fakes/herdr tests/test_helper/common.bash; do
             [ -f "$file" ] || continue
             case "$file" in *.py) continue ;; esac
             bash -n "$file"
           done
+      - name: Reject stock macOS Python 3.9 before monitor side effects
+        run: /usr/bin/python3 tests/monitor-python-rejection.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Reject Python 3.10 before monitor side effects
+        run: python3 tests/monitor-python-rejection.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Exercise deadlines, migrations, lifecycle, status, and rollback on Python 3.11
+        env:
+          ROZORO_REQUIRE_PYTHON_311: '1'
+        run: python3 tests/monitor-python-runtime.py
+      - name: Exercise the supported Homebrew Python
+        run: /opt/homebrew/bin/python3 tests/monitor-python-runtime.py

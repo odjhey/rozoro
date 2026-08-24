@@ -83,7 +83,7 @@ Consequently:
 - `herdr` 0.8.x on `PATH`, a running server, and you running **inside** a herdr
   session (so new tabs land in your workspace). Verify: `herdr tab list`.
 - `jq` on `PATH`
-- `python3` on `PATH` (stdlib only) — for the event-stream watcher
+- Python **3.11 or newer** as `python3` on `PATH` (stdlib only) — required by the resident monitor and event-stream watcher. Python 3.10 is not yet supported, and EOL Python 3.9 is out of policy; run `brew install python` and ensure Homebrew's `python3` precedes older interpreters on `PATH`.
 - `bash` — runs on stock macOS `/bin/bash` 3.2 (no bash-4 features)
 - The selected coding harness (`claude`, `codex`, `copilot`, or `pi`) on `PATH`
 
@@ -108,7 +108,9 @@ The first run pulls those immutable images; later builds reuse the container
 engine's cache. Tests run without network access against a read-only checkout,
 using only a temporary writable filesystem inside the disposable container. No
 host Bats, `jq`, or Python installation is required. CI runs the full suite this
-way on Linux and keeps a stock macOS Bash 3.2 syntax check.
+way on Linux; on macOS it checks stock Bash 3.2 syntax and exercises monitor
+migration and lifecycle behavior on both Python 3.11 and Homebrew's current
+Python.
 
 The automated suite covers shell/Python protocol parsing, event transport,
 watch reconciliation, lifecycle glue, and locking. Checks against a real Herdr
@@ -157,7 +159,7 @@ entry points, but setup and control-tower workflows do not require Rozoro's own
 | `./bin/rozoro crew list\|show <name>` | inspect crewmember presets (spawn profiles) |
 | `./bin/rozoro lock status\|acquire` | inspect/hold the home lock (atomic `mkdir`, stale-pid reclaim) |
 | `./bin/rozoro list` | known tasks + live agent state |
-| `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/`python3` and the selected harness), herdr server reachable, default preset — exits non-zero on a missing hard dep |
+| `./bin/rozoro doctor` | preflight: external deps (`herdr`/`jq`/Python >=3.11 and the selected harness), herdr server reachable, default preset — exits non-zero with an install hint on a missing or unsupported hard dep |
 | `./bin/rozoro teardown <id> [--force]` | close the tab, remove the record (the `tasks/<id>/` folder survives); refuses if the recorded `cwd` has unlanded work (uncommitted/untracked changes, unpushed commits) unless `--force` |
 
 `rzr-lib.sh` is the shared shell library. `rozorod` is the sole lifecycle,

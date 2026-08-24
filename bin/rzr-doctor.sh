@@ -25,10 +25,17 @@ echo "  home: $RZR_HOME"
 echo "  bin:  $BIN"
 
 echo "dependencies:"
-for c in herdr jq python3; do
+for c in herdr jq; do
   if command -v "$c" >/dev/null 2>&1; then pass "$c ($(command -v "$c"))"
   else fail "$c not found on PATH"; fi
 done
+if ! command -v python3 >/dev/null 2>&1; then
+  fail "python3 not found on PATH"
+elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  pass "python3 $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))') ($(command -v python3); monitor minimum is 3.11)"
+else
+  fail "python3 >=3.11 required for the resident monitor (Python 3.10 is not yet supported; EOL Python 3.9 is out of policy; found $(python3 --version 2>&1) at $(command -v python3)); on macOS run: brew install python and put its python3 ahead of older interpreters on PATH"
+fi
 
 echo "herdr server:"
 if command -v herdr >/dev/null 2>&1; then

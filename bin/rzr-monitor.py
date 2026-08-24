@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """Lifecycle and diagnostic CLI for the local Rozoro monitor."""
-from __future__ import annotations
+import sys
+
+MIN_PYTHON = (3, 11)
+PYTHON_ERROR = (
+    "Rozoro monitor requires Python >=3.11 (Python 3.10 is not yet supported; "
+    "EOL Python 3.9 is out of policy); install Homebrew Python with "
+    "`brew install python` and ensure its python3 precedes older interpreters on PATH"
+)
+
+if sys.version_info < MIN_PYTHON:
+    print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
+    raise SystemExit(2)
 
 import argparse
 import fcntl
@@ -9,7 +20,6 @@ import os
 import socket
 import stat
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path

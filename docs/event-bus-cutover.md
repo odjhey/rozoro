@@ -27,6 +27,7 @@ ledger to bypass the refusal.
 # prior release
 ./bin/rozoro reconcile --driver <driver>
 # new release
+./bin/rozoro doctor              # verifies Python >=3.11 and other prerequisites
 ./bin/rozoro monitor start
 ./bin/rozoro monitor status --json
 ./bin/rozoro status <task> --json
@@ -36,6 +37,14 @@ Existing `tasks/<id>/brief.md`, append-only `handoff.md`, `session.json`, ACK
 cursors, task identities, and `.meta` membership are not migrated or rewritten.
 
 ## Fresh install and health
+
+The monitor requires Python >=3.11. Python 3.10 is not yet supported, and EOL
+Python 3.9 is out of policy. If doctor reports an unsupported runtime, run
+`brew install python` and ensure Homebrew's `python3` precedes older interpreters
+on PATH.
+The start command performs the same version check before spawning `rozorod`, so
+adapter/spool callers receive the runtime error directly instead of waiting for
+a generic readiness timeout.
 
 Managed Pi and supported-Claude launch/spawn/resume safely start the monitor
 concurrently and wait for its health endpoint before starting the adapter. A
