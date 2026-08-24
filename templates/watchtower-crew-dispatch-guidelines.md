@@ -87,11 +87,15 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **No-Mistakes Runner, Luna/Sonnet High**
+* **No-Mistakes Runner, Luna High**
 
   * This is the only crew role that runs no-mistakes.
+  * Dispatch the runner itself with Luna High.
   * Dispatch it after the normal coding, review, and test work when you want the no-mistakes pass.
   * Ask it to run the actual no-mistakes workflow. Do not substitute a normal review prompt.
+  * When invoking no-mistakes, pass the model explicitly through its model flag or local config.
+  * Prefer Sonnet High for the no-mistakes workflow.
+  * If Sonnet is usage-limited and waiting for cooldown, use Luna High for the no-mistakes workflow instead. Do not hold the task just to wait for Sonnet capacity.
   * It should look for things the coder, reviewer, and tester may all have missed.
   * This includes failure paths, concurrency, retries, idempotency, cleanup, corrupted state, security boundaries, regressions, and bad assumptions.
   * Ask for a report that includes:
@@ -102,6 +106,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * affected contract, invariant, or use case;
     * whether the problem is local or needs re-planning;
     * remaining uncertainty;
+    * model used by the no-mistakes workflow;
     * `attempt_count`;
     * `caused_by`.
 
