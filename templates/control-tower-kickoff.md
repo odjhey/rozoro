@@ -43,8 +43,10 @@ destructive or irreversible actions, and spend beyond `{{limit, or "none"}}`.
 
 ## 5. Lifecycle and hygiene
 
-- Keep crews resident; resume, never respawn. No `teardown --force` within
-  minutes of a refusal or of recent operator focus on the pane.
+- Keep crews resident; resume, never respawn. Teardown is VCS-agnostic and
+  never refuses on unlanded work, so don't reap within minutes of recent
+  operator focus on the pane — that discipline is operator policy now, not a
+  tool guard.
 - Handoff `did:` stays around five lines; long evidence goes in task-folder
   files, not the handoff block.
 - Maintain a running story/index doc at `{{story-doc-path}}` mapping
