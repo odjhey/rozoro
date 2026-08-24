@@ -40,10 +40,20 @@ const safeId = (value: string, label: string) => {
 };
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
 const DIGITS = /^[0-9]+$/;
 const privatelyOwned = (info: { uid: number; mode: number }) => {
 	const uid = process.geteuid?.();
 	return (uid === undefined || info.uid === uid) && (info.mode & 0o077) === 0;
+};
+
+const fsyncDirectory = (path: string, label: string): void => {
+	const fd = openSync(path, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+	try {
+		const info = fstatSync(fd);
+		if (!info.isDirectory() || !privatelyOwned(info)) throw new Error(`unsafe Rozoro ${label} directory`);
+		fsyncSync(fd);
+	} finally { closeSync(fd); }
 };
 
 const readCounter = (fd: number): number => {
@@ -109,10 +119,12 @@ export class RozoroEventBusClient {
 		catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
 		const directory = lstatSync(this.producerSeqDir);
 		if (!directory.isDirectory() || !privatelyOwned(directory)) throw new Error("unsafe Rozoro producer sequence directory");
+		fsyncDirectory(dirname(this.producerSeqDir), "home");
 		const fd = openSync(this.producerSeqPath, constants.O_RDWR | constants.O_CREAT | NOFOLLOW, 0o600);
 		try {
 			const info = fstatSync(fd);
 			if (!info.isFile() || !privatelyOwned(info)) throw new Error("unsafe Rozoro producer sequence file");
+			fsyncDirectory(this.producerSeqDir, "producer sequence");
 			return run(fd);
 		} finally { closeSync(fd); }
 	}
