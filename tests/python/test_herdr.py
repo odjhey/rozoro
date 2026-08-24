@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rozoro_monitor.herdr import MembershipMonitor, PaneLevel, inventory, read_pane_level
+from rozoro_monitor.herdr import MembershipMonitor, PaneLevel, UnixHerdrSubscription, inventory, read_pane_level
 from rozoro_monitor.store import EventStore
 
 
@@ -126,6 +126,33 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
     def test_inventory_same_id(self):
         (self.state/'x.meta').write_text('pane=p\n')
         self.assertEqual(set(inventory(self.state).members),{'x'})
+
+    async def test_subscription_keeps_live_pane_when_batch_contains_gone_pane(self):
+        sock=str(self.state/'herdr.sock'); requests=[]; live_writer=None
+        async def handler(reader,writer):
+            nonlocal live_writer
+            request=__import__('json').loads(await reader.readline()); requests.append(request)
+            panes=[item['pane_id'] for item in request['params']['subscriptions']]
+            if 'gone' in panes:
+                reply={"id":"x","error":{"code":"pane_not_found","message":"gone"}}
+            else:
+                reply={"id":"x","result":{"type":"subscription_started"}}; live_writer=writer
+            writer.write((__import__('json').dumps(reply)+'\n').encode()); await writer.drain()
+            if 'gone' in panes: writer.close()
+        server=await asyncio.start_unix_server(handler,sock)
+        sub=UnixHerdrSubscription(sock,('gone','live'),timeout=.5)
+        try:
+            await sub.start()
+            event={"event":"pane.agent_status_changed","data":{"pane_id":"live","agent_status":"done","state_change_seq":7}}
+            live_writer.write((__import__('json').dumps(event)+'\n').encode()); await live_writer.drain()
+            level=await asyncio.wait_for(anext(sub.events()),.5)
+            self.assertEqual(level,PaneLevel('live','done',True,7))
+            self.assertEqual([[s['pane_id'] for s in r['params']['subscriptions']] for r in requests],
+                             [['gone','live'],['gone'],['live']])
+        finally:
+            await sub.close()
+            if live_writer: live_writer.close()
+            server.close(); await server.wait_closed()
 
     async def test_real_socket_uses_082_target_and_error_absence_vs_transport_unknown(self):
         sock=str(self.state/'herdr.sock'); requests=[]
