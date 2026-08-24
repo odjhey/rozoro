@@ -31,6 +31,14 @@ export default function (pi: ExtensionAPI) {
 
 	let busClient: RozoroEventBusClient | undefined;
 	let startup: AbortController | undefined;
+	let pendingLifecycle: ("turn.start" | "turn.stop")[] = [];
+
+	const activateClient = (client: RozoroEventBusClient) => {
+		busClient = client;
+		client.start();
+		for (const event of pendingLifecycle) client.publish(event);
+		pendingLifecycle = [];
+	};
 
 	const cleanupOnProcessExit = () => {
 		startup?.abort();
@@ -49,11 +57,10 @@ export default function (pi: ExtensionAPI) {
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (!requested && taskId) {
 			if (signal.aborted) return;
-			busClient = new RozoroEventBusClient({
+			activateClient(new RozoroEventBusClient({
 				socketPath: join(rozoroHome, "monitor.sock"), sessionId, role: "crew", taskId,
 				onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
-			});
-			busClient.start();
+			}));
 			return;
 		}
 
@@ -80,7 +87,7 @@ export default function (pi: ExtensionAPI) {
 		if (signal.aborted) return;
 		const driverId = registration.stdout.trim();
 		if (driverId !== expectedDriverId) throw new Error("Rozoro watchtower target identity does not match the resident Pi pane");
-		busClient = new RozoroEventBusClient({
+		activateClient(new RozoroEventBusClient({
 			socketPath: join(rozoroHome, "monitor.sock"), sessionId, driverId,
 			onStatus: (status) => ctx.ui.setStatus(STATUS_KEY, status),
 			onRegistered: async () => {
@@ -92,14 +99,14 @@ export default function (pi: ExtensionAPI) {
 				{ customType: "rozoro-event", content: WAKE_CONTENT, display: true },
 				{ triggerTurn: true, deliverAs: "followUp" },
 			),
-		});
-		busClient.start();
+		}));
 	};
 
 	pi.on("session_start", (_event, ctx) => {
 		startup?.abort();
 		busClient?.close();
 		busClient = undefined;
+		pendingLifecycle = [];
 		const controller = new AbortController();
 		startup = controller;
 		// Do not await Herdr readiness from session_start: Herdr cannot mark Pi
@@ -112,14 +119,19 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	pi.on("agent_start", () => busClient?.publish("turn.start"));
-	pi.on("agent_settled", () => busClient?.publish("turn.stop"));
+	const publishLifecycle = (event: "turn.start" | "turn.stop") => {
+		if (busClient) busClient.publish(event);
+		else if (startup && !startup.signal.aborted) pendingLifecycle.push(event);
+	};
+	pi.on("agent_start", () => publishLifecycle("turn.start"));
+	pi.on("agent_settled", () => publishLifecycle("turn.stop"));
 
 	pi.on("session_shutdown", async () => {
 		startup?.abort();
 		startup = undefined;
 		busClient?.close();
 		busClient = undefined;
+		pendingLifecycle = [];
 		process.removeListener("exit", cleanupOnProcessExit);
 	});
 

@@ -47,6 +47,25 @@ PY
   assert_success
 }
 
+@test "Pi lifecycle is retained while asynchronous monitor initialization is pending" {
+  run rzr-spawn.sh delayed-pi --cwd "$TEST_ROOT" --harness pi
+  assert_success
+  session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/delayed-pi.meta")"
+  sys="$ROZORO_HOME/tasks/delayed-pi/sysprompt.md"
+  ROZORO_PI_PROCESS_EXEC_DELAY_MS=300 ROZORO_PI_PROCESS_SETTLE_MS=0 \
+    ROZORO_PI_PROCESS_FINAL_SETTLE_MS=900 \
+    run node --experimental-strip-types "$REPO_ROOT/tests/pi-extension-process.ts" "$sys" "$session"
+  assert_success
+  run python3 - "$ROZORO_HOME/monitor.db" "$session" <<'PY'
+import sqlite3,sys
+rows=sqlite3.connect(sys.argv[1]).execute(
+    "select event_type from events where session_id=? order by durable_seq", (sys.argv[2],)
+).fetchall()
+assert rows == [('session.register',), ('turn.start',), ('turn.stop',)], rows
+PY
+  assert_success
+}
+
 @test "dirty refusal then clean rollback tombstones before marker removal" {
   run rzr-monitor.sh start; assert_success
   run python3 "$REPO_ROOT/tests/rollback-process.py" "$REPO_ROOT" "$ROZORO_HOME"
