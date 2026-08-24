@@ -227,14 +227,48 @@ class EmptySubscription:
     async def close(self): pass
 
 class UnixHerdrSubscription:
-    def __init__(self,socket_path,panes,*,timeout=5.0): self.socket_path=socket_path; self.panes=panes; self.timeout=timeout; self.reader=None; self.writer=None
-    async def start(self):
+    def __init__(self,socket_path,panes,*,timeout=5.0,shard_on_missing=True):
+        self.socket_path=socket_path; self.panes=panes; self.timeout=timeout; self.reader=None; self.writer=None
+        self.shard_on_missing=shard_on_missing; self._children=[]; self._pumps=[]; self._queue=None
+    async def _start_direct(self):
         self.reader,self.writer=await asyncio.wait_for(asyncio.open_unix_connection(self.socket_path),self.timeout)
         request={"id":"rozorod-membership","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":p} for p in self.panes]}}
         self.writer.write((json.dumps(request,separators=(",",":"))+"\n").encode()); await asyncio.wait_for(self.writer.drain(),self.timeout)
         reply=json.loads((await asyncio.wait_for(self.reader.readline(),self.timeout)).decode())
+        if reply.get("error") is not None: raise HerdrAPIError(reply["error"])
         if (reply.get("result") or {}).get("type")!="subscription_started": raise RuntimeError("Herdr rejected subscription")
+    async def start(self):
+        try:
+            await self._start_direct(); return
+        except HerdrAPIError as exc:
+            await self.close()
+            if not self.shard_on_missing or len(self.panes) < 2 or not _not_found(exc.error): raise
+        # Herdr rejects a whole multi-pane subscription when any pane is gone.
+        # Retry independently so stale metadata cannot suppress live panes.
+        self._queue=asyncio.Queue()
+        try:
+            for pane in self.panes:
+                child=UnixHerdrSubscription(self.socket_path,(pane,),timeout=self.timeout,shard_on_missing=False)
+                try: await child.start()
+                except HerdrAPIError as exc:
+                    await child.close()
+                    if _not_found(exc.error): continue
+                    raise
+                self._children.append(child)
+            self._pumps=[asyncio.create_task(self._pump(child)) for child in self._children]
+        except Exception:
+            await self.close(); raise
+    async def _pump(self,child):
+        try:
+            async for level in child.events(): await self._queue.put(level)
+        except asyncio.CancelledError: pass
+        except Exception as exc: await self._queue.put(exc)
     async def events(self):
+        if self._queue is not None:
+            while True:
+                item=await self._queue.get()
+                if isinstance(item,Exception): raise item
+                yield item
         while self.reader:
             line=await self.reader.readline()
             if not line: raise ConnectionError("Herdr subscription closed")
@@ -244,6 +278,10 @@ class UnixHerdrSubscription:
             if pane:
                 rev=data.get("state_change_seq",data.get("revision")); yield PaneLevel(pane,data.get("agent_status") or "unknown",True,rev if isinstance(rev,int) else None)
     async def close(self):
+        for pump in self._pumps: pump.cancel()
+        await asyncio.gather(*self._pumps,return_exceptions=True); self._pumps=[]
+        for child in self._children: await child.close()
+        self._children=[]
         if self.writer:
             self.writer.close(); await self.writer.wait_closed(); self.writer=None
 
