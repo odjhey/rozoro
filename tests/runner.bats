@@ -34,7 +34,7 @@ SH
   make_engine docker
   export ENGINE_LOG="$TEST_ROOT/engine.log"
 
-  run env PATH="$TEST_ROOT/engines:$PATH" bash "$REPO_ROOT/tests/run.sh"
+  run env PATH="$TEST_ROOT/engines:$PATH" TEST_JOBS=4 bash "$REPO_ROOT/tests/run.sh"
   assert_success
   [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
   assert_file_contains "$ENGINE_LOG" $'call\tbuild'
@@ -42,7 +42,7 @@ SH
   assert_file_contains "$ENGINE_LOG" $'localhost/rozoro-tests:bats-1.14.0\t'
   assert_file_contains "$ENGINE_LOG" $'call\trun\t--rm\t--network\tnone\t--read-only'
   assert_file_contains "$ENGINE_LOG" "$REPO_ROOT:/workspace:ro"
-  assert_file_contains "$ENGINE_LOG" $'label=disable\tlocalhost/rozoro-tests:bats-1.14.0\t--formatter\ttap\t/workspace/tests'
+  assert_file_contains "$ENGINE_LOG" $'label=disable\tlocalhost/rozoro-tests:bats-1.14.0\t--formatter\ttap\t--jobs\t4\t/workspace/tests'
 }
 
 @test "runner falls back to Docker without Podman-only options" {
