@@ -10,6 +10,21 @@ there is no opt-in flag or automatic legacy fallback. Pi's extension is only a
 reconnecting protocol adapter and fixed-wake actuator. Claude hooks are only
 lifecycle producers. Herdr remains host, liveness source, and safe wake actuator.
 
+Pi's adapter is a producer under the same protocol contract as the Claude hook.
+It reserves `producer_seq` durably per session in `producer-seq/<session-id>.seq`,
+the file `lib/rozoro_monitor/client.py` owns, so a resumed Pi session continues a
+contiguous sequence instead of restarting it or jumping to a wall-clock value.
+The cursor advances only after the daemon ACKs an event: a lagging cursor merely
+replays a sequence the reducer discards as stale, while a leading one would leave
+a permanent reducer gap that no resync path drains.
+
+Pi exposes no background-job snapshot to the extension, so its capability model
+has no background axis to observe. Its `turn.stop` therefore certifies
+`background_active: false` — a stopped Pi foreground turn leaves nothing
+outstanding. This is the Pi analogue of the Claude rule in
+`docs/claude-hook-capability.md`, where clear is certified only from an
+authoritative empty `Stop.background_tasks` snapshot.
+
 `rzr-watch` remains available only as an explicit legacy/diagnostic observer for
 Codex, Copilot, old releases, and manual Herdr transport diagnosis. Do not run it
 beside a managed Pi or supported-Claude driver.

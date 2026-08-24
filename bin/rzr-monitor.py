@@ -233,7 +233,7 @@ def reset(home: Path, force: bool) -> int:
             raise RuntimeError("monitor daemon owner lock is held") from exc
 
         # Preflight every entry before mutating any, preventing partial reset if
-        # a later WAL/SHM path is unsafe.
+        # a later database, producer cursor, or spooled event path is unsafe.
         present = []
         for name in ("monitor.db", "monitor.db-wal", "monitor.db-shm"):
             try:
@@ -243,8 +243,36 @@ def reset(home: Path, force: bool) -> int:
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
                 raise RuntimeError(f"refusing unsafe state entry: {name}")
             present.append(name)
+        state_dirs: list[tuple[str, int, list[str]]] = []
+        for name in ("producer-seq", "spool"):
+            try:
+                directory_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK
+                                       | getattr(os, "O_NOFOLLOW", 0), dir_fd=home_fd)
+            except FileNotFoundError:
+                continue
+            info = os.fstat(directory_fd)
+            if (info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077):
+                os.close(directory_fd)
+                raise RuntimeError(f"refusing unsafe state directory: {name}")
+            entries = os.listdir(directory_fd)
+            try:
+                for entry in entries:
+                    entry_info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(entry_info.st_mode) or entry_info.st_uid != os.geteuid():
+                        raise RuntimeError(f"refusing unsafe state entry: {name}/{entry}")
+            except BaseException:
+                os.close(directory_fd)
+                raise
+            state_dirs.append((name, directory_fd, entries))
         for name in present:
             os.unlink(name, dir_fd=home_fd)
+        for name, directory_fd, entries in state_dirs:
+            try:
+                for entry in entries:
+                    os.unlink(entry, dir_fd=directory_fd)
+            finally:
+                os.close(directory_fd)
+            os.rmdir(name, dir_fd=home_fd)
     except Exception as exc:
         print(f"monitor reset refused: {exc}", file=sys.stderr)
         return 1

@@ -8,13 +8,18 @@ const handlers = new Map<string, Function[]>();
 const api:any = {
   on(name:string, fn:Function) { const xs=handlers.get(name)??[]; xs.push(fn); handlers.set(name,xs); },
   registerCommand() {}, sendMessage() {},
-  exec(command:string,args:string[]) { return new Promise(resolve=>{const p=spawn(command,args,{env:process.env});let stdout="",stderr="";p.stdout.on("data",x=>stdout+=x);p.stderr.on("data",x=>stderr+=x);p.on("close",code=>resolve({code:code??1,stdout,stderr}));}); },
+  async exec(command:string,args:string[]) {
+    const delayMs = Number(process.env.ROZORO_PI_PROCESS_EXEC_DELAY_MS ?? 0);
+    if (delayMs > 0) await new Promise(r=>setTimeout(r,delayMs));
+    return new Promise(resolve=>{const p=spawn(command,args,{env:process.env});let stdout="",stderr="";p.stdout.on("data",x=>stdout+=x);p.stderr.on("data",x=>stderr+=x);p.on("close",code=>resolve({code:code??1,stdout,stderr}));});
+  },
 };
 extension(api);
 const prompt=await readFile(sysfile,"utf8");
 const ctx:any={getSystemPrompt:()=>prompt,sessionManager:{getSessionId:()=>sessionId,getSessionFile:()=>process.env.PI_SESSION_FILE},ui:{setStatus(){},notify(message:string){console.error(message)}}};
 const emit=async(name:string,...args:any[])=>{for(const fn of handlers.get(name)??[]) await fn(...args)};
-const settleMs = Number(process.env.ROZORO_PI_PROCESS_SETTLE_MS || 400);
+const settleMs = Number(process.env.ROZORO_PI_PROCESS_SETTLE_MS ?? 400);
+const finalSettleMs = Number(process.env.ROZORO_PI_PROCESS_FINAL_SETTLE_MS ?? settleMs);
 await emit("session_start",{},ctx); await new Promise(r=>setTimeout(r,settleMs));
-await emit("agent_start"); await emit("agent_settled"); await new Promise(r=>setTimeout(r,settleMs));
+await emit("agent_start"); await emit("agent_settled"); await new Promise(r=>setTimeout(r,finalSettleMs));
 await emit("session_shutdown");

@@ -47,6 +47,39 @@ PY
   assert_success
 }
 
+@test "idle Pi crew with a done handoff reaches quiescent and advances the wake generation" {
+  run rzr-spawn.sh delayed-pi --cwd "$TEST_ROOT" --harness pi
+  assert_success
+  session="$(sed -n 's/^session=//p' "$ROZORO_HOME/state/delayed-pi.meta")"
+  sys="$ROZORO_HOME/tasks/delayed-pi/sysprompt.md"
+  write_handoff delayed-pi '## turn 1 — done' 'verdict:       done' 'reason:        ' \
+    'did:           tested' 'pending:       none' 'inputs-needed: none' 'artifacts:     none'
+  ROZORO_PI_PROCESS_EXEC_DELAY_MS=300 ROZORO_PI_PROCESS_SETTLE_MS=0 \
+    ROZORO_PI_PROCESS_FINAL_SETTLE_MS=900 \
+    run node --experimental-strip-types "$REPO_ROOT/tests/pi-extension-process.ts" "$sys" "$session"
+  assert_success
+  run python3 - "$ROZORO_HOME/monitor.db" "$session" <<'REGRESSION'
+import json,sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+rows=c.execute("select event_type,payload_json from events where session_id=? order by durable_seq",
+               (sys.argv[2],)).fetchall()
+assert [r[0] for r in rows]==['session.register','turn.start','turn.stop'], rows
+payloads=[json.loads(r[1]) for r in rows]
+assert [p['producer_seq'] for p in payloads]==[1,2,3], payloads
+assert payloads[2]['background_active'] is False, payloads[2]
+state=c.execute("select foreground,background,availability from sessions where session_id=?",
+                (sys.argv[2],)).fetchone()
+assert state==('stopped','clear','quiescent'), state
+projected=c.execute(
+    "select availability,verdict,actionable_reason from task_projections where task_id='delayed-pi'"
+).fetchone()
+assert projected==('quiescent','done','quiescent'), projected
+generation=int(c.execute("select value from daemon_metadata where key='latest_generation'").fetchone()[0])
+assert generation>0, generation
+REGRESSION
+  assert_success
+}
+
 @test "dirty refusal then clean rollback tombstones before marker removal" {
   run rzr-monitor.sh start; assert_success
   run python3 "$REPO_ROOT/tests/rollback-process.py" "$REPO_ROOT" "$ROZORO_HOME"
