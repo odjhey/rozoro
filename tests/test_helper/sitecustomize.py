@@ -1,4 +1,5 @@
-"""Test-only subprocess hook: record exact daemon ownership at Popen return."""
+"""Test-only subprocess hook: record and reap exact daemon ownership."""
+import atexit
 import json
 import os
 import signal
@@ -50,3 +51,15 @@ class RecordingPopen(_real_popen):
 
 
 subprocess.Popen = RecordingPopen
+
+# A production stop correctly refuses after its proof files are destroyed. Tests
+# still own the exact spawn record, so reap that owner at process exit without
+# weakening production stop semantics or consulting mutable lock/socket state.
+if (os.environ.get("ROZORO_TEST_CLEANUP_ON_STOP") == "1"
+        and os.environ.get("ROZORO_TEST_PROCESS_REGISTRY")
+        and os.path.basename(__import__("sys").argv[0]) == "rzr-monitor.py"
+        and "stop" in __import__("sys").argv[1:]):
+    def _cleanup_failed_or_completed_stop():
+        from tests.test_helper.process_cleanup import cleanup
+        cleanup()
+    atexit.register(_cleanup_failed_or_completed_stop)

@@ -54,13 +54,26 @@ assert_isolated_clean() {
   assert_isolated_clean "$root"
 }
 
-@test "SIGKILLed Bats harness parent is reaped by the isolated run guardian" {
+@test "manual live cleanup reaps exact spawn owner after socket and lock loss" {
+  root="/tmp/rzr-live-stop-$$"; home="$root/home"; registry="$root/owned-processes.jsonl"; mkdir -p "$home"; chmod 700 "$home"
+  PATH="$TOOL_PATH" PYTHONPATH="$REPO_ROOT/tests/test_helper:$REPO_ROOT" ROZORO_HOME="$home" ROZORO_TEST_PROCESS_REGISTRY="$registry" \
+    python3 "$REPO_ROOT/bin/rzr-monitor.py" start
+  daemon_pid="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["pid"])' "$registry")"
+  rm -f "$home/monitor.sock" "$home/monitor.lock"
+  run env PATH="$TOOL_PATH" PYTHONPATH="$REPO_ROOT/tests/test_helper:$REPO_ROOT" ROZORO_HOME="$home" ROZORO_TEST_PROCESS_REGISTRY="$registry" ROZORO_TEST_CLEANUP_ON_STOP=1 \
+    python3 "$REPO_ROOT/bin/rzr-monitor.py" stop
+  assert_failure
+  for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
+  assert_no_process "$daemon_pid"; assert_isolated_clean "$root"
+}
+
+@test "SIGKILLed interrupt runner is reaped by a surviving external guardian" {
   root="/tmp/rzr-kill-bats-$$"; mkdir -p "$root"; out="$root/home-path"; child_file="$root/child-pid"
   PATH="$TOOL_PATH" TMPDIR="$root" ROZORO_TEST_PROCESS_REGISTRY_ROOT="$root" INTERRUPT_REGISTRY_ROOT="$root" INTERRUPT_CHILD_PID_FILE="$child_file" INTERRUPT_HOME_FILE="$out" INTERRUPT_PYTHON="$(PATH="$TOOL_PATH" command -v python3)" \
     python3 "$REPO_ROOT/tests/test_helper/interrupt_runner.py" bats "$REPO_ROOT/tests/fixtures/daemon-owner.bats" & guardian=$!
   wait_for_file "$out"; wait_for_file "$child_file"; home="$(cat "$out")"; daemon_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$home/monitor.lock")"
-  registry="$(find "$root" -name 'owned-processes-*.jsonl' | head -1)"; wait_for_file "$registry"; cp "$registry" "$root/guardian-owned-processes.jsonl"
-  kill -KILL "$(cat "$child_file")"; wait "$guardian" 2>/dev/null || true
+  registry="$(find "$root" -name 'owned-processes-*.jsonl' | head -1)"; wait_for_file "$registry"
+  kill -KILL "$guardian"; wait "$guardian" 2>/dev/null || true
   for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
   assert_no_process "$daemon_pid"
   assert_isolated_clean "$root"

@@ -147,6 +147,7 @@ def cleanup() -> None:
             for raw in _load_file(registry_path):
                 try:
                     value = _record(raw["pid"], Path(raw["home"]), raw["argv"], raw.get("pgid"), raw.get("token"))
+                    value["cleanup_root"] = str(registry_path.parent.resolve())
                     if raw.get("birth") != value["birth"]: _owned.pop(value["pid"], None)
                 except (KeyError, OSError, RuntimeError, TypeError): pass
             try: registry_path.unlink()
@@ -154,9 +155,11 @@ def cleanup() -> None:
         values = list(_owned.values())
         for value in values: _terminate(value)
         _owned.clear()
-        for home in {Path(v["home"]) for v in values}:
-            try: home.relative_to(Path(tempfile.gettempdir()).resolve())
-            except ValueError: continue
+        for value in values:
+            home = Path(value["home"])
+            allowed = [Path(tempfile.gettempdir()).resolve()]
+            if value.get("cleanup_root"): allowed.append(Path(value["cleanup_root"]))
+            if not any(home == root or root in home.parents for root in allowed): continue
             import shutil; shutil.rmtree(home, ignore_errors=True)
     finally: _cleaning = False
 
