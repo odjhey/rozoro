@@ -56,6 +56,22 @@ class ProjectionReportTests(unittest.TestCase):
             self.assertEqual(projected["projection_json"]["background"], "clear")
             self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 2)
 
+    def test_pi_registration_does_not_wake_but_completed_turn_does(self):
+        with EventStore(self.db) as store:
+            registration = event("register", 1, "session.register")
+            registration["harness"] = "pi"
+            stop = event("stop", 2, "turn.stop", background_active=False)
+            stop["harness"] = "pi"
+
+            registered = store.accept_event(registration)
+            stopped = store.accept_event(stop)
+
+            self.assertIsNone(registered.generation)
+            self.assertEqual(stopped.generation, 1)
+            self.assertEqual(
+                store.task_projection("task-1")["actionable_reason"], "missing-report"
+            )
+
     def test_report_axis_is_independent_of_runtime_and_ack_cursor(self):
         self.write_handoff("""## turn 1 — question
 verdict: needs-action
