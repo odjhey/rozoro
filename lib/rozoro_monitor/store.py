@@ -479,11 +479,14 @@ class EventStore:
             os.close(fd)
 
     def __init__(self, path: str | os.PathLike[str], *, tasks_dir: str | os.PathLike[str] | None = None,
-                 state_dir: str | os.PathLike[str] | None = None, spool_backlog: int = 0):
+                 state_dir: str | os.PathLike[str] | None = None, spool_backlog: int = 0,
+                 migration_herdr_inventory: Mapping[str, str] | None = None):
         self.path = Path(path).absolute()
         self.tasks_dir = Path(tasks_dir).absolute() if tasks_dir is not None else self.path.parent / "tasks"
         self.state_dir = Path(state_dir).absolute() if state_dir is not None else self.path.parent / "state"
         self._migration_spool_backlog = spool_backlog
+        self._migration_herdr_inventory = (None if migration_herdr_inventory is None
+                                           else dict(migration_herdr_inventory))
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory_fd = os.open(
             self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -723,7 +726,12 @@ class EventStore:
         observed = inventory(self.state_dir)
         if observed.errors:
             raise RuntimeError("schema 7 migration requires valid owner-private task metadata")
-        active = set(observed.members)
+        if self._migration_herdr_inventory is None:
+            raise RuntimeError("schema 7 migration requires a transactionally captured exact Herdr inventory")
+        metadata = {task: member.pane_id for task, member in observed.members.items()}
+        if metadata != self._migration_herdr_inventory:
+            raise RuntimeError("schema 7 migration metadata and exact Herdr inventory disagree")
+        active = set(metadata)
         known = {str(row[0]) for row in connection.execute("SELECT task_id FROM task_projections")}
         for task_id in sorted(known | active):
             connection.execute(
@@ -920,7 +928,6 @@ class EventStore:
             ).fetchall()
             for row in rows:
                 state = _state_from_json(row["reducer_state_json"])
-                was_adapter_connected = state.adapter_connected
                 before = connection.execute(
                     "SELECT actionable_reason,projection_json FROM task_projections WHERE task_id=?", (task_id,)
                 ).fetchone()
@@ -956,11 +963,11 @@ class EventStore:
                     old_detail = {} if before is None else json.loads(before["projection_json"])
                     projection_changed = (before is None or before["actionable_reason"] != reason
                                           or old_detail.get("availability") != state.availability)
-                    disconnected_edge = adapter_connected is False and was_adapter_connected
                     gone_edge = pane_exists is False and old_detail.get("availability") != "gone"
-                    if (reason != "none" and projection_changed) or disconnected_edge or gone_edge:
-                        edge_reason = ("gone" if gone_edge else
-                                       "unknown" if disconnected_edge and reason == "none" else reason)
+                    disconnected_edge = (adapter_connected is False
+                                         and old_detail.get("availability") != state.availability)
+                    if (reason != "none" and projection_changed) or gone_edge or disconnected_edge:
+                        edge_reason = ("gone" if gone_edge else "unknown" if disconnected_edge else reason)
                         StoreTransaction(connection).bump_actionable(ActionableChange(
                             task_id, edge_reason,
                             "urgent" if edge_reason in {"gone", "blocked", "failed", "needs-action"} else "normal",

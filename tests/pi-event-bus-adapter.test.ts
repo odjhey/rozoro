@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -165,11 +165,14 @@ test("twenty clients sharing one Pi session allocate one contiguous custody stre
 });
 
 test("Pi custody rejects symlinked public and downgraded state", async () => {
-	for (const mode of ["symlink","public","downgrade"] as const) {
-		const dir=await mkdtemp(join(tmpdir(),"rozoro-pi-unsafe-")); const producer=join(dir,"pi-producers","unsafe"); await mkdir(producer,{recursive:true});
+	for (const mode of ["symlink","public","downgrade","foreign"] as const) {
+		const dir=await mkdtemp(join(tmpdir(),"rozoro-pi-unsafe-")); const producer=join(dir,"pi-producers","unsafe"); await mkdir(producer,{recursive:true,mode:0o700}); await chmod(join(dir,"pi-producers"),0o700); await chmod(producer,0o700);
 		if (mode === "symlink") { const foreign=await mkdtemp(join(tmpdir(),"foreign-")); await symlink(foreign,join(producer,"spool")); }
-		else { await mkdir(join(producer,"spool")); await chmod(join(producer,"spool"),mode === "public" ? 0o755 : 0o700); await writeFile(join(producer,"custody-version"),mode === "downgrade" ? "1\n" : "2\n",{mode:0o600}); }
-		assert.throws(()=>new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}),/unsafe|unsupported/);
+		else if (mode === "foreign") {
+			const first=new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}); first.close();
+			const spool=join(producer,"spool"); const name=(await readdir(spool)).find(item=>item.endsWith(".json"))!; const frame=JSON.parse(await readFile(join(spool,name),"utf8")); frame.task_id="other-task"; await writeFile(join(spool,name),JSON.stringify(frame),{mode:0o600});
+		} else { await mkdir(join(producer,"spool")); await chmod(join(producer,"spool"),mode === "public" ? 0o755 : 0o700); await writeFile(join(producer,"custody-version"),mode === "downgrade" ? "1\n" : "2\n",{mode:0o600}); }
+		assert.throws(()=>new RozoroEventBusClient({socketPath:join(dir,"monitor.sock"),sessionId:"unsafe",role:"crew",taskId:"task"}),/unsafe|unsupported|foreign/);
 		await rm(dir,{recursive:true,force:true});
 	}
 });

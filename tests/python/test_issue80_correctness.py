@@ -57,6 +57,13 @@ class Issue80CorrectnessTests(unittest.TestCase):
             self.assertEqual(store._connection.execute(
                 "SELECT present FROM task_membership WHERE task_id='task-1'").fetchone()[0], 0)
 
+    def test_disconnect_from_already_unknown_missing_is_a_canonical_noop(self):
+        with EventStore(self.db) as store:
+            store.accept_event(lifecycle("session.register",1))
+            self.assertEqual(store.health_snapshot()["generation"],0)
+            store.reconcile_herdr_liveness("task-1",pane_exists=True,adapter_connected=False)
+            self.assertEqual(store.health_snapshot()["generation"],0)
+
     def test_metadata_present_disappearance_is_one_exact_gone_edge(self):
         with EventStore(self.db) as store:
             store.accept_event(lifecycle("session.register", 1))
@@ -112,9 +119,15 @@ class Issue80CorrectnessTests(unittest.TestCase):
             os.chmod(state / f"task-{number:02d}.meta", 0o600)
         return state
 
+    @staticmethod
+    def exact_inventory(state):
+        return {path.stem: path.read_text().split("pane=",1)[1].splitlines()[0]
+                for path in state.glob("*.meta")}
+
     def test_production_shaped_migration_scopes_ten_of_thirty_without_deleting_history(self):
         state = self.make_v6_fixture()
-        with EventStore(self.db, state_dir=state) as store:
+        with EventStore(self.db, state_dir=state,
+                        migration_herdr_inventory=self.exact_inventory(state)) as store:
             self.assertEqual(store.schema_version, 7)
             self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM task_projections").fetchone()[0], 30)
             self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM task_membership WHERE present=1").fetchone()[0], 10)
@@ -125,20 +138,33 @@ class Issue80CorrectnessTests(unittest.TestCase):
         class FailingStore(EventStore):
             def _commit(self): raise RuntimeError("injected migration failure")
         with self.assertRaisesRegex(RuntimeError, "injected"):
-            FailingStore(self.db, state_dir=state)
+            FailingStore(self.db, state_dir=state,
+                         migration_herdr_inventory=self.exact_inventory(state))
         raw = sqlite3.connect(self.db)
         self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0], 6)
         self.assertNotIn("retirement_reason", {row[1] for row in raw.execute("PRAGMA table_info(task_membership)")})
         self.assertIsNone(raw.execute("SELECT name FROM sqlite_master WHERE name='producer_migration_quarantine'").fetchone())
         raw.close()
         with self.assertRaisesRegex(RuntimeError, "empty spool"):
-            EventStore(self.db, state_dir=state, spool_backlog=1)
+            EventStore(self.db, state_dir=state, spool_backlog=1,
+                       migration_herdr_inventory=self.exact_inventory(state))
+
+    def test_migration_requires_exact_matching_herdr_inventory(self):
+        state=self.make_v6_fixture(projections=2,active=2); exact=self.exact_inventory(state)
+        with self.assertRaisesRegex(RuntimeError,"exact Herdr inventory"):
+            EventStore(self.db,state_dir=state)
+        raw=sqlite3.connect(self.db); self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0],6); raw.close()
+        exact.pop("task-01")
+        with self.assertRaisesRegex(RuntimeError,"disagree"):
+            EventStore(self.db,state_dir=state,migration_herdr_inventory=exact)
+        raw=sqlite3.connect(self.db); self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0],6); raw.close()
 
     def test_migration_rejects_generation_without_driver(self):
         state=self.make_v6_fixture(projections=1,active=1)
         raw=sqlite3.connect(self.db); raw.execute("UPDATE daemon_metadata SET value='1' WHERE key='latest_generation'"); raw.commit(); raw.close()
         with self.assertRaisesRegex(RuntimeError,"equal generation cursors"):
-            EventStore(self.db,state_dir=state)
+            EventStore(self.db,state_dir=state,
+                       migration_herdr_inventory=self.exact_inventory(state))
 
     def test_old_binary_refuses_schema_seven(self):
         with EventStore(self.db): pass

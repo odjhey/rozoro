@@ -9,6 +9,7 @@ import json
 import os
 import resource
 import socket
+import sqlite3
 import stat
 import sys
 from pathlib import Path
@@ -20,7 +21,7 @@ from .client import _open_home
 from .store import EventStore
 from .herdr import (
     EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription,
-    read_pane_level,
+    herdr_rpc, inventory, read_pane_level,
 )
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
@@ -187,14 +188,55 @@ class MonitorServer:
         try:
             self._assert_home_anchor()
             self._prepare_entries()
-            state_dir = Path(os.environ.get("ROZORO_STATE_DIR", str(self.home / "state")))
+            explicit_state = os.environ.get("ROZORO_STATE_DIR")
+            state_dir = Path(explicit_state or str(self.home / "state"))
+            try: state_dir.mkdir(mode=0o700)
+            except FileExistsError: pass
+            state_info = state_dir.lstat()
+            if (not stat.S_ISDIR(state_info.st_mode) or state_info.st_uid != os.geteuid()
+                    or state_dir.is_symlink()):
+                raise UnsafeStateError("state must be an owner-private directory")
+            if stat.S_IMODE(state_info.st_mode) & 0o077:
+                if explicit_state: raise UnsafeStateError("external state directory must already be owner-private")
+                os.chmod(state_dir,0o700,follow_symlinks=False)
+            herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
+            if not herdr_socket:
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "herdr", "session", "list", "--json", stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
+                    sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
+                    wanted = os.environ.get("RZR_SESSION")
+                    selected = (next((item for item in sessions if item.get("name") == wanted), None)
+                                if wanted else next((item for item in sessions if item.get("default") is True), None))
+                    herdr_socket = None if selected is None else selected.get("socket_path")
+                except (OSError, ValueError, TimeoutError): herdr_socket = None
+            migration_inventory = None
+            if self.db_path.exists():
+                probe = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                try: existing_version = int(probe.execute("PRAGMA user_version").fetchone()[0])
+                finally: probe.close()
+                if existing_version == 6:
+                    if not herdr_socket:
+                        raise RuntimeError("schema 7 migration requires exact Herdr inventory availability")
+                    metadata = inventory(state_dir)
+                    if metadata.errors:
+                        raise RuntimeError("schema 7 migration requires valid task metadata")
+                    response = await herdr_rpc(herdr_socket, "agent.list", {}, timeout=3.0)
+                    result = response.get("result") or {}
+                    agents = result.get("agents", result if isinstance(result, list) else [])
+                    panes = {item.get("pane_id") or item.get("target") for item in agents if isinstance(item, dict)}
+                    migration_inventory = {task: member.pane_id for task, member in metadata.members.items()
+                                           if member.pane_id in panes}
             spool_backlog = 0
             for spool in (self.home / "spool", *(self.home / "pi-producers").glob("*/spool")):
                 try:
                     spool_backlog += sum(name != ".lock" for name in os.listdir(spool))
                 except FileNotFoundError:
                     pass
-            self._store = EventStore(self.db_path, state_dir=state_dir, spool_backlog=spool_backlog)
+            self._store = EventStore(self.db_path, state_dir=state_dir, spool_backlog=spool_backlog,
+                                     migration_herdr_inventory=migration_inventory)
             self._import_spool()
             db_info = self._entry("monitor.db")
             if db_info is None or not stat.S_ISREG(db_info.st_mode):
@@ -218,34 +260,6 @@ class MonitorServer:
             self._listener = listener
             self._accept_task = asyncio.create_task(self._accept_loop())
             self._spool_task = asyncio.create_task(self._spool_loop())
-            explicit_state = os.environ.get("ROZORO_STATE_DIR")
-            state_dir = Path(explicit_state or str(self.home / "state"))
-            try:
-                state_dir.mkdir(mode=0o700)
-            except FileExistsError:
-                pass
-            state_info = state_dir.lstat()
-            if (not stat.S_ISDIR(state_info.st_mode) or state_info.st_uid != os.geteuid()
-                    or state_dir.is_symlink()):
-                raise UnsafeStateError("state must be an owner-controlled directory")
-            if stat.S_IMODE(state_info.st_mode) != 0o700:
-                if explicit_state:
-                    raise UnsafeStateError("external state directory must already be owner-private")
-                os.chmod(state_dir, 0o700, follow_symlinks=False)
-            herdr_socket = os.environ.get("ROZORO_HERDR_SOCKET")
-            if not herdr_socket:
-                try:
-                    command = ["herdr", "session", "list", "--json"]
-                    proc = await asyncio.create_subprocess_exec(
-                        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), 3.0)
-                    sessions = json.loads(stdout).get("sessions", []) if proc.returncode == 0 else []
-                    wanted = os.environ.get("RZR_SESSION")
-                    selected = (next((item for item in sessions if item.get("name") == wanted), None)
-                                if wanted else next((item for item in sessions if item.get("default") is True), None))
-                    herdr_socket = None if selected is None else selected.get("socket_path")
-                except (OSError, ValueError, TimeoutError):
-                    herdr_socket = None
             if herdr_socket:
                 async def level_reader(pane_id: str) -> PaneLevel:
                     return await read_pane_level(

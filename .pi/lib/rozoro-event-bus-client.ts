@@ -177,6 +177,15 @@ export class RozoroEventBusClient {
 			throw new Error(`unsafe Pi producer custody ${kind}`);
 	}
 
+	private validateRestoredFrame(frame: Frame): void {
+		if (!positive(frame.producer_seq) || typeof frame.event_id !== "string" ||
+			frame.session_id !== this.sessionId || frame.harness !== "pi" || frame.role !== this.role ||
+			(this.role === "crew" ? frame.task_id !== this.taskId || own(frame,"driver_id") :
+				frame.driver_id !== this.driverId || own(frame,"task_id")) ||
+			!["session.register","turn.start","turn.stop"].includes(frame.type as string))
+			throw new Error("foreign Pi producer spool envelope");
+	}
+
 	private restoreProducer(): void {
 		const home = resolve(dirname(this.options.socketPath));
 		const state = resolve(this.producerDir);
@@ -206,7 +215,7 @@ export class RozoroEventBusClient {
 		const backlog = readdirSync(this.spoolDir).filter((name) => name.endsWith(".json")).map((name) => {
 			const path = join(this.spoolDir, name); this.validateCustodyEntry(path, "file");
 			const frame = JSON.parse(readFileSync(path, "utf8")) as Frame;
-			if (!positive(frame.producer_seq) || typeof frame.event_id !== "string") throw new Error("invalid Pi producer spool");
+			this.validateRestoredFrame(frame);
 			return frame;
 		}).sort((a, b) => (a.producer_seq as number) - (b.producer_seq as number));
 		for (const frame of backlog) {
@@ -238,7 +247,7 @@ export class RozoroEventBusClient {
 		for (const name of readdirSync(this.spoolDir).filter((item) => item.endsWith(".json"))) {
 			this.validateCustodyEntry(join(this.spoolDir, name), "file");
 			const frame = JSON.parse(readFileSync(join(this.spoolDir, name), "utf8")) as Frame;
-			if (!positive(frame.producer_seq)) throw new Error("invalid Pi producer spool");
+			this.validateRestoredFrame(frame);
 			current = Math.max(current, frame.producer_seq);
 		}
 		return current;

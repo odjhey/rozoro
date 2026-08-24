@@ -62,14 +62,19 @@ With the old daemon cleanly stopped, take a SQLite-safe backup (including WAL
 state, preferably with SQLite's backup API), then start the new daemon. Migration
 retains every event envelope, durable sequence, historical generation/snapshot,
 delivery audit, authority identity, task file, handoff, session link, and report
-ACK cursor. It populates active membership from validated owner-private metadata,
-retires absent projection history from future snapshots, repairs current report
+ACK cursor. It captures exact Herdr `agent.list` immediately before the transaction and
+requires it to agree with validated owner-private metadata before populating
+active membership. Any unavailable or inconsistent inventory aborts and rolls
+back the migration. It retires absent projection history from future snapshots, repairs current report
 authority read-only, and quarantines the mutable timestamp-scale Pi gap signature.
 It does not create a notification.
 
 After verifying schema/version, row counts, equal cursors, and active membership,
 perform one controlled reload of live Pi crew/watchtower adapters. Their durable
-producer custody then starts or continues at a contiguous baseline. Quarantined
+producer custody then starts or continues at a contiguous baseline. Custody is
+format-versioned and semantically bound to the configured session, role, and
+task/driver; foreign envelopes and unsupported downgrade markers fail closed
+before transmission. Quarantined
 sessions remain unknown until that registration is accepted; Herdr text is never
 used to invent lifecycle state. Complete the documented Pi+Claude live soak
 before beginning adapter PR17. This implementation does not perform that live
