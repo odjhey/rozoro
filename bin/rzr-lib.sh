@@ -433,8 +433,23 @@ PY
   printf '%s' "$target"
 }
 
-rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id] [fast]
-  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}" fast="${7:-false}"
+rzr_codex_hook_args() {  # <task-id>
+  local task="$1" command
+  command="$(printf 'env ROZORO_HOME=%q ROZORO_TASK_ID=%q python3 %q' "$RZR_HOME" "$task" "$RZR_REPO/hooks/codex-rozoro-event.py")"
+  local event value
+  for event in SessionStart UserPromptSubmit Stop SessionEnd; do
+    value="$(python3 - "$command" <<'PY'
+import json,sys
+print('[{hooks=[{type="command",command='+json.dumps(sys.argv[1])+',timeout=2}]}]')
+PY
+)"
+    printf '%s\0%s\0' --config "hooks.$event=$value"
+  done
+  printf '%s\0' --dangerously-bypass-hook-trust
+}
+
+rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-file> [session-id] [fast] [task-id]
+  local harness="$1" model="$2" effort="$3" permmode="$4" sysfile="$5" session_id="${6:-}" fast="${7:-false}" task_id="${8:-}"
   rzr_profile_validate "$harness" "$model" "$effort" "$fast"
   case "$harness" in
     claude)
@@ -449,6 +464,7 @@ rzr_harness_args() {  # <harness> <model> <effort> <permission-mode> <sysprompt-
       [ -n "$model" ]    && printf '%s\0%s\0' --model "$model"
       [ -n "$effort" ]   && printf '%s\0%s\0' --config "model_reasoning_effort=$effort"
       [ "$fast" = true ] && printf '%s\0%s\0' --config service_tier=priority
+      [ -z "$task_id" ] || rzr_codex_hook_args "$task_id"
       ;;
     copilot)
       printf '%s\0%s\0%s\0%s\0' --no-auto-update --autopilot --yolo --no-ask-user

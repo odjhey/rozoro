@@ -754,8 +754,8 @@ class EventStore:
                 # identity before the crew can write its handoff. A missing report
                 # while that turn is busy is not completed work and must not
                 # manufacture a watchtower wake.
-                pi_startup_missing_report = (
-                    event.get("harness") == "pi"
+                startup_missing_report = (
+                    event.get("harness") in {"pi", "codex"}
                     and reason == "missing-report"
                     and (
                         event["type"] == "session.register"
@@ -766,12 +766,30 @@ class EventStore:
                         )
                     )
                 )
-                change = (ActionableChange(
-                              event["task_id"], reason,
-                              "urgent" if reason in {"blocked", "failed", "needs-action"} else "normal",
-                          )
-                          if not pi_startup_missing_report and reason is not None and reason != "none"
-                          and before_tuple != after_tuple else None)
+                codex_turn_report = (
+                    event.get("harness") == "codex"
+                    and event["type"] == "turn.stop"
+                    and after_projection is not None
+                    and after_projection["report_state"] == "valid"
+                    and (
+                        before_projection is None
+                        or before_projection["report_state"] != after_projection["report_state"]
+                        or before_projection["verdict"] != after_projection["verdict"]
+                    )
+                )
+                if codex_turn_report:
+                    change = ActionableChange(
+                        event["task_id"], "native-turn-ended-report",
+                        "urgent" if after_projection["verdict"] in {"blocked", "failed", "needs-action"} else "normal",
+                        preserve_projection_reason=True,
+                    )
+                else:
+                    change = (ActionableChange(
+                                  event["task_id"], reason,
+                                  "urgent" if reason in {"blocked", "failed", "needs-action"} else "normal",
+                              )
+                              if not startup_missing_report and reason is not None and reason != "none"
+                              and before_tuple != after_tuple else None)
             else:
                 change = None
             generation = tx.bump_actionable(change) if change is not None else None
