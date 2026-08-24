@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Process regression for the documented minimum monitor Python runtime."""
+import asyncio
 import os
 import sqlite3
 import subprocess
@@ -9,12 +10,44 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from lib.rozoro_monitor.herdr import MembershipMonitor
 from lib.rozoro_monitor.store import _MIGRATIONS, SCHEMA_VERSION
 
-if os.environ.get("ROZORO_REQUIRE_PYTHON_310") == "1":
-    assert sys.version_info[:2] == (3, 10), sys.version
+if os.environ.get("ROZORO_REQUIRE_PYTHON_311") == "1":
+    assert sys.version_info[:2] == (3, 11), sys.version
 else:
-    assert sys.version_info >= (3, 10), sys.version
+    assert sys.version_info >= (3, 11), sys.version
+
+
+async def prove_periodic_runner_survives_deadlines():
+    scans = 0
+    monitor = MembershipMonitor(
+        ".", lambda _panes: None, lambda _pane: None, lambda _task, _level: None,
+        scan_interval=0.02, hint_interval=1.0, debounce=0, drain_interval=0,
+    )
+
+    async def scan(*, force=False):
+        nonlocal scans
+        scans += 1
+
+    monitor.scan = scan
+    await monitor.start()
+    await asyncio.sleep(0.09)
+    assert scans >= 3, scans
+    assert monitor._runner is not None and not monitor._runner.done()
+    await monitor.close()
+
+
+asyncio.run(prove_periodic_runner_survives_deadlines())
+
+# These process tests drive real server read deadlines and constrained-FD
+# refusal behavior. On Python 3.10 they reproduce uncaught asyncio timeouts;
+# the supported 3.11 floor must return protocol errors rather than EOF.
+subprocess.run([
+    sys.executable, "-m", "unittest",
+    "tests.python.test_server.ServerProcessTests.test_idle_deadline_and_client_cap_refuse_deterministically",
+    "tests.python.test_server.ServerProcessTests.test_low_fd_limit_reserves_capacity_and_refuses_before_emfile",
+], cwd=ROOT, check=True)
 
 
 def run(*args, home, check=True):

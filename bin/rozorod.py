@@ -2,11 +2,11 @@
 """Run the Rozoro monitor in the foreground."""
 import sys
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 11):
     print(
-        "rozorod: Python >=3.10 is required (stock macOS Python 3.9.6 is not "
-        "supported); install Homebrew Python with `brew install python` and "
-        "ensure its python3 precedes the stock interpreter on PATH "
+        "rozorod: Python >=3.11 is required (Python 3.10 is not yet supported; "
+        "EOL Python 3.9 is out of policy); install Homebrew Python with "
+        "`brew install python` and ensure its python3 precedes older interpreters on PATH "
         f"(found {sys.version.split()[0]} at {sys.executable})",
         file=sys.stderr,
     )

@@ -16,7 +16,7 @@ case "$verb" in
   help|-h|--help)
     echo "usage: ./bin/rozoro <verb> [args...]"
     echo "verbs:"
-    echo "  monitor start|status|stop   resident Pi+Claude event-bus authority (Python >=3.10)"
+    echo "  monitor start|status|stop   resident Pi+Claude event-bus authority (Python >=3.11)"
     echo "    macOS: brew install python; ensure Homebrew python3 precedes stock Python on PATH"
     echo "  reconcile [--driver ID]    consume and ACK a daemon generation"
     echo "  watch ...                  diagnostics/legacy compatibility only"

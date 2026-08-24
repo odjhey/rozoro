@@ -2,8 +2,8 @@
 """Lifecycle and diagnostic CLI for the local Rozoro monitor."""
 import sys
 
-MIN_PYTHON = (3, 10)
-PYTHON_ERROR = "Rozoro monitor requires Python >=3.10 (stock macOS Python 3.9.6 is not supported); install Homebrew Python with `brew install python` and ensure its python3 precedes the stock interpreter on PATH"
+MIN_PYTHON = (3, 11)
+PYTHON_ERROR = "Rozoro monitor requires Python >=3.11 (Python 3.10 is not yet supported; EOL Python 3.9 is out of policy); install Homebrew Python with `brew install python` and ensure its python3 precedes older interpreters on PATH"
 
 if sys.version_info < MIN_PYTHON:
     print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
