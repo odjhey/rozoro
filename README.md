@@ -297,9 +297,10 @@ From the Rozoro checkout:
 
 ```sh
 # Pi watchtower (recommended)
-pi \
-  --approve \
-  --append-system-prompt "$PWD/templates/watchtower.md"
+./bin/rozoro pi-watchtower
+
+# Exact resume (reapplies immutable role, extension, and standing prompt)
+./bin/rozoro pi-watchtower --resume <session-id-or-file>
 
 # Or Claude
 ROZORO_ROLE=watchtower claude \
@@ -312,11 +313,17 @@ the daemon automatically. `ROZORO_ROLE=watchtower` distinguishes it from crew an
 plain development sessions. The resident daemon delivers issue #25's monitor
 scope; see [`docs/claude-watchtower-live-gate.md`](docs/claude-watchtower-live-gate.md).
 
-Running plain `pi` opens a normal coding session, not a watchtower. The watchtower
-command supplies the control-tower prompt and approves the project-local
-extension for this run; the driver calls the dispatcher from the checkout.
+Running plain `pi` opens a normal coding session, not a watchtower. Use the
+supported `pi-watchtower` launcher for both startup and exact resume: it always
+sets immutable `ROZORO_WATCHTOWER=1`, explicitly loads the checkout extension,
+and reapplies the standing prompt (Pi does not persist appended system prompts
+across a bare `--session` resume). Unsupported or missing pane/session identity
+intentionally leaves the adapter inactive. The driver calls the dispatcher from
+the checkout.
 
 The Pi launch loads [`.pi/extensions/rozoro-watchtower.ts`](.pi/extensions/rozoro-watchtower.ts).
+Its Pi 0.84.2/Herdr startup and reload process regression is available with
+`RZR_LIVE_PI_RELOAD=1 tests/live/pi-watchtower-reload.sh` (no model call).
 It is a thin reconnecting daemon client: notifications become one fixed
 `reconcile` follow-up and are confirmed only after Pi accepts that follow-up.
 It owns no watcher child, reducer, ledger, task inventory, or filesystem watcher.
