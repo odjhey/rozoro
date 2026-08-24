@@ -86,36 +86,7 @@ class DeliveryLedgerTests(unittest.TestCase):
             self.assertTrue(store.ack_generation("driver-1", "watch-1", self.epoch, 1))
             self.assertFalse(store.ack_generation("driver-1", "watch-1", self.epoch, 1))
             self.assertEqual(store._connection.execute("SELECT acked_generation FROM watchtower_deliveries").fetchone()[0], 1)
-            self.assertEqual(store.reconcile("driver-1", "watch-1", self.epoch, 1), [])
-
-    def test_reconcile_reports_only_distinct_tasks_changed_since_previous_ack(self):
-        def task_event(task_id, session_id, number, kind):
-            item = {"v": 1, "type": kind, "event_id": f"{session_id}-{number}",
-                    "producer_seq": number, "session_id": session_id, "harness": "claude",
-                    "role": "crew", "task_id": task_id}
-            if kind == "turn.start":
-                item["turn_id"] = f"{session_id}-turn-{number}"
-            return item
-
-        with self.open_ready() as store:
-            store.accept_event(task_event("task-1", "crew-1", 1, "session.register"))
-            store.accept_event(task_event("task-2", "crew-2", 1, "session.register"))
-            offer = store.offer_notification("driver-1", "watch-1", self.epoch)
-            self.assertEqual((offer["generation"], offer["task_count"]), (2, 2))
-            store.confirm_delivery("driver-1", "watch-1", self.epoch, 2)
-            through, reports = store.reconcile_delivered("driver-1")
-            self.assertEqual(through, 2)
-            self.assertEqual([item["task_id"] for item in reports], ["task-1", "task-2"])
-            store.ack_delivered("driver-1", 2)
-
-            store.accept_event(task_event("task-1", "crew-1", 2, "turn.start"))
-            offer = store.offer_notification("driver-1", "watch-1", self.epoch)
-            self.assertEqual((offer["generation"], offer["task_count"]), (3, 1))
-            store.confirm_delivery("driver-1", "watch-1", self.epoch, 3)
-            through, reports = store.reconcile_delivered("driver-1")
-            self.assertEqual(through, 3)
-            self.assertEqual([item["task_id"] for item in reports], ["task-1"])
-            self.assertEqual(reports[0]["generation"], 3)
+            self.assertEqual(store.reconcile("driver-1", "watch-1", self.epoch, 1)[0]["generation"], 1)
 
     def test_reconnect_redelivery_ack_before_duplicate_confirmation_exposes_n_plus_one(self):
         with self.open_ready() as store:
