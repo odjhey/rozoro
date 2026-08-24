@@ -14,6 +14,13 @@ import time
 import uuid
 from pathlib import Path
 
+MIN_PYTHON = (3, 9)
+PYTHON_ERROR = "Rozoro monitor requires Python >=3.9; install Homebrew Python with `brew install python` and ensure its python3 is on PATH"
+
+if sys.version_info < MIN_PYTHON:
+    print(f"monitor unavailable: {PYTHON_ERROR} (found {sys.version.split()[0]} at {sys.executable})", file=sys.stderr)
+    raise SystemExit(2)
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from lib.rozoro_monitor import protocol

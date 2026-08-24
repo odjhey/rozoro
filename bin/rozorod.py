@@ -10,6 +10,15 @@ import signal
 import sys
 from pathlib import Path
 
+if sys.version_info < (3, 9):
+    print(
+        "rozorod: Python >=3.9 is required; install Homebrew Python with "
+        "`brew install python` and ensure its python3 is on PATH "
+        f"(found {sys.version.split()[0]} at {sys.executable})",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib.rozoro_monitor.server import AlreadyRunningError, MonitorServer

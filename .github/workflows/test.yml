@@ -23,3 +23,12 @@ jobs:
             case "$file" in *.py) continue ;; esac
             bash -n "$file"
           done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Exercise migrations, daemon lifecycle, status, and rollback on Python 3.9
+        env:
+          ROZORO_REQUIRE_PYTHON_39: '1'
+        run: python3 tests/monitor-python-runtime.py
+      - name: Exercise the supported Homebrew Python
+        run: /opt/homebrew/bin/python3 tests/monitor-python-runtime.py
