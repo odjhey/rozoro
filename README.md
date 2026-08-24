@@ -1,24 +1,26 @@
 # rozoro
 
 > [!WARNING]
-> **WIP / fast-moving project.** Rozoro is being actively used and actively redesigned at the same time. Interfaces, terminology, and architecture can change quickly. Treat the current CLI and state formats as working software, not as a stable public contract.
+> **WIP.** Rozoro is used for real work, but it is changing fast. Commands, names, state formats, and architecture may change without notice.
 
-Rozoro is a **highly opinionated way to deliver tasks to different coding harnesses** such as Claude Code, Codex, Pi, and Copilot while keeping each task independently visible, messageable, and resumable.
+Rozoro is a highly opinionated way to hand tasks to different coding harnesses such as Claude Code, Codex, Pi, and Copilot, while keeping each task visible, messageable, and resumable.
 
-Today it does that through [Herdr](https://herdr.dev): one task becomes one harness session in an inspectable Herdr tab/pane, with durable local task state under `$ROZORO_HOME` and a watchtower-oriented workflow on top.
+Today, Rozoro runs those sessions through [Herdr](https://herdr.dev). One task gets one harness session in a Herdr tab and pane. Rozoro keeps task state under `$ROZORO_HOME` and gives a watchtower or human a common set of commands to start, inspect, message, control, and resume that session.
 
-The current experience is useful and is intentionally being preserved while the project evaluates how much of the underlying session/runtime layer should instead be delegated to existing standards and tooling—especially:
+If you're looking to adopt this approach today, start with these instead:
 
-- [Agent Client Protocol (ACP)](https://github.com/agentclientprotocol/agent-client-protocol) — a protocol for connecting clients and coding agents; and
-- [acpx](https://github.com/openclaw/acpx) — a headless client for stateful ACP sessions.
+- [Agent Client Protocol (ACP)](https://github.com/agentclientprotocol/agent-client-protocol), a protocol for connecting clients and coding agents.
+- [acpx](https://github.com/openclaw/acpx), a headless client for persistent ACP sessions.
 
-We are **not** currently extracting a new `rozoro-core`. The next architecture step is to spike ACP/acpx against the capabilities Rozoro already relies on, then keep only the gaps that are actually worth owning. See [PR #77](https://github.com/odjhey/rozoro/pull/77) for the current decision direction.
+Rozoro is still an experiment built around a specific workflow. Do not treat its current internals as the general-purpose base for a new system.
 
-## What Rozoro is today
+We are not extracting a new `rozoro-core` right now. The next step is to test ACP and acpx against the things Rozoro already depends on, then decide what is still worth keeping here. See [PR #77](https://github.com/odjhey/rozoro/pull/77).
 
-The practical problem is simple: one coding-agent session is easy; many simultaneous tasks across repositories are not. You end up juggling terminals, remembering which session owns which task, copying follow-ups between places, and losing continuity when processes restart.
+## What Rozoro does today
 
-Rozoro gives an opinionated operating model around that problem:
+One coding session is easy to manage. Ten parallel tasks across several repositories are not. The annoying part is usually not starting the agents. It is remembering which session owns which task, checking what changed, sending follow-ups to the right place, and keeping the same conversation when a process restarts.
+
+Rozoro currently gives you this:
 
 ```text
 operator / watchtower
@@ -34,37 +36,33 @@ operator / watchtower
  Claude    Codex      Pi      Copilot
 ```
 
-The current implementation provides:
+It provides:
 
-- **durable task identity** — commands address a Rozoro task key rather than forcing the caller to track native harness session IDs;
-- **parallel, inspectable sessions** — tasks live in Herdr tabs/panes that a human can inspect;
-- **event-driven status** — `rozorod` owns durable lifecycle/event projections for managed paths;
-- **two distinct communication planes** — DATA messages go to the coding agent; CONTROL actions operate the runtime/process;
-- **exact-session continuation** — supported harness sessions can be linked and resumed rather than cold-started;
-- **watchtower-friendly reporting** — durable handoffs and reconciliation make many simultaneous tasks easier to coordinate;
-- **multiple coding harnesses** — Claude, Codex, Pi, and Copilot can be selected through launch presets/flags.
+- durable task keys, so callers do not need to track native harness session IDs;
+- separate Herdr tabs and panes that a human can inspect;
+- `rozorod` for lifecycle events and status on managed paths;
+- separate DATA and CONTROL commands;
+- exact conversation resume where the harness supports it;
+- durable handoffs and reconciliation for watchtower use;
+- launch support for Claude, Codex, Pi, and Copilot.
 
-## Opinionated by design
+## The workflow is opinionated
 
-Rozoro is not trying to be a universal multi-agent framework.
+Rozoro assumes this style of work:
 
-It currently assumes a particular style of work:
+1. Hand a task to an independent coding session.
+2. Let that session load the target repository's own rules.
+3. Check its state without blocking the operator.
+4. Send follow-ups to the same conversation.
+5. Keep the task and session around until the result is accepted or deliberately torn down.
 
-1. give a task to an independent coding-harness session;
-2. let that session load and follow the target repository's own rules;
-3. observe it without blocking the operator;
-4. send follow-ups to the same conversation when needed;
-5. preserve task/session continuity until the result is accepted or intentionally torn down.
+A watchtower can coordinate several of these tasks. Repository rules still belong in the repository. Child-agent behavior belongs in the coding harness.
 
-A watchtower can use these primitives to coordinate many tasks, but repository-specific engineering policy belongs in the target repository and harness-native child-agent orchestration belongs in the harness.
+If Claude, Pi, Codex, or another harness can handle subagents, teams, trees, worktrees, or fan-out on its own, Rozoro should use that capability instead of copying it.
 
-If Claude/Pi/Codex can delegate internally using their own subagents, teams, trees, worktrees, or workflows, Rozoro should prefer those capabilities rather than reimplementing them.
+## What may change
 
-## Architecture is under active evaluation
-
-The current implementation is deliberately **not** being torn down while the architecture changes.
-
-### Current operational path
+The Herdr-backed path is the one that works today:
 
 ```text
 Rozoro CLI / watchtower
@@ -76,66 +74,60 @@ Rozoro CLI / watchtower
  Claude / Codex / Pi / Copilot
 ```
 
-This is the path to use today.
+ACP and acpx already cover much of the session protocol and persistence work that we were considering building ourselves. That is why the `rozoro-core` extraction is paused.
 
-### Direction being tested
+The next experiment is simple. Test whether ACP and acpx can replace enough of this lower layer without breaking the Rozoro workflow we already use.
 
-ACP and acpx already cover a substantial amount of the coding-session protocol and persistence problem that a hypothetical `rozoro-core` would otherwise need to implement.
-
-The working hypothesis is therefore much thinner:
+The part that may still belong in Rozoro is smaller:
 
 ```text
 watchtower / human / GitHub / CI / scripts
                   |
-        stable task / mailbox layer ?
+          task address / mailbox
                   |
               ACP / acpx
                   |
           coding harness sessions
 ```
 
-The `?` is intentional. The project first needs evidence that Rozoro adds enough value above ACP/acpx to justify owning that layer.
+Things worth testing include:
 
-Potentially unique gaps include:
+- a stable task name such as `pr-63` that does not depend on an ACP or native session ID;
+- a mailbox where GitHub, CI, background jobs, humans, or scripts can send information to that task;
+- ordering, attribution, acknowledgement, and supersession for those messages;
+- keeping the same task address when the underlying coding session is resumed or replaced;
+- keeping the current watchtower workflow usable.
 
-- a durable application/task address such as `pr-63` independent of native/ACP session identity;
-- a mailbox for GitHub, CI, background jobs, humans, or other processes to deliver information to that task;
-- attribution, ordering, acknowledgement, and supersession across many simultaneous tasks;
-- continuity when the underlying coding-harness process/session is replaced or resumed;
-- compatibility with the current watchtower experience.
-
-If ACP/acpx already solves those sufficiently, Rozoro should shrink rather than rebuild them.
+If ACP and acpx already handle these well enough, Rozoro should get smaller.
 
 ## What belongs elsewhere
 
-Rozoro should not become the owner of every part of the engineering workflow.
-
 | Concern | Owner |
 |---|---|
-| nested subagents, teams, trees, fan-out/fan-in | coding harness |
-| worktree/branch/PR/test/merge rules | target repository / harness tooling |
-| task decomposition and cross-task prioritization | watchtower/client/operator |
-| correctness and final acceptance | reviewer/operator/application policy |
-| review/test/docs/lint/PR/CI delivery gate | [no-mistakes](https://github.com/kunchenguid/no-mistakes) or repo delivery tooling |
-| task/session transport, lifecycle, messages, resume | current Rozoro; ACP/acpx under evaluation |
+| nested subagents, teams, trees, fan-out and fan-in | coding harness |
+| worktree, branch, PR, test, and merge rules | target repository or harness tooling |
+| task decomposition and cross-task priority | watchtower, client, or operator |
+| correctness and final acceptance | reviewer, operator, or application policy |
+| review, test, docs, lint, PR, and CI delivery gate | [no-mistakes](https://github.com/kunchenguid/no-mistakes) or repository tooling |
+| task/session transport, lifecycle, messages, and resume | Rozoro today, with ACP and acpx under evaluation |
 
-A useful boundary is:
+A useful rule for future changes:
 
-> If a feature needs to understand **what work should happen next**, it probably does not belong in the low-level Rozoro substrate.
+> If a feature has to decide what work should happen next, it probably does not belong in the low-level Rozoro code.
 
 ## Requirements
 
-The current implementation requires:
+The current implementation needs:
 
 - `herdr` 0.8.x on `PATH` with a running server;
 - `jq`;
 - Python 3.11 or newer as `python3`;
-- Bash (stock macOS Bash 3.2 is supported);
-- at least one supported coding harness (`claude`, `codex`, `copilot`, or `pi`).
+- Bash. Stock macOS Bash 3.2 is supported;
+- at least one supported coding harness, `claude`, `codex`, `copilot`, or `pi`.
 
-Run inside a Herdr session so new task tabs land in the current workspace.
+Run Rozoro inside a Herdr session so new task tabs land in the current workspace.
 
-## Install / preflight
+## Install and preflight
 
 ```sh
 git clone git@github.com:odjhey/rozoro.git
@@ -143,38 +135,38 @@ cd rozoro
 ./bin/rozoro doctor
 ```
 
-`doctor` checks the current operational dependencies and selected harness configuration.
+`doctor` checks the current dependencies, Herdr connection, and selected harness configuration.
 
 ## Typical use
 
-Start a durable task:
+Start a task:
 
 ```sh
 ./bin/rozoro start fix-auth --body /tmp/task.md --cwd ~/src/my-repo
 ```
 
-The command prints the exact task key. Use that key for later operations.
+The command prints the exact task key. Use that key for later commands.
 
-Inspect it:
+Check it:
 
 ```sh
 ./bin/rozoro status <task-key>
 ```
 
-Send a follow-up to the same coding conversation:
+Send a follow-up to the same conversation:
 
 ```sh
 ./bin/rozoro send <task-key> "Re-check the failing macOS case."
 ```
 
-Operate the runtime separately from conversational input:
+Interrupt or restart the runtime without sending chat text to the model:
 
 ```sh
 ./bin/rozoro control <task-key> interrupt
 ./bin/rozoro control <task-key> restart
 ```
 
-Resume an already reaped supported conversation:
+Resume a supported conversation after teardown:
 
 ```sh
 ./bin/rozoro resume <task-key> --prompt "Continue from the previous result."
@@ -190,49 +182,49 @@ List known tasks:
 
 | Command | Purpose |
 |---|---|
-| `./bin/rozoro start` | reserve a durable task key, render the brief, spawn, and link the session |
-| `./bin/rozoro spawn` | lower-level task/session spawn |
-| `./bin/rozoro status` | read daemon-backed lifecycle/task/report projection |
-| `./bin/rozoro send` | DATA-plane prompt/follow-up |
-| `./bin/rozoro control` | CONTROL-plane interrupt/cancel/key/stop/restart |
-| `./bin/rozoro resume` | reopen the exact linked conversation when supported |
-| `./bin/rozoro reconcile` | reconcile the current immutable wake generation |
+| `./bin/rozoro start` | reserve a task key, render the brief, spawn, and link the session |
+| `./bin/rozoro spawn` | lower-level task and session spawn |
+| `./bin/rozoro status` | read daemon-backed lifecycle, task, and report state |
+| `./bin/rozoro send` | send DATA text to the coding agent |
+| `./bin/rozoro control` | interrupt, cancel, send a key, stop, or restart the runtime |
+| `./bin/rozoro resume` | reopen the exact linked conversation where supported |
+| `./bin/rozoro reconcile` | reconcile the current wake generation |
 | `./bin/rozoro ack` | advance task open-item acknowledgement |
 | `./bin/rozoro list` | list known tasks and live state |
-| `./bin/rozoro monitor start\|status\|stop` | operate/diagnose `rozorod` |
-| `./bin/rozoro crew list\|show` | inspect current launch presets |
-| `./bin/rozoro teardown` | close/remove live hosting while preserving the task folder |
-| `./bin/rozoro doctor` | current dependency/capability preflight |
+| `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
+| `./bin/rozoro crew list\|show` | inspect launch presets |
+| `./bin/rozoro teardown` | close live hosting while keeping the task folder |
+| `./bin/rozoro doctor` | check dependencies and harness support |
 
-`watch` remains a diagnostics/legacy path; managed Pi and supported Claude use the resident event-bus path.
+`watch` is for diagnostics and legacy compatibility. Managed Pi and supported Claude sessions use the resident event bus.
 
-## DATA and CONTROL are deliberately different
+## DATA and CONTROL are different
 
 ```text
 send      = tell the coding agent something
 control   = tell the runtime/process something
 ```
 
-`send` delivers text for the model to interpret.
+`send` gives text to the model.
 
-`control` uses a closed set of runtime actions such as interrupt, cancel, key, stop, and restart. Rozoro does not encode a control request as chat text and hope the model obeys it.
+`control` executes a fixed runtime action such as interrupt, cancel, key, stop, or restart. Rozoro does not turn those actions into chat messages.
 
 ## Durable task state
 
-State lives under `$ROZORO_HOME` (default `~/.rozoro`). A task folder preserves the task's durable artifacts even after its live hosting is torn down.
+State lives under `$ROZORO_HOME`, which defaults to `~/.rozoro`. Task folders remain after live hosting is torn down.
 
-Current task state includes artifacts such as:
+A task currently stores files such as:
 
-- `brief.md` — task input;
-- `handoff.md` — append-only application-level reports used by the current watchtower flow;
-- `session.json` — linkage used to reopen the exact supported native conversation;
-- identity/state metadata used to map the durable Rozoro task to current hosting/session identifiers.
+- `brief.md`, the task input;
+- `handoff.md`, append-only reports used by the watchtower flow;
+- `session.json`, the native session link used for resume;
+- metadata that maps the Rozoro task key to the current host and harness session.
 
-These formats are part of the current working implementation but should not yet be treated as long-term stable public protocol contracts.
+These files are part of the current implementation. Their format is not a stable public API yet.
 
 ## Launch presets
 
-Current presets live under `$ROZORO_HOME/crew/<name>.json` and describe how a harness is launched: harness, model, effort, permission mode, fast tier, and optional standing rules.
+Presets live under `$ROZORO_HOME/crew/<name>.json`. They describe how to start a harness: harness, model, effort, permission mode, fast tier, and optional standing rules.
 
 Example:
 
@@ -247,11 +239,11 @@ Example:
 }
 ```
 
-The `crew` terminology is historical/current UX. Whether this eventually becomes a simpler launch-profile concept depends on the ACP/acpx spike; no compatibility-breaking rename is planned merely for architectural cleanliness.
+`crew` is the current command and file name. We may rename it later if the ACP and acpx work points to a simpler launch-profile model. There is no reason to break compatibility just to clean up the name.
 
 ## Testing
 
-The regression suite isolates itself from the real Rozoro home, Herdr session, harness stores, and working checkouts. It uses fake Herdr and local socket fixtures for protocol/lifecycle coverage.
+The test suite does not touch your real Rozoro home, Herdr session, harness state, or working checkout. It uses a fake Herdr implementation and local socket fixtures for protocol and lifecycle tests.
 
 Run the same containerized suite used by CI:
 
@@ -259,26 +251,24 @@ Run the same containerized suite used by CI:
 ./tests/run.sh
 ```
 
-Podman is preferred when available; Docker is the fallback. The suite covers shell/Python protocol parsing, event transport, lifecycle/reconciliation behavior, and locking. Real-Herdr checks remain manual integration smoke tests.
+The runner uses Podman when available and falls back to Docker. Tests cover shell and Python protocol parsing, event transport, lifecycle and reconciliation behavior, and locking. Tests against a real Herdr server are still manual integration checks.
 
-## Near-term direction
+## Next experiment
 
-The next architecture experiment is **not** a rewrite.
+This is not a rewrite plan.
 
-The plan is:
+The next work is:
 
-1. keep current Rozoro usable;
-2. exercise ACP/acpx for create/send/status/cancel/resume/persistence across supported harnesses;
-3. compare that evidence against current Rozoro;
-4. separately prove or disprove the need for durable task/mailbox indirection above ACP sessions;
-5. build only the missing layer.
+1. Keep the current Rozoro workflow working.
+2. Test ACP and acpx for create, send, status, cancel, resume, and persistence across the harnesses we use.
+3. Compare the result with current Rozoro.
+4. Test whether a separate durable task address and mailbox are still useful above ACP sessions.
+5. Build only what is still missing.
 
-Until that experiment is complete, Herdr remains the current supported host and no new `rozoro-core`, tmux host abstraction, or replacement harness-adapter layer should be assumed.
+Herdr stays supported while we do this. We are not assuming a new `rozoro-core`, tmux host layer, or replacement harness adapter until the spike shows a real need.
 
 ## Project stance
 
-Rozoro is intentionally experimental.
+Rozoro exists because this workflow has been useful in practice. That does not mean every layer it currently owns should stay here.
 
-It is built around a real operating workflow, not around a claim that its abstractions are final. When a coding harness, ACP/acpx, Herdr, no-mistakes, or another existing tool solves a problem better, Rozoro should integrate with it, delegate to it, or delete the duplicate layer.
-
-The goal is not to own the most framework. The goal is to keep multi-harness task delivery and follow-up practical.
+If a coding harness, ACP, acpx, Herdr, no-mistakes, or another tool already does part of the job better, use it. Keep Rozoro for the parts that are still useful.
