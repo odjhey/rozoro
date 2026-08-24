@@ -138,7 +138,7 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             else:
                 reply={"id":"x","result":{"type":"subscription_started"}}; live_writer=writer
             writer.write((__import__('json').dumps(reply)+'\n').encode()); await writer.drain()
-            if 'live' not in panes: writer.close()
+            if 'gone' in panes: writer.close()
         server=await asyncio.start_unix_server(handler,sock)
         sub=UnixHerdrSubscription(sock,('gone','live'),timeout=.5)
         try:
@@ -150,7 +150,9 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([[s['pane_id'] for s in r['params']['subscriptions']] for r in requests],
                              [['gone','live'],['gone'],['live']])
         finally:
-            await sub.close(); server.close(); await server.wait_closed()
+            await sub.close()
+            if live_writer: live_writer.close()
+            server.close(); await server.wait_closed()
 
     async def test_real_socket_uses_082_target_and_error_absence_vs_transport_unknown(self):
         sock=str(self.state/'herdr.sock'); requests=[]
