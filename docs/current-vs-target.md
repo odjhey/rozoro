@@ -17,7 +17,7 @@ PR #46 originally described several event-bus capabilities as target architectur
 | Harness-native semantics | Pi and Claude have semantic adapter paths; Herdr is also reconciled defensively for membership/liveness rather than treated as completion truth. |
 | Delivery ledger | Watchtower registrations, epochs, generations, offers, delivery confirmation, reconcile, and generation ACK are durable. |
 | Coalescing | Actionable changes can be batched into wake generations so bursts do not cause one prompt per event. |
-| Generation membership | A generation retains the affected task IDs, actionable reasons, and immutable projection snapshots needed for exact reconciliation; reconcile reports only distinct tasks changed since the previous generation ACK. |
+| Generation membership | A generation retains the affected task IDs, actionable reasons, and immutable projection snapshots needed for exact reconciliation. |
 | ACK separation | `reconcile` ACKs a delivered generation; task `ack` resolves surfaced handoff/open-item state separately. |
 | Production cutover | The legacy watcher is diagnostic/compatibility only for daemon-managed Pi and supported Claude operation. |
 
