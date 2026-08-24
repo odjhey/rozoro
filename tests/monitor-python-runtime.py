@@ -72,6 +72,9 @@ with tempfile.TemporaryDirectory() as temporary:
     os.environ["FAKE_HERDR_ROOT"] = str(Path(temporary) / "fake-herdr")
     os.environ["PATH"] = f"{python_bin}{os.pathsep}{os.environ['PATH']}"
     home = Path(temporary) / "rozoro"
+    registry = Path(temporary) / "owned-processes.jsonl"
+    registry.write_text("")
+    os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(registry)
     home.mkdir(mode=0o700)
     database = sqlite3.connect(home / "monitor.db")
     database.executescript(_MIGRATIONS[1])
@@ -82,7 +85,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     started = run(ROOT / "bin/rzr-monitor.py", "start", home=home)
     assert "monitor started" in started.stdout, started
-    process_cleanup.register_lock(home)
+    process_cleanup.register_spawn_file(registry)
     status = run(ROOT / "bin/rzr-monitor.py", "status", "--json", home=home)
     assert f'"schema_version":{SCHEMA_VERSION}' in status.stdout, status
 

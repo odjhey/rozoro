@@ -128,6 +128,30 @@ def print_status(value: dict, as_json: bool) -> None:
         print(f"diagnostic: {value['last_spool_error']}")
 
 
+def _test_record_spawn(process: subprocess.Popen, argv: list[str], home: Path) -> None:
+    """Record test-owned spawn identity only when an explicit private registry is set."""
+    path = os.environ.get("ROZORO_TEST_PROCESS_REGISTRY")
+    if not path:
+        return
+    try:
+        fields = Path(f"/proc/{process.pid}/stat").read_text().split()
+        birth = fields[21]
+    except (OSError, IndexError):
+        result = subprocess.run(["ps", "-p", str(process.pid), "-o", "lstart="], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+        birth = result.stdout.strip()
+    record = {"pid": process.pid, "pgid": process.pid, "birth": birth,
+              "home": os.path.realpath(home), "argv": argv}
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with os.fdopen(fd, "a", closefd=False) as stream:
+            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+            stream.flush(); os.fsync(stream.fileno())
+    finally:
+        os.close(fd)
+
+
 def start(home: Path) -> int:
     try:
         _, home_fd = _open_home(home)
@@ -150,9 +174,10 @@ def start(home: Path) -> int:
         os.fchmod(log_fd, 0o600)
         log = os.fdopen(log_fd, "ab", buffering=0)
         try:
-            subprocess.Popen([sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)],
-                             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                             start_new_session=True, close_fds=True)
+            argv = [sys.executable, str(ROOT / "bin" / "rozorod.py"), "--home", str(home)]
+            process = subprocess.Popen(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                       stdout=log, stderr=log, start_new_session=True, close_fds=True)
+            _test_record_spawn(process, argv, home)
         finally:
             log.close()
     except Exception as exc:

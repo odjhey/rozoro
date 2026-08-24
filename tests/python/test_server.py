@@ -57,6 +57,7 @@ class ServerProcessTests(unittest.TestCase):
             [sys.executable, str(DAEMON), "--home", str(self.home)],
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={**os.environ, **(env or {})}, preexec_fn=limit_files if nofile else None,
+            start_new_session=True,
         )
         self.processes.append(process)
         process_cleanup.register(process, self.home)
@@ -288,7 +289,7 @@ class ServerProcessTests(unittest.TestCase):
                 (case_home / entry).symlink_to(external)
                 process = subprocess.Popen(
                     [sys.executable, str(DAEMON), "--home", str(case_home)], cwd=ROOT,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                 )
                 self.processes.append(process)
                 process_cleanup.register(process, case_home)
@@ -302,7 +303,8 @@ class ServerProcessTests(unittest.TestCase):
         regular = case_home / "monitor.sock"
         regular.write_text("do-not-unlink")
         process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(case_home)],
-                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
         self.processes.append(process)
         process_cleanup.register(process, case_home)
         self.assertNotEqual(process.wait(timeout=5), 0)

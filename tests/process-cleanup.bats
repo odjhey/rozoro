@@ -44,11 +44,23 @@ assert_isolated_clean() {
 
 @test "interrupted Bats test tears down detached daemon without relying on socket" {
   root="/tmp/rzr-int-bats-$$"; mkdir -p "$root"; out="$root/home-path"
-  PATH="$TOOL_PATH" TMPDIR="$root" INTERRUPT_HOME_FILE="$out" INTERRUPT_PYTHON="$(PATH="$TOOL_PATH" command -v python3)" \
+  PATH="$TOOL_PATH" TMPDIR="$root" ROZORO_TEST_PROCESS_REGISTRY_ROOT="$root" INTERRUPT_REGISTRY_ROOT="$root" INTERRUPT_HOME_FILE="$out" INTERRUPT_PYTHON="$(PATH="$TOOL_PATH" command -v python3)" \
     python3 "$REPO_ROOT/tests/test_helper/interrupt_runner.py" bats "$REPO_ROOT/tests/fixtures/daemon-owner.bats" & runner=$!
   wait_for_file "$out"; home="$(cat "$out")"; daemon_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$home/monitor.lock")"
   rm -f "$home/monitor.sock"
   kill -TERM "$runner"; wait "$runner" 2>/dev/null || true
+  for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
+  assert_no_process "$daemon_pid"
+  assert_isolated_clean "$root"
+}
+
+@test "SIGKILLed Bats harness parent is reaped by the isolated run guardian" {
+  root="/tmp/rzr-kill-bats-$$"; mkdir -p "$root"; out="$root/home-path"; child_file="$root/child-pid"
+  PATH="$TOOL_PATH" TMPDIR="$root" ROZORO_TEST_PROCESS_REGISTRY_ROOT="$root" INTERRUPT_REGISTRY_ROOT="$root" INTERRUPT_CHILD_PID_FILE="$child_file" INTERRUPT_HOME_FILE="$out" INTERRUPT_PYTHON="$(PATH="$TOOL_PATH" command -v python3)" \
+    python3 "$REPO_ROOT/tests/test_helper/interrupt_runner.py" bats "$REPO_ROOT/tests/fixtures/daemon-owner.bats" & guardian=$!
+  wait_for_file "$out"; wait_for_file "$child_file"; home="$(cat "$out")"; daemon_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$home/monitor.lock")"
+  registry="$(find "$root" -name 'owned-processes-*.jsonl' | head -1)"; wait_for_file "$registry"; cp "$registry" "$root/guardian-owned-processes.jsonl"
+  kill -KILL "$(cat "$child_file")"; wait "$guardian" 2>/dev/null || true
   for _ in $(seq 1 100); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep .02; done
   assert_no_process "$daemon_pid"
   assert_isolated_clean "$root"

@@ -34,9 +34,13 @@ class MonitorLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="rzr6-")
         self.home = Path(self.temp.name) / "h"
+        self.registry = Path(self.temp.name) / "owned-processes.jsonl"
+        self.registry.write_text("")
         self.processes = []
 
     def tearDown(self):
+        os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(self.registry)
+        process_cleanup.cleanup()
         for process in self.processes:
             if process.poll() is None: process.kill()
             process.wait(timeout=5)
@@ -45,7 +49,8 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.temp.cleanup()
 
     def env(self, **extra):
-        return {**os.environ, "ROZORO_HOME": str(self.home), **extra}
+        return {**os.environ, "ROZORO_HOME": str(self.home),
+                "ROZORO_TEST_PROCESS_REGISTRY": str(self.registry), **extra}
 
     def cli(self, *args, check=False, **extra):
         return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=self.env(**extra),
@@ -55,7 +60,8 @@ class MonitorLifecycleTests(unittest.TestCase):
     def start_daemon(self, interval="0.05"):
         process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(self.home)],
                                    cwd=ROOT, env=self.env(ROZORO_MONITOR_SPOOL_INTERVAL=interval),
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
         self.processes.append(process)
         process_cleanup.register(process, self.home)
         deadline = time.monotonic() + 5
