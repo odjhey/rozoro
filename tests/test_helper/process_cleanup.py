@@ -4,7 +4,6 @@ Ownership comes from a Popen argv captured at spawn, or from the monitor launche
 private spawn record. Mutable daemon lock/socket state is never ownership proof.
 """
 import atexit
-import fcntl
 import json
 import os
 import signal
