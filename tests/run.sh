@@ -52,4 +52,9 @@ case "${engine##*/}" in
   podman) run_args+=(--security-opt label=disable) ;;
 esac
 
-exec "$engine" "${run_args[@]}" "$IMAGE" --formatter tap /workspace/tests
+# The bats image bundles GNU parallel, so tests run --jobs-wide by default.
+# Every test sandboxes its state under $BATS_TEST_TMPDIR (see test_helper),
+# which keeps concurrent tests independent. TEST_JOBS=1 restores serial runs.
+jobs="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+exec "$engine" "${run_args[@]}" "$IMAGE" --formatter tap --jobs "$jobs" /workspace/tests
