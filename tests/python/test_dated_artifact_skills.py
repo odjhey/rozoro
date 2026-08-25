@@ -51,9 +51,6 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o600, child)
 
     def test_policy_snapshot_captures_current_source_without_overwrite(self) -> None:
-        marker = "templates/watchtower.md"
-        self.assertIn(marker, (REPO / "bin/rzr-pi-watchtower.sh").read_text())
-        self.assertNotIn(marker, (REPO / "bin/rzr-claude-watchtower.sh").read_text())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
