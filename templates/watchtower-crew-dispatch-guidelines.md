@@ -131,7 +131,7 @@ Claude identities are required, prefer explicit machine-profile/no-mistakes
 profiles (for example separate `NM_HOME` instances) whose daemon environment is
 known and verified.
 
-### Workset Merger — `gpt-5.6-luna`, high
+### Workset Merger — `gpt-5.6-sol`, high
 
 Own integration and landing execution for one workset.
 
