@@ -16,10 +16,11 @@ or observing work.
 | Skill | When Watchtower uses it |
 | --- | --- |
 | `crew-model-selection` | Immediately before every fresh crew dispatch: choose task kind, current canonical model/effort, Quick Crew eligibility, and applicable `brief-*` guideline. |
+| `no-mistakes-harness-selection` | Before every fresh No-Mistakes Runner when no-mistakes selection is `auto`: choose the actual invoking harness/model/account target from the canonical fallback order without changing global no-mistakes model config. |
 | `delivery-evidence` | Reconcile exact-head evidence, decide what runs next, and record bounded unattended decisions. |
 | `attempt-budget` | Decide whether another coder attempt is allowed and when exhausted work should be deferred/revisited. |
 | `quick-crew-routing` | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
-| `no-mistakes-observer-pane` | Open/close an untracked observer pane around an active no-mistakes run. |
+| `no-mistakes-observer-pane` | For every active No-Mistakes Runner, open/close the untracked sibling observer pane when the local Herdr pane operation is supported. |
 
 These are Watchtower actions. They are not instructions to paste wholesale into a
 crew brief.
@@ -63,6 +64,18 @@ is transmitted to a crew by Rozoro today.
 start. That skill reads the canonical standard dispatch policy and, when relevant,
 Quick Crew routing, then names the applicable `brief-*` guideline to render into
 the task body.
+
+For a fresh No-Mistakes Runner, `crew-model-selection` also requires
+`no-mistakes-harness-selection`. In no-mistakes `auto` mode, the workflow model is
+selected by the actual harness/model/account context that invokes no-mistakes.
+Normal routing therefore does not save, override, or restore a global no-mistakes
+model just to choose the target.
+
+Once that runner has created an active no-mistakes run, Watchtower invokes
+`no-mistakes-observer-pane` by default and attaches an untracked sibling Herdr
+pane. Observer creation failure is non-blocking when the installed Herdr lacks a
+supported pane operation, but supported observation should not be silently
+skipped.
 
 A follow-up turn on the same live task is different: use `./bin/rozoro send` and
 preserve the existing crew context unless Watchtower is intentionally dispatching

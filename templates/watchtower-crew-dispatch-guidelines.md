@@ -31,7 +31,6 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Do not ask the coder to review its own work.
   * Do not ask the coder to run no-mistakes.
   * Ask for a report that includes:
-
     * what changed;
     * checks and tests run;
     * findings addressed from the report that caused this turn;
@@ -51,7 +50,6 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Do not ask the reviewer to fix production code.
   * Do not ask the reviewer to run no-mistakes.
   * Ask for a report that includes:
-
     * verdict;
     * concrete findings and evidence;
     * affected contract or acceptance criterion;
@@ -67,8 +65,7 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Tests should come from the use case, contracts, decomposition, acceptance criteria, and failure modes, not only from reading the implementation.
   * Cover the happy path, boundaries, invalid inputs, retries, partial failures, state transitions, integration points, and regressions that matter to the task.
   * Ask the tester to measure whether the use case is complete, not just whether code coverage went up.
-  * Ask it to inspect the quality of the tests too.
-
+  * Ask it to inspect the quality of the tests too:
     * Would the tests fail if the implementation were wrong?
     * Are assertions strong enough?
     * Are mocks or fixtures hiding failures?
@@ -78,7 +75,6 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Do not ask the tester to quietly fix production code.
   * Do not ask the tester to run no-mistakes.
   * Ask for a report that includes:
-
     * tests added or run;
     * failures found;
     * acceptance criteria with direct test evidence;
@@ -89,33 +85,36 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * `attempt_count`;
     * `caused_by`.
 
-* **No-Mistakes Runner, `gpt-5.6-luna`, high reasoning effort**
+* **No-Mistakes Runner, target selected by `no-mistakes-harness-selection`**
 
   * This is the only crew role that runs no-mistakes.
-  * Dispatch the runner itself with model `gpt-5.6-luna` and high reasoning effort.
-  * Dispatch it after the normal coding, review, and test work when you want the no-mistakes pass.
+  * Dispatch it after normal coding, review, and test work when you want the no-mistakes pass.
   * Ask it to run the actual no-mistakes workflow. Do not substitute a normal review prompt.
-  * Invoke no-mistakes through this fixed fallback order:
-
-    1. Claude Sonnet.
-    2. If that account has reached or exceeded its usage limit, fall back to `CLAUDE_CONFIG_DIR=~/.claude-asdverse claude sonnet`.
-    3. If that account has also reached or exceeded its usage limit, fall back to Pi `gpt-5.6-luna` and keep using it until the Claude accounts' limits are lifted.
-  * no-mistakes has no per-run model-selection flag today. Apply each fallback step by temporarily overriding the global no-mistakes configuration for that target's invocation, then restore the prior global configuration immediately afterward — whether that attempt succeeds, fails, or you move on to the next target in the order. Serialize the complete save, override, invocation, and restore sequence through a shared lock used by all consumers of that global configuration, so overlapping invocations cannot select the wrong target or leave the wrong configuration in place. Never leave an overridden configuration in place once the invocation using it has finished.
-  * Do not hold the task waiting on a higher-priority target's cooldown when a later target in the order is ready.
+  * Before a fresh runner dispatch, use `.agents/skills/no-mistakes-harness-selection/SKILL.md`.
+  * When the effective no-mistakes model-selection setting is `auto`, no-mistakes uses the model of the harness that invoked it. Select the workflow target by launching the runner under the intended harness/model/account context; do **not** save, override, and restore global no-mistakes model configuration merely to select a target.
+  * Use this fixed fallback order:
+    1. Claude Sonnet in the primary/default Claude account context.
+    2. If that target is usage-limited or cooling down, Claude Sonnet in the configured secondary Claude account context.
+    3. If that target is also unavailable, Pi with exact `gpt-5.6-luna` at high reasoning effort.
+  * Conceptually, a Claude target means the runner itself is launched as `claude --model sonnet` in the intended account context. The Pi fallback means the runner itself is launched as Pi with `gpt-5.6-luna`/high. With no-mistakes selection `auto`, the workflow inherits that invoking harness/model.
+  * If Rozoro cannot independently launch one configured account/profile target, treat that target as unavailable and proceed to the next configured target. Do not mutate global no-mistakes model configuration as a workaround.
+  * The same `auto` inheritance principle applies to other supported harnesses such as Codex, but that does not add them to this fallback list. Only declared targets are normal Watchtower choices.
+  * Do not hold the task waiting on a higher-priority target's cooldown when a later configured target is ready.
   * If every target in the order is unavailable, report that condition. Do not silently choose an undeclared target.
-  * Explicit target or model overrides are for debugging or controlled experiments, not normal crew dispatch.
-  * Keep harness identity, target/profile name, model ID, and reasoning effort separate. Do not derive model IDs from human-readable labels.
-  * It should look for things the coder, reviewer, and tester may all have missed.
-  * This includes failure paths, concurrency, retries, idempotency, cleanup, corrupted state, security boundaries, regressions, and bad assumptions.
+  * Explicit target/model overrides are for debugging or controlled experiments, not normal crew dispatch.
+  * Keep harness identity, account/profile identity, model ID, and reasoning effort separate. Do not derive model IDs from human-readable labels.
+  * It should look for things the coder, reviewer, and tester may all have missed, including failure paths, concurrency, retries, idempotency, cleanup, corrupted state, security boundaries, regressions, and bad assumptions.
+  * Once the runner has started an actual no-mistakes run, Watchtower must use `no-mistakes-observer-pane` to create the untracked sibling Herdr observer pane when supported and run `no-mistakes attach` there. Do not wait for an operator request. Observer creation failure is non-blocking only when the supported pane operation is unavailable/fails; record the reason and continue the real runner.
   * Ask for a report that includes:
-
     * verdict;
     * defects or risks found;
     * evidence;
     * affected contract, invariant, or use case;
     * whether the problem is local or needs re-planning;
     * remaining uncertainty;
-    * execution target/profile, harness, model ID, and reasoning effort actually used by the no-mistakes workflow;
+    * no-mistakes selection mode;
+    * execution target/account profile in non-secret form;
+    * harness, model ID, and reasoning effort actually used by the no-mistakes workflow;
     * fallback position and reason, when fallback occurred;
     * `attempt_count`;
     * `caused_by`.
@@ -130,7 +129,6 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * It should not make another implementation attempt.
   * It should not run no-mistakes.
   * Ask for a report that includes:
-
     * likely reason the previous attempts failed;
     * approaches that should not be repeated;
     * new constraints or dependencies discovered;
@@ -149,7 +147,6 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Decide what should run next, which crew gets the next report, when to retry, when to abandon a crew, and when to re-plan.
   * For ordinary review or test failures, send the report back to the active coder as the next assignment.
   * If repeated attempts stop converging:
-
     1. harvest the useful reports;
     2. abandon the current crew;
     3. dispatch the Escalation Replanner;

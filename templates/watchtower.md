@@ -52,10 +52,35 @@ applicable role contract, constraints, task-specific evidence, and report shape
 into the body that the crew will actually receive. Rozoro does not currently pass
 skill objects or skill references into crew sessions.
 
+For a fresh **No-Mistakes Runner**, `crew-model-selection` delegates execution
+selection to `no-mistakes-harness-selection`. When the effective no-mistakes
+model-selection mode is `auto`, choose the runner's actual harness/model/account
+context from the canonical fallback order; no-mistakes then uses that invoking
+harness/model. Do not perform global no-mistakes model save/override/restore just
+to select the model.
+
 Do not run this selection step merely for a follow-up turn on the same live task;
 use `send` so the existing crew keeps its context. Re-run selection when spawning
 a new task-kind crew such as reviewer, tester, replanner, no-mistakes runner, or
 replacement coder.
+
+## No-Mistakes Runner observation
+
+Every No-Mistakes Runner also uses the `no-mistakes-observer-pane` skill.
+
+- Dispatch the runner first using the harness/model selected above.
+- Once the runner has started an actual no-mistakes run, open the untracked sibling
+  Herdr observer pane and run `no-mistakes attach` there.
+- Preserve focus/custody on the real runner. The observer is display-only and is
+  never a Rozoro crew/task/session.
+- Close the observer when the no-mistakes run/gate is accepted, abandoned, or no
+  longer active.
+- If the installed Herdr cannot create the observer pane through a supported local
+  operation, record that reason and continue the real run. Do not silently skip a
+  supported observer path and do not invent terminal-control commands.
+
+The observer is the default visibility path; do not wait for the operator to ask
+for it.
 
 ## The loop
 

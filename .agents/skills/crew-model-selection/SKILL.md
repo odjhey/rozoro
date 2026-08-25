@@ -3,8 +3,8 @@ name: crew-model-selection
 description: >-
   Choose the task kind, model, reasoning effort, and dispatch path for a fresh
   Watchtower crew. Use immediately before Watchtower spawns a new crew so current
-  standard model policy, Quick Crew eligibility, no-mistakes fallback, and the
-  applicable brief-* guideline are resolved from the canonical sources.
+  standard model policy, Quick Crew eligibility, No-Mistakes harness fallback,
+  and the applicable brief-* guideline are resolved from the canonical sources.
 ---
 
 # Crew model selection
@@ -16,14 +16,21 @@ answer from remembered defaults.
 
 1. Read `templates/watchtower-crew-dispatch-guidelines.md`. Treat it as the source
    of truth for standard role assignment, canonical model IDs, reasoning effort,
-   and current no-mistakes execution-target fallback policy.
+   and current No-Mistakes execution-target fallback policy.
 2. Read `.agents/skills/quick-crew-routing/SKILL.md` when the work might qualify
    for the bounded Quick Crew fast path. Quick Crew does not replace or rewrite
    the standard model map.
 3. Choose the task kind/role first, then choose the model and reasoning effort for
    that role. Keep harness/profile/target identity separate from model ID and
    reasoning effort.
-4. If the selected task kind has a `brief-*` guideline, load it and render the
+4. If the selected task kind is **No-Mistakes Runner**, read
+   `.agents/skills/no-mistakes-harness-selection/SKILL.md` and use it to select
+   the runner harness/model/account target. When no-mistakes model selection is
+   `auto`, the selected runner harness/model **is** the workflow target. There is
+   no separate outer-runner model followed by a different inner no-mistakes model.
+   Do not spawn Pi merely because an older role table called the runner
+   `gpt-5.6-luna` and then instruct that Pi runner to use Claude inside.
+5. If the selected task kind has a `brief-*` guideline, load it and render the
    applicable role contract, constraints, task-specific evidence, and report
    shape into the crew brief before dispatch.
 
@@ -44,8 +51,16 @@ repository's own rules unless another applicable briefing guideline exists.
 
 - Current standard role/model/effort selection wins over older snapshots or
   machine-local policy copies.
-- Current no-mistakes target/fallback policy wins over older snapshots or
+- Current No-Mistakes target/fallback order wins over older snapshots or
   machine-local policy copies.
+- In No-Mistakes `auto` mode, target selection is performed by choosing the
+  runner's actual invoking harness/model/account context. The runner selection and
+  the no-mistakes workflow selection are one decision, not two layers.
+- For the first available Claude target, dispatch the No-Mistakes Runner itself as
+  Claude Sonnet. Pi `gpt-5.6-luna`/high is the configured later fallback, not a
+  mandatory outer wrapper around a Claude workflow.
+- Global no-mistakes model save/override/restore is not part of the normal
+  `auto` selection path.
 - Use canonical model IDs exactly as written. Do not invent shorthand model
   names.
 - Standard crew is the default. Quick Crew is an explicit bounded fast path only.
@@ -59,4 +74,5 @@ repository's own rules unless another applicable briefing guideline exists.
 Follow-up on an existing live task normally uses the same crew/context via
 `./bin/rozoro send`; do not re-run fresh-crew selection merely because another
 turn is needed. Re-run selection when Watchtower is dispatching a new task-kind
-crew, such as reviewer, tester, replanner, or replacement coder.
+crew, such as reviewer, tester, replanner, No-Mistakes Runner, or replacement
+coder.
