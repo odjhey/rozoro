@@ -4,12 +4,12 @@ description: >-
   Turn a broad, ambiguous, or repeatedly failing software task into one or more
   bounded implementation tasks with explicit contracts, dependencies, acceptance
   criteria, and unresolved decisions. This is a crew-facing planning role: the
-  Watchtower dispatches a decomposer and passes these instructions rather than
-  performing repository planning itself.
+  Watchtower dispatches a decomposer with these instructions included in the
+  crew brief rather than performing repository planning itself.
 metadata:
   execution-owner: crew
   crew-role: task-decomposer
-  watchtower-action: dispatch-and-pass
+  watchtower-action: dispatch-and-brief
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
@@ -18,9 +18,9 @@ metadata:
 Produce work a coder can execute without reopening the whole plan.
 
 This skill is executed by a **crew member**, not by the Watchtower. The
-Watchtower decides that decomposition or replanning is needed, dispatches the
-appropriate crew role, and makes these instructions available to that crew.
-Repository investigation and planning remain crew work.
+Watchtower decides that decomposition or replanning is needed, includes the
+applicable instructions from this skill in the crew brief, and dispatches the
+appropriate crew role. Repository investigation and planning remain crew work.
 
 Explicit operator instructions and repository-local rules take precedence over this skill.
 
