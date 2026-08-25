@@ -14,7 +14,7 @@ evidence this crew needs**. Repository-local rules come from the crew's `--cwd`.
 | `crew-model-selection` | Before a fresh Rozoro crew dispatch: choose task kind and resolve an available harness/model/effort. |
 | `quick-crew-routing` | Decide whether a bounded task qualifies for Quick Scout/Quick Coder. |
 | `delivery-evidence` | Reconcile exact-head assurance and delivery evidence when deciding what runs next. |
-| `attempt-budget` | Enforce the coder-attempt budget and defer exhausted implementation lineages. |
+| `attempt-budget` | Track cumulative Coder attempts and Replanner turns, extend bounded lineages through replanning, and defer exhausted work. |
 | `afk` | Read or change unattended merge authority. `/afk` is ON by default. |
 | `no-mistakes-observatory` | Maintain the optional human visualization surface for active no-mistakes runs. |
 
@@ -65,6 +65,9 @@ The important ownership boundaries are:
 - **Planner/Task Decomposer** bounds work and dependencies.
 - **Coder** implements a bounded task.
 - **Reviewer** and **Tester** provide independent assurance.
+- **Replanner** changes a non-converging task/dependency direction while preserving
+  cumulative lineage counters; use `attempt-budget` to decide whether another
+  Coder/Replanner turn is available.
 - **No-Mistakes Runner** is a thin crew that submits/attaches to the configured
   no-mistakes pipeline, keeps the run alive/listened to, and returns structured
   run evidence. It does not replace no-mistakes' own pipeline agents.
