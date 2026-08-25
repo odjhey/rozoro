@@ -19,7 +19,7 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v5"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v6"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
@@ -76,6 +76,7 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
         raise UnsafePath("launcher is not valid UTF-8 shell source") from exc
     block_depth = 0
     args: list[str] = []
+    writes_valid = True
     invocation_results: list[bool] = []
     expected_invocation = ["exec", "env", "ROZORO_WATCHTOWER", "=", "1", "pi", "${args[@]}", "$@"]
     openers = {"if", "case", "for", "while", "until", "select"}
@@ -83,12 +84,44 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
 
     for line in lines:
         tokens = shell_tokens(line)
-        if block_depth == 0 and len(tokens) >= 3 and tokens[0] == "args" and tokens[1] in {"=(", "+=("} and tokens[-1] == ")":
-            values = tokens[2:-1]
-            if tokens[1] == "=(":
-                args = values
-            else:
-                args.extend(values)
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "args":
+                if index + 1 >= len(tokens) or tokens[index + 1] not in {"=(", "+=("}:
+                    writes_valid = False
+                    index += 1
+                    continue
+                operation = tokens[index + 1]
+                cursor = index + 2
+                depth = 1
+                values: list[str] = []
+                while cursor < len(tokens) and depth:
+                    current = tokens[cursor]
+                    if current == "(":
+                        depth += 1
+                    elif current == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    if depth:
+                        values.append(current)
+                    cursor += 1
+                if depth != 0:
+                    writes_valid = False
+                    break
+                complete_top_level = block_depth == 0 and index == 0 and cursor == len(tokens) - 1
+                if operation == "=(":
+                    if complete_top_level:
+                        args = values
+                    else:
+                        writes_valid = False
+                elif complete_top_level:
+                    args.extend(values)
+                index = cursor
+            elif token.startswith("args["):
+                writes_valid = False
+            index += 1
         if block_depth == 0 and tokens == expected_invocation:
             invocation_results.append(
                 any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:]))
@@ -98,7 +131,7 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
                 block_depth += 1
             elif token in closers or token == "}":
                 block_depth = max(0, block_depth - 1)
-    return len(invocation_results) == 1 and invocation_results[0]
+    return writes_valid and len(invocation_results) == 1 and invocation_results[0]
 
 
 def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:

@@ -108,7 +108,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v5")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v6")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
@@ -172,6 +172,21 @@ class DatedArtifactSkillTests(unittest.TestCase):
                     "if false; then\n"
                     'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
                     "fi\n"
+                ),
+                "scalar-assignment": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "args=--approve\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "unset-array": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "unset args\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "indexed-assignment": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "args[0]=--approve\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
                 ),
                 "reassigned": (
                     'if false; then args=(--append-system-prompt "$ROOT/templates/watchtower.md"); fi\n'

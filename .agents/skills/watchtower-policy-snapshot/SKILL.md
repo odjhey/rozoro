@@ -3,7 +3,7 @@ name: watchtower-policy-snapshot
 description: Persist an immutable, dated snapshot of the explicit Pi Watchtower policy source in this Rozoro checkout, with accurate per-harness coverage. Use when an operator asks to archive, capture, or compare current Watchtower rules or policy.
 compatibility: Requires Python 3.11+, a Rozoro checkout, and local filesystem access.
 metadata:
-  artifact-schema: rozoro.watchtower-policy-snapshot/v5
+  artifact-schema: rozoro.watchtower-policy-snapshot/v6
 ---
 
 # Watchtower policy snapshot
@@ -18,7 +18,7 @@ From this skill directory:
 python3 scripts/snapshot.py
 ```
 
-The script resolves the checkout containing this skill, enforces the shipped top-level `args=(...)` plus `exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"` contract, and verifies that the consumed array contains `templates/watchtower.md` as the value of `--append-system-prompt`. Conditional/dead assignments, uncalled functions, overwritten or unused arrays, echo/string decoys, and conditional/dead invocations do not count as coverage. It records that the current Claude launcher does not pass the captured source instead of claiming false Claude coverage. It prints the new run directory.
+The script resolves the checkout containing this skill, enforces the shipped top-level `args=(...)` plus `exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"` contract, and verifies that the consumed array contains `templates/watchtower.md` as the value of `--append-system-prompt`. Conditional/dead assignments, uncalled functions, overwritten or unused arrays, scalar/indexed assignments, `unset`, other unmodeled `args` writes, echo/string decoys, and conditional/dead invocations do not count as coverage. It records that the current Claude launcher does not pass the captured source instead of claiming false Claude coverage. It prints the new run directory.
 
 Default destination:
 
