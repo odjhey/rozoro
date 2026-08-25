@@ -1,20 +1,16 @@
 ---
 name: no-mistakes-observer-pane
 description: >-
-  Open and manage an untracked sibling Herdr pane that attaches to an active
-  no-mistakes run for live observation without creating another Rozoro crew or
-  stealing branch custody. This is Watchtower-owned operational behavior.
-metadata:
-  execution-owner: watchtower
-  watchtower-action: invoke-directly
-  derived-from: uploaded-watchtower-policy/03-no-mistakes-runner.md
+  Open and manage an untracked sibling Herdr pane from Watchtower to observe an
+  active no-mistakes run without creating another Rozoro crew or taking branch
+  custody. Use when live no-mistakes visibility is useful during a runner session.
 ---
 
 # No-mistakes observer pane
 
-Use an observer pane when live no-mistakes visibility is useful during a runner
-session. The observer is **not** another crew member and has no repository
-ownership or mutation authority.
+Use this in **Watchtower while observing an active No-Mistakes Runner**. The
+observer is not another crew member and has no repository ownership or mutation
+authority.
 
 Current no-mistakes target/fallback and custody policy remain authoritative. This
 skill only describes the observation surface.
@@ -23,12 +19,10 @@ skill only describes the observation surface.
 
 When a No-Mistakes Runner has started an actual no-mistakes run:
 
-1. Create a sibling Herdr pane to the right of the runner/harness pane using the
-   supported local Herdr pane operation.
+1. Create a sibling Herdr pane to the right of the runner/harness pane using the supported local Herdr pane operation.
 2. Preserve focus on the runner/harness pane after creating the observer.
 3. In the observer pane, run `no-mistakes attach` once the active run exists.
-4. Treat the pane as untracked observation only. Do not register it as a Rozoro
-   crew/task/session.
+4. Treat the pane as untracked observation only. Do not register it as a Rozoro crew/task/session.
 
 If the local Herdr version does not provide a supported way to create the pane,
 skip the observer rather than inventing terminal-control commands.
@@ -55,7 +49,7 @@ lifecycle meaning and must not reap or mutate the runner task.
 
 ## Reporting
 
-The Watchtower does not need to create a separate durable task record for the
+Watchtower does not need to create a separate durable task record for the
 observer. If observation surfaces a meaningful state transition, reconcile it
 through the actual runner/task evidence rather than treating terminal display as
 a second source of truth.
