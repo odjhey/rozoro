@@ -1,70 +1,90 @@
 # Role-separated delivery
 
-Use role separation when a change needs independent assurance or controlled publication.
+Use role separation when a change needs independent assurance, parallel work, or
+controlled publication.
 
-## Roles and gates
+## Roles
 
-- **Decomposer/planner:** turns raw intent into bounded scope, contracts, dependencies, acceptance criteria, and explicit ambiguity. It does not implement.
-- **Coder:** implements the bounded task and behavioral tests. It does not certify its own work or run no-mistakes.
-- **Reviewer:** independently evaluates correctness, contracts, compatibility, and scope at an exact commit. It does not quietly edit production code.
-- **Tester:** independently exercises behavior, failure modes, weak-test risks, and acceptance criteria at an exact commit. It does not quietly fix findings.
-- **Replanner:** resolves non-converging scope or contract conflicts and supplies a revised bounded task. It does not implement.
-- **No-mistakes gate:** external pipeline owned by no-mistakes. Watchtower submits/reattaches the run, drives supported gates, reconciles exact-head/custody evidence, and routes findings. It is not a Rozoro crew role.
-- **No-mistakes Observatory:** untracked Herdr visualization surface for active run graphs. It is not a crew, task, custody owner, or control plane.
-- **Merge Finisher:** lands an already-authorized candidate through the repository/provider-supported merge path, captures the actual landed identity, performs required post-merge checks/actions, and reports delivery evidence. It does not quietly fix implementation defects or regenerate stale assurance.
-- **Watchtower/operator policy:** decides what task kind runs next, when the candidate is ready for no-mistakes, when landing is allowed, and what to route when a gate/merge/post-merge step fails.
+- **Planner / Task Decomposer:** turns raw intent into bounded tasks, dependencies,
+  acceptance criteria, and useful stacking/integration information.
+- **Coder:** implements one bounded task and reports the exact candidate head.
+- **Reviewer:** independently evaluates correctness and scope at an exact head.
+- **Tester:** independently exercises behavior and failure modes at an exact head.
+- **Replanner:** revises scope/dependencies when evidence shows the current task
+  boundary is wrong or repair loops stop converging.
+- **No-Mistakes Runner:** thin Rozoro crew that submits/reattaches an exact
+  candidate to the configured no-mistakes pipeline, listens through its supported
+  Git/CLI/AXI surface, and reports structured run evidence.
+- **Workset Merger:** reconstructs dependency/stack order for one workset,
+  integrates participating branches, reads assurance/no-mistakes results in that
+  context, decides what needs repair or re-planning, and performs final
+  merge/post-merge work when authorized.
+- **Watchtower:** owns cross-project/workset priority, dispatch, routing, and
+  operator interaction.
 
-A small task may omit roles when repository/operator policy permits it. Never imply independence where the same actor performed both sides.
+## Workset flow
 
-## Flow
+1. Identify the intended deliverable/workset.
+2. Use Planner when the work needs decomposition, dependency discovery, or a
+   stacking plan.
+3. Dispatch bounded tasks to Coders, parallelizing independent work.
+4. Bind Reviewer/Tester evidence to exact candidate heads as required by policy.
+5. Route local findings back to the relevant Coder; use Replanner when the task or
+   dependency boundary changes.
+6. When an exact committed candidate needs no-mistakes assurance, dispatch a
+   No-Mistakes Runner with the candidate identity and selected machine/global
+   no-mistakes profile.
+7. Keep each task branch/head and its assurance evidence attached to the workset.
+8. Dispatch or reuse a Workset Merger when branches must be integrated, stacked,
+   ordered, or landed.
+9. The Workset Merger reads the Planner/Decomposer result when available, then
+   reconciles it against actual branches/heads and determines the current merge
+   order.
+10. Integrate in dependency order. Any integration-created head gets the exact-head
+    assurance required by repository policy.
+11. Give no-mistakes results to the Workset Merger when their interpretation
+    depends on the integrated workset. It classifies findings as local repair,
+    integration fallout, or a planning/dependency problem and reports the next
+    route to Watchtower.
+12. When the integrated candidate is ready to land, apply `/afk` policy:
+    - ON: the Workset Merger may perform the final supported merge when evidence,
+      repository policy, and existing operator authority permit.
+    - OFF: the merger stops immediately before the final merge mutation and asks
+      the operator to confirm.
+13. Record the actual landed identity and required post-merge evidence before the
+    workset is complete.
 
-1. For raw implementation intent, normally dispatch Planner first unless the task is already genuinely bounded or clearly qualifies for Quick Coder.
-2. Implement and commit on an isolated feature branch.
-3. Have independent review and testing name the exact commit inspected.
-4. Return ordinary findings to the coder. Re-run required assurance on the new exact commit.
-5. Replan rather than loop when findings expose a contract conflict or scope change.
-6. When the clean committed candidate is ready for no-mistakes, Watchtower invokes `no-mistakes-gate` directly instead of spawning another crew.
-7. no-mistakes owns its pipeline worktree, internal agents/model selection, branch custody, fixes, PR/CI work, and structured recovery state. Watchtower owns submission/reattachment, bounded gate decisions, and final evidence reconciliation.
-8. Once the run exists, expose its graph in the dedicated no-mistakes Observatory. Keep structured no-mistakes/AXI state authoritative.
-9. If no-mistakes changes the head, repeat any exact-head assurance required by repository policy.
-10. Route local no-mistakes findings back to Coder; route contract/scope failures to Replanner.
-11. When Watchtower decides the candidate has the required landing evidence, dispatch a fresh **Merge Finisher** instead of merging in Watchtower.
-12. The Merge Finisher revalidates the exact PR head/evidence, performs the supported merge, records the actual landed identity, and completes required post-merge verification/cleanup.
-13. Route merge blockers or post-merge implementation failures back to the appropriate Coder/Replanner task kind. Watchtower reconciles the final landed evidence and decides whether delivery is complete.
+A one-task workset follows the same flow with the integration step collapsed to a
+single candidate.
 
-## Briefing style
+## No-mistakes configuration
 
-Watchtower writes each crew prompt itself. Prefer **intent + pointer + only the
-context, constraints, and evidence this specialist needs**. The role policy is
-orchestration guidance, not a prompt template.
+Repository `.no-mistakes.yaml` and the selected global no-mistakes profile are the
+configuration authorities for the pipeline. Global configuration lives at
+`~/.no-mistakes/config.yaml` unless `NM_HOME` selects another profile.
 
-Do not duplicate repository rules the crew will load from its target `--cwd` or
-force every role into the same checklist/report schema.
+Current no-mistakes supports an `agent` value or ordered fallback list and
+`agent_config` entries for per-agent model/effort. The optional Rozoro machine
+profile may say which of those profiles/accounts are available locally; the
+No-Mistakes Runner verifies the effective selection rather than rewriting config
+for each run.
 
-## Learning surface
+## Briefing
 
-The no-mistakes Observatory is for qualitative learning across runs: stage shape,
-retry/fix loops, CI repair, and other visible pipeline behavior. Keep terminal
-run scrollback available through the associated landing/post-merge episode when
-practical.
+Watchtower writes each brief from the current task/workset state. Prefer
+**intent + pointer + only the context, constraints, and evidence this specialist
+needs**.
 
-For durable optimization, retain run IDs and prefer structured no-mistakes data
-for timing, retries, fixes, findings, agent/model usage, and outcomes. Missing
-structured telemetry is an instrumentation gap, not a reason to scrape the TUI.
+For Workset Merger, include the workset intent, plan/decomposition when available,
+participating exact heads, dependency clues, assurance/no-mistakes evidence,
+target merge policy, and current `/afk` state.
 
-## Reports
+## Learning
 
-Keep the lifecycle handoff fields unchanged. Roles may additionally report
-`attempt_count` and `caused_by` as ordinary metadata; these do not alter Rozoro
-verdict parsing or lifecycle semantics.
+The Watchtower is allowed to begin with incomplete project context. Plans, crew
+handoffs, merged results, no-mistakes runs, and operator steering become reusable
+durable context for later work in that project.
 
-Crew reports should provide enough exact evidence for Watchtower to route the
-next action without requiring one fixed role-specific schema.
-
-The no-mistakes gate record should name the submitted and final exact heads, run
-ID/outcome, PR/CI evidence, custody state, supported recovery action, and routing
-consequence of findings.
-
-The Merge Finisher should report the expected/current PR head, merge path/result,
-actual landed identity, required post-merge evidence, and any delivery failure
-that needs another routed task.
+The optional no-mistakes Observatory is a qualitative learning surface. Keep run
+IDs and prefer structured no-mistakes data for durable timing, retries, fixes,
+findings, agent/model use, and outcomes.
