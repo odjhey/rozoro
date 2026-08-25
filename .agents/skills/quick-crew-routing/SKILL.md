@@ -41,7 +41,7 @@ Do not use Quick Scout for broad analysis, architecture or product decisions,
 indefinite exploration, or authoritative conclusions under meaningful
 uncertainty.
 
-When selected, read `.agents/skills/quick-scout/SKILL.md` and render the
+When selected, read `.agents/skills/brief-quick-scout/SKILL.md` and render the
 applicable instructions into the Quick Scout crew brief.
 
 ### Quick Coder
@@ -52,7 +52,7 @@ acceptance criteria and no meaningful design ambiguity.
 Do not use Quick Coder for API/subsystem redesign, cross-cutting changes, scope
 expansion, consequential behavior interpretation, or repeated repair attempts.
 
-When selected, read `.agents/skills/quick-coder/SKILL.md` and render the
+When selected, read `.agents/skills/brief-quick-coder/SKILL.md` and render the
 applicable instructions into the Quick Coder crew brief.
 
 Consequential Quick Coder output still goes through the standard independent
