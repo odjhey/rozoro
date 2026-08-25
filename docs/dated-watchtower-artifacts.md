@@ -23,7 +23,7 @@ Directories are mode `0700` and files are mode `0600`. Every lexical path compon
 
 ## Policy snapshot schema
 
-The captured bytes come directly from `templates/watchtower.md`, after verifying that `bin/rzr-pi-watchtower.sh` explicitly references that source. The Claude launcher currently does **not** reference it, so metadata records Claude as `no-explicit-reference-to-captured-source` rather than claiming Claude coverage. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
+The captured bytes come directly from `templates/watchtower.md`. Shell tokenization verifies that `bin/rzr-pi-watchtower.sh` assigns `--append-system-prompt` and `$ROOT/templates/watchtower.md` as an adjacent option/value pair in its launch `args` array; comments and unrelated string mentions do not count. The Claude launcher's `args` array currently has no such policy argument, so metadata records Claude as `no-policy-argument-for-captured-source`. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
 
 A run contains:
 
@@ -36,7 +36,7 @@ Example metadata shape:
 
 ```json
 {
-  "schema": "rozoro.watchtower-policy-snapshot/v2",
+  "schema": "rozoro.watchtower-policy-snapshot/v3",
   "artifact_type": "watchtower-policy-snapshot",
   "created_at": "2026-08-24T03:25:36.123456Z",
   "run_id": "20260824T032536.123456Z-a1b2c3d4",
@@ -51,9 +51,18 @@ Example metadata shape:
     "git_blob_current": "…",
     "matches_git_commit": true
   },
+  "git_provenance": {
+    "status": "verified",
+    "method": "held-directory-identity-verified-before-and-after-each-git-read",
+    "repository_identity": "fs-0123456789abcdefabcd",
+    "reason": null
+  },
   "harness_coverage": {
+    "validation": "tokenized-shell-args-array-option-value",
+    "option": "--append-system-prompt",
+    "value": "$ROOT/templates/watchtower.md",
     "pi": {"status": "captured", "launcher": "bin/rzr-pi-watchtower.sh", "launcher_sha256": "…"},
-    "claude": {"status": "no-explicit-reference-to-captured-source", "launcher": "bin/rzr-claude-watchtower.sh", "launcher_sha256": "…"}
+    "claude": {"status": "no-policy-argument-for-captured-source", "launcher": "bin/rzr-claude-watchtower.sh", "launcher_sha256": "…"}
   },
   "files": {
     "watchtower-policy.md": {"sha256": "…", "bytes": 1234}
@@ -62,7 +71,7 @@ Example metadata shape:
 }
 ```
 
-`matches_git_commit: false` is valid provenance: it means the snapshot captured current working-tree policy bytes that differ from `HEAD`. No absolute checkout path is stored.
+`matches_git_commit: false` is valid only with `git_provenance.status: verified`: it means the captured working-tree policy bytes differ from `HEAD`. The validated repository directory remains open while Git reads run, and its lexical pathname is reopened without following links and matched by device/inode before and after every read. A mismatch or Git failure sets provenance to `indeterminate` and all Git-derived source fields to `null`. No absolute checkout path is stored.
 
 ## Progress report schema
 
@@ -114,7 +123,7 @@ The report has explicit sections for verified durable facts, reported active wor
 
 Task roots are required: a missing, unreadable, unowned, or symlink-traversed root fails before creating an artifact instead of becoming a clean empty report. An existing empty root remains a valid empty source. Explicit `--tasks-root` use is recorded as `explicit-override`; its absolute path is excluded, while the root identifier ties metadata and evidence to the directory actually opened.
 
-The scan opens task directories and files relative to validated directory descriptors and parses the exact captured handoff/cursor bytes represented by the recorded digests. Pathname replacement cannot redirect an in-progress scan. The default artifact excludes:
+The scan opens task directories and files relative to validated directory descriptors and parses the exact captured handoff/cursor bytes represented by the recorded digests. Its canonical parser source is itself captured with no-follow descriptor-relative reads from the checkout that owns the skill. `--repo-root` is compatibility-only and must resolve to that same directory device/inode, so another checkout cannot inject parser code. Pathname replacement cannot redirect an in-progress scan. The default artifact excludes:
 
 - brief and free-form handoff prose;
 - cwd values and repository contents;

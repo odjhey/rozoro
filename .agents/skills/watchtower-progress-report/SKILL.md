@@ -18,7 +18,7 @@ From this skill directory:
 python3 scripts/report.py
 ```
 
-The script reads safe regular evidence under `$ROZORO_HOME/tasks` (default `~/.rozoro/tasks`) with no-follow descriptor-relative access and Rozoro's canonical handoff parser, then prints the new run directory. A missing, unreadable, unowned, or symlink-traversed task root fails closed rather than producing a clean empty report.
+The script reads safe regular evidence under `$ROZORO_HOME/tasks` (default `~/.rozoro/tasks`) with no-follow descriptor-relative access and Rozoro's canonical handoff parser captured from the validated checkout that owns this skill, then prints the new run directory. A compatibility `--repo-root` value is accepted only when it identifies that same directory inode; another checkout cannot supply executable parser code. A missing, unreadable, unowned, or symlink-traversed task root fails closed rather than producing a clean empty report.
 
 Default destination:
 

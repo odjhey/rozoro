@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
-import importlib.util
 import json
 import os
 import re
 import secrets
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -61,13 +61,29 @@ def json_shape(task: SafeDirectory, name: str) -> str:
         return "malformed"
 
 
-def load_handoff_parser(repo: Path):
-    location = repo / "lib/rozoro_monitor/handoff.py"
-    spec = importlib.util.spec_from_file_location("dated_artifact_handoff", location)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"cannot load canonical handoff parser: {location}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
+    parts = relative.split("/")
+    current = repo
+    opened: list[SafeDirectory] = []
+    try:
+        for component in parts[:-1]:
+            current = current.open_child(component, require_owner=True)
+            opened.append(current)
+        state, data = current.read_regular(parts[-1])
+        if state != "regular" or data is None:
+            raise UnsafePath(f"required repository source {relative} is {state}")
+        return data
+    finally:
+        for directory in reversed(opened):
+            directory.close()
+
+
+def load_handoff_parser(repo: SafeDirectory):
+    relative = "lib/rozoro_monitor/handoff.py"
+    source = read_repo_file(repo, relative)
+    module = types.ModuleType("dated_artifact_handoff")
+    module.__file__ = relative
+    exec(compile(source, relative, "exec"), module.__dict__)  # noqa: S102 - validated checkout-owned source
     if not hasattr(module, "parse_text"):
         raise SystemExit("canonical handoff parser lacks captured-text support")
     return module
@@ -271,8 +287,18 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
-    parser_module = load_handoff_parser(repo)
+    repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
+    try:
+        with SafeDirectory.open_path(SCRIPT_REPO, create=False, require_owner=True) as shipped_repo:
+            shipped_identity = (shipped_repo.stat().st_dev, shipped_repo.stat().st_ino)
+        with SafeDirectory.open_path(repo_path, create=False, require_owner=True) as repo:
+            effective_identity = (repo.stat().st_dev, repo.stat().st_ino)
+            if effective_identity != shipped_identity:
+                raise UnsafePath("--repo-root must identify the checkout that owns this skill")
+            parser_module = load_handoff_parser(repo)
+    except (OSError, UnsafePath) as exc:
+        raise SystemExit(f"cannot safely load canonical handoff parser: {exc}") from exc
+
     home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
     tasks_path = args.tasks_root or home / "tasks"
     artifact_root = args.artifact_root or home / "artifacts"

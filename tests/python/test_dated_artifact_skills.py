@@ -60,7 +60,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             source = checkout / "templates/watchtower.md"
             current = b"current working-tree policy\n"
             source.write_bytes(current)
-            (checkout / "bin/rzr-pi-watchtower.sh").write_text('pi --append-system-prompt "$ROOT/templates/watchtower.md"\n', encoding="utf-8")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_text('args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n', encoding="utf-8")
             (checkout / "bin/rzr-claude-watchtower.sh").write_text("claude --settings overlay.json\n", encoding="utf-8")
             artifact_root = root / "artifacts"
             fake_bin = root / "bin"
@@ -106,14 +106,120 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v2")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v3")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
-            self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "no-explicit-reference-to-captured-source")
+            self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "no-policy-argument-for-captured-source")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "tokenized-shell-args-array-option-value")
+            self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
             self.assert_private_tree(first)
+
+            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
+                "args=(--approve)\n# --append-system-prompt $ROOT/templates/watchtower.md\n",
+                encoding="utf-8",
+            )
+            substring_only = subprocess.run(
+                [
+                    "python3",
+                    str(POLICY_SCRIPT),
+                    "--repo-root",
+                    str(checkout),
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertNotEqual(substring_only.returncode, 0)
+            self.assertIn("args-array", substring_only.stderr)
+
+    def test_policy_git_provenance_becomes_indeterminate_on_repo_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "checkout"
+            held = root / "checkout-held"
+            (checkout / "templates").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            policy = b"held policy bytes\n"
+            (checkout / "templates/watchtower.md").write_bytes(policy)
+            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n', encoding="utf-8"
+            )
+            (checkout / "bin/rzr-claude-watchtower.sh").write_text("args=(--settings overlay.json)\n", encoding="utf-8")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                "#!/bin/sh\n"
+                "mv \"$SWAP_REPO\" \"$SWAP_HELD\"\n"
+                "mkdir \"$SWAP_REPO\"\n"
+                "echo forged-git-output\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            env = dict(
+                os.environ,
+                PATH=f"{fake_bin}:{os.environ.get('PATH', '')}",
+                SWAP_REPO=str(checkout),
+                SWAP_HELD=str(held),
+            )
+            run = self.run_script(
+                POLICY_SCRIPT,
+                "--repo-root",
+                str(checkout),
+                "--artifact-root",
+                str(root / "artifacts"),
+                "--now",
+                NOW,
+                env=env,
+            )
+            metadata = json.loads((run / "metadata.json").read_text())
+            self.assertEqual((run / "watchtower-policy.md").read_bytes(), policy)
+            self.assertEqual(metadata["git_provenance"]["status"], "indeterminate")
+            self.assertIn("identity-mismatch-after-read", metadata["git_provenance"]["reason"])
+            self.assertIsNone(metadata["source"]["git_commit"])
+            self.assertIsNone(metadata["source"]["git_blob_at_commit"])
+            self.assertIsNone(metadata["source"]["git_blob_current"])
+            self.assertIsNone(metadata["source"]["matches_git_commit"])
+
+    def test_report_repo_override_cannot_execute_another_checkout_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            malicious = root / "malicious"
+            parser_dir = malicious / "lib/rozoro_monitor"
+            parser_dir.mkdir(parents=True)
+            sentinel = root / "executed"
+            (parser_dir / "handoff.py").write_text(
+                "from pathlib import Path\nPath(" + repr(str(sentinel)) + ").write_text('executed')\n",
+                encoding="utf-8",
+            )
+            tasks = root / "tasks"
+            tasks.mkdir()
+            output = root / "artifacts"
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(REPORT_SCRIPT),
+                    "--repo-root",
+                    str(malicious),
+                    "--tasks-root",
+                    str(tasks),
+                    "--artifact-root",
+                    str(output),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must identify the checkout that owns this skill", result.stderr)
+            self.assertFalse(sentinel.exists())
+            self.assertFalse(output.exists())
 
     def test_progress_report_separates_states_and_excludes_freeform_private_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
