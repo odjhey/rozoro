@@ -89,11 +89,20 @@ Treat the current structured no-mistakes/AXI output as authoritative.
 Prefer event/edge-driven observation where the installed interface supports it.
 Do not build a tight fixed-interval polling loop around `axi status`.
 
-## 4. Observer pane
+## 4. Observatory
 
-Once an active run exists, use `no-mistakes-observer-pane` to open the untracked
-side pane and attach it to the run. The pane is presentation only; AXI/no-mistakes
-structured state remains authoritative.
+Once an active run exists, use `no-mistakes-observatory` to make its graph/TUI
+visible in the dedicated untracked Herdr Observatory. Do not split the Watchtower
+pane for every run and do not attach the visualization to a Planner/Coder/Reviewer
+crew pane.
+
+The Observatory is for human inspection and learning. AXI/no-mistakes structured
+state remains authoritative for Watchtower decisions.
+
+Keep the run identity with the Observatory pane so concurrent no-mistakes gates
+can be distinguished and compared. Preserve terminal graph/scrollback through the
+associated landing/post-merge episode when practical; it may be cleaned up after
+final delivery evidence is captured or when superseded by a newer run.
 
 ## 5. Custody and recovery
 
@@ -120,7 +129,17 @@ agent/account/fallback policy cannot be expressed there, that is a no-mistakes
 integration/configuration gap to solve explicitly, not a reason to add a wrapper
 crew or mutate model configuration around each run.
 
-## 7. Report
+## 7. Learning evidence
+
+The Observatory graph is useful for spotting optimization opportunities, but it is
+not a stable telemetry API.
+
+For each run, retain the run ID and prefer structured no-mistakes evidence for
+stage duration, retries, fixes, agent/model usage, findings, and outcomes when the
+installed version exposes them. If those data are not available, record the
+missing telemetry as an instrumentation gap rather than scraping terminal pixels.
+
+## 8. Report
 
 Record:
 
