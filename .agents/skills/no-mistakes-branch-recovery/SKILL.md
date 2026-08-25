@@ -3,12 +3,12 @@ name: no-mistakes-branch-recovery
 description: >-
   Recover a branch that is stuck, divergent, or left in ambiguous custody during
   or after a no-mistakes/AXI run. This is a crew-facing No-Mistakes Runner skill:
-  the Watchtower dispatches the dedicated runner with these instructions and
-  judges the returned custody/evidence report.
+  the Watchtower dispatches the dedicated runner with these instructions included
+  in the crew brief and judges the returned custody/evidence report.
 metadata:
   execution-owner: crew
   crew-role: no-mistakes-runner
-  watchtower-action: dispatch-and-pass
+  watchtower-action: dispatch-and-brief
   derived-from:
     - docs/runbooks/no-mistakes-custody.md
     - docs/runbooks/human-gates-and-evidence.md
@@ -22,10 +22,11 @@ the recovery decision process; it does not replace or override the tool's own
 instructions.
 
 This skill is executed by the dedicated **No-Mistakes Runner crew**, not by the
-Watchtower. The Watchtower decides that recovery work is needed, dispatches or
-resumes that runner with these instructions, then uses the runner's exact-head
-report to decide what happens next. The Watchtower must not take over branch
-mutation merely because recovery is awkward.
+Watchtower. The Watchtower decides that recovery work is needed, includes these
+recovery instructions and the relevant branch/run evidence in the crew brief,
+dispatches or resumes that runner, then uses the runner's exact-head report to
+decide what happens next. The Watchtower must not take over branch mutation
+merely because recovery is awkward.
 
 Explicit operator instructions and repository-local rules take precedence.
 
