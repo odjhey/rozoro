@@ -25,6 +25,11 @@ turned Watchtower from a judgment layer into a prompt forwarder. Role policy and
 task prompts need to stay separate. Policy informs Watchtower; Watchtower writes
 the smallest task-specific brief.
 
+Removing the wrapper crew also removes the accidental terminal home for the
+no-mistakes graph. Attaching that graph to arbitrary agent panes would recreate a
+false ownership relationship, while repeatedly splitting the Watchtower pane
+would not scale to multiple concurrent gates or support cross-run learning.
+
 ## Options
 
 1. Keep a dedicated No-Mistakes Runner crew as a wrapper around no-mistakes.
@@ -40,9 +45,15 @@ A. Keep role-specific `brief-*` skills as prompt templates.
 B. Keep role/model policy in the canonical dispatch guide and let Watchtower
    synthesize concise task-specific briefs.
 
+For graph visibility:
+
+I. Attach each no-mistakes graph to the current Watchtower or agent pane.
+II. Maintain a dedicated untracked **no-mistakes Observatory** Herdr tab with one
+    pane per active run when supported.
+
 ## Choice
 
-Choose option 2 and briefing option B.
+Choose option 2, briefing option B, and graph visibility option II.
 
 No-mistakes is **not a Rozoro crew role**.
 
@@ -58,10 +69,12 @@ When a clean committed candidate is ready for no-mistakes assurance:
    surface.
 6. It responds to bounded gates within current authority and preserves/surfaces
    unsupported decisions without blocking unrelated work.
-7. It reconciles the final exact head, PR, CI, branch sync, and custody state.
-8. It routes local defects to Coder and task-boundary problems to Replanner.
-9. If landing is allowed, it dispatches Merge Finisher for the actual merge and
-   required post-merge work.
+7. It keeps the run visible in the no-mistakes Observatory for operator learning
+   and inspection while structured no-mistakes/AXI state remains authoritative.
+8. It reconciles the final exact head, PR, CI, branch sync, and custody state.
+9. It routes local defects to Coder and task-boundary problems to Replanner.
+10. If landing is allowed, it dispatches Merge Finisher for the actual merge and
+    required post-merge work.
 
 No-mistakes owns its own pipeline-agent/model/account/fallback configuration.
 Rozoro selects models for Rozoro crews only. If the desired no-mistakes internal
@@ -69,9 +82,17 @@ selection policy cannot be expressed by the installed no-mistakes version, that
 is a no-mistakes integration/configuration gap, not a reason to spawn a wrapper
 crew or mutate model configuration around each run.
 
-The `no-mistakes-observer-pane` attaches to the **active run beside Watchtower**.
-It is an untracked display surface only and never a crew, task, session, custody
-owner, or second control plane.
+The `no-mistakes-observatory` skill owns only the visualization surface. Prefer
+one persistent, untracked Herdr Observatory tab per Watchtower workspace and one
+pane per active run. The Observatory is never a crew, task, session, custody
+owner, mailbox owner, or second control plane.
+
+Keep terminal graph/scrollback through the associated landing/post-merge episode
+when practical. This supports qualitative learning about expensive stages,
+retry/fix loops, CI repair, and model/agent behavior. Durable optimization should
+use run IDs and structured no-mistakes telemetry where available; missing timing,
+retry, fix, or model data is an instrumentation gap rather than a reason to scrape
+the TUI.
 
 Current no-mistakes ownership stops at preparing/updating a clean PR, watching CI
 and mergeability, and fixing supported conflicts/failures. The final merge remains
@@ -97,12 +118,15 @@ turn, or clearly qualifies for Quick Coder.
   Watchtower-authored task prompts.
 - Keep no-mistakes defects in the normal delivery loop: local repairs go to Coder;
   contract/scope failures go to Replanner.
-- Keep the side Herdr panel attached to the active no-mistakes run beside
-  Watchtower.
+- Replace the ad-hoc side observer pane with a dedicated no-mistakes Observatory
+  Herdr surface grouped away from agent panes.
+- Preserve terminal graph/scrollback long enough to study the full gate-to-landing
+  episode; use structured run evidence for durable optimization.
 - Add Merge Finisher as the final merge/post-merge repository mutation owner.
-- Avoid outer-versus-inner model ambiguity, duplicate agent orchestration, and
-  mechanically templated crew prompts.
-- A future Rozoro adapter may integrate no-mistakes run events into the resident
-  monitor/event bus, but semantic ownership remains with no-mistakes/AXI.
+- Avoid outer-versus-inner model ambiguity, duplicate agent orchestration,
+  mechanically templated crew prompts, and false graph ownership by an agent pane.
+- A future Rozoro adapter may integrate no-mistakes run events and telemetry into
+  the resident monitor/event bus, but semantic ownership remains with
+  no-mistakes/AXI.
 - Tight polling of `axi status` is not the desired long-term integration; prefer
   event/edge-driven observation where supported.
