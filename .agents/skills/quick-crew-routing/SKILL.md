@@ -13,8 +13,7 @@ Use this in **Watchtower while choosing the task kind and dispatch path**. Quick
 Crew is an optimization, never a replacement for the standard role pipeline.
 
 Current standard model selection remains authoritative in
-`templates/watchtower-crew-dispatch-guidelines.md`. This skill does not redefine
-standard role models or no-mistakes fallback policy.
+`templates/watchtower-crew-dispatch-guidelines.md`.
 
 ## Eligibility
 
@@ -27,22 +26,20 @@ Use Quick Crew only when all relevant conditions hold:
 - the task is not expected to need long/background work; and
 - a single quick attempt is likely to be enough.
 
-Use `gpt-5.3-codex-spark` at low effort for the Quick Crew roles below.
+Use `gpt-5.3-codex-spark` at low effort for both Quick Crew task kinds.
 
 ### Quick Scout
 
-Use for narrow, read-only repository fact gathering.
+Use for one narrow, read-only repository fact-gathering question: locate a symbol,
+confirm a file/flag/reference, check a small dependency relationship, or gather
+exact evidence needed for routing.
 
-Allowed examples include locating a symbol, confirming a file/flag/reference,
-checking a small dependency relationship, or gathering exact evidence needed for
-a routing decision.
-
-Do not use Quick Scout for broad analysis, architecture or product decisions,
+Do not use Quick Scout for broad analysis, architecture/product decisions,
 indefinite exploration, or authoritative conclusions under meaningful
 uncertainty.
 
-When selected, read `.agents/skills/brief-quick-scout/SKILL.md` and render the
-applicable instructions into the Quick Scout crew brief.
+Watchtower should write a small natural brief containing the exact question and
+pointer. Do not turn the Quick Scout prompt into a copied role contract.
 
 ### Quick Coder
 
@@ -52,8 +49,8 @@ acceptance criteria and no meaningful design ambiguity.
 Do not use Quick Coder for API/subsystem redesign, cross-cutting changes, scope
 expansion, consequential behavior interpretation, or repeated repair attempts.
 
-When selected, read `.agents/skills/brief-quick-coder/SKILL.md` and render the
-applicable instructions into the Quick Coder crew brief.
+Watchtower should write a small natural brief containing the exact change,
+acceptance criteria, and any task-specific repository constraint that matters.
 
 Consequential Quick Coder output still goes through the standard independent
 review and testing required by repository policy. A quick completion is not a
@@ -65,7 +62,8 @@ Do not retry Quick Crew when the quick path stops being quick. Escalate to the
 appropriate standard role as soon as scope broadens, confidence drops, a retry is
 needed, broader context becomes necessary, or meaningful judgment appears.
 
-A Quick Crew report that needs escalation must use exactly:
+A Quick Crew report that needs escalation should make the condition unmistakable,
+using this marker when practical:
 
 ```text
 NEEDS_STANDARD_CREW
@@ -74,12 +72,13 @@ Findings:
 Suggested next step:
 ```
 
-Watchtower consumes that report and dispatches the appropriate standard crew. Do
-not silently turn the same Quick Crew session into a standard role.
+Useful evidence already gathered should travel with the escalation so the
+standard crew does not repeat cheap discovery. Do not silently turn the same
+Quick Crew session into a standard role.
 
 ## Precedence
 
 - Standard crew is the default.
 - Current standard model selection in the canonical dispatch guidelines wins.
-- Current no-mistakes target/fallback policy wins.
+- No-mistakes is a separate Watchtower-managed external gate.
 - Do not import machine-specific harness rules into Quick Crew routing.

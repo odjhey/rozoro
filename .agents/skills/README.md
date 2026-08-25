@@ -1,116 +1,101 @@
 # Skill ownership and routing
 
-These skills are loaded in the **Watchtower context**. Rozoro does not currently
-pass skill objects or skill references into crew sessions.
+Project skills under `.agents/skills/` are **Watchtower tools**. Rozoro does not
+currently transmit a skill object or skill reference into a crew session.
 
-There are two semantic categories. The distinction is documented here and in each
-skill's `description` and body; do not rely on custom frontmatter metadata for
-routing because the supported harnesses do not provide a portable contract for
-our own ownership keys.
+Do not use skills as a prompt-template layer. Watchtower remains responsible for
+understanding the current task, choosing the next task kind, and writing the
+smallest useful brief for that crew.
 
 ## Watchtower action skills
 
-Watchtower uses these directly while orchestrating, reconciling evidence, routing,
-or observing work.
-
 | Skill | When Watchtower uses it |
 | --- | --- |
-| `crew-model-selection` | Immediately before every fresh crew dispatch: choose task kind, current canonical model/effort, Quick Crew eligibility, and applicable `brief-*` guideline. |
-| `no-mistakes-harness-selection` | Before every fresh No-Mistakes Runner when no-mistakes selection is `auto`: choose the actual invoking harness/model/account target from the canonical fallback order without changing global no-mistakes model config. |
-| `delivery-evidence` | Reconcile exact-head evidence, decide what runs next, and record bounded unattended decisions. |
-| `attempt-budget` | Decide whether another coder attempt is allowed and when exhausted work should be deferred/revisited. |
-| `quick-crew-routing` | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
-| `no-mistakes-observer-pane` | For every active No-Mistakes Runner, open/close the untracked sibling observer pane when the local Herdr pane operation is supported. |
+| `crew-model-selection` | Before every fresh Rozoro crew dispatch: choose task kind and current canonical model/effort. |
+| `quick-crew-routing` | Decide whether a bounded task qualifies for Quick Scout/Quick Coder. |
+| `no-mistakes-gate` | Submit/reattach and drive the external no-mistakes run, reconcile exact-head/custody evidence, and route findings. |
+| `no-mistakes-observatory` | Maintain the dedicated untracked Herdr visualization surface for active no-mistakes run graphs. |
+| `delivery-evidence` | Reconcile exact-head review/test/CI/delivery evidence and make bounded Watchtower decisions. |
+| `attempt-budget` | Enforce the coder-attempt budget and defer exhausted implementation lineages. |
 
-These are Watchtower actions. They are not instructions to paste wholesale into a
-crew brief.
+These skills guide Watchtower's own routing/coordination actions. They are not
+blocks of text to paste into a crew prompt.
 
-## `brief-*` crew-briefing guidelines
+## Crew briefs are authored by Watchtower
 
-Every skill whose name starts with `brief-` tells Watchtower **what to put in the
-brief when spawning a specific task-kind crew**. Loading one does not mean
-Watchtower should perform that crew's repository work.
+The old `brief-*` skill layer was removed because it made Watchtower behave like a
+prompt forwarder. Standing role/model policy lives in
+`templates/watchtower-crew-dispatch-guidelines.md`; the actual brief is composed
+for the task at hand.
 
-| Briefing guideline | Task-kind crew | Watchtower action |
-| --- | --- | --- |
-| `brief-task-planner` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
-| `brief-reviewer` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
-| `brief-tester` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
-| `brief-no-mistakes-recovery` | No-Mistakes Runner | Render the supported recovery/custody contract and exact branch/run evidence into the runner brief, then dispatch/resume. |
-| `brief-rozoro-coder` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
-| `brief-quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
-| `brief-quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
+Default style:
 
-### Briefing rule
+> **intent + pointer + only the context, constraints, and evidence this crew needs**
 
-A `brief-*` guideline is applied only when its relevant instructions are included
-in the task brief that the crew actually receives.
+A brief may be only a few lines. Do not paste the role policy, repeat the target
+repository's own rules, or force every task into the same report/checklist shape.
+The crew should have enough context to exercise judgment.
 
-Keep the brief focused. Include:
+Examples of task-specific information worth adding:
 
-- the task-kind/role contract;
-- constraints that matter to this task;
-- task-specific source pointers and evidence;
-- acceptance criteria or exact-head identity when relevant; and
-- the required report/escalation shape.
+- Planner: raw operator request/issue plus exclusions or decisions already made.
+- Coder: bounded task or repair finding plus acceptance criteria that are not
+  obvious from the source pointer.
+- Reviewer/Tester: exact candidate head and the task/acceptance source.
+- Merge Finisher: PR, expected exact head, landing evidence, allowed merge path,
+  and post-merge work that actually applies.
+- Quick Crew: the exact narrow question/change and its stop/escalation boundary.
 
-Do not paste unrelated policy or the entire skill library. Do not assume a skill
-name, repo-local skill discovery, preset, system rule, or custom frontmatter field
-is transmitted to a crew by Rozoro today.
+## Planner is the normal bounding step
 
-## Fresh-dispatch bootstrap
+For new implementation work, raw operator intent normally goes through the Task
+Decomposer before Coder. Skip that planning turn only when the implementation task
+is already genuinely bounded, this is a normal repair turn for the same coder, or
+Quick Coder clearly qualifies.
 
-`templates/watchtower.md` requires `crew-model-selection` before every fresh crew
-start. That skill reads the canonical standard dispatch policy and, when relevant,
-Quick Crew routing, then names the applicable `brief-*` guideline to render into
-the task body.
+Watchtower should not inspect the repository deeply enough to replace the Planner.
+Dispatch the specialist instead.
 
-For a fresh No-Mistakes Runner, `crew-model-selection` also requires
-`no-mistakes-harness-selection`. In no-mistakes `auto` mode, the workflow model is
-selected by the actual harness/model/account context that invokes no-mistakes.
-Normal routing therefore does not save, override, or restore a global no-mistakes
-model just to choose the target.
+## No-mistakes is not crew
 
-Once that runner has created an active no-mistakes run, Watchtower invokes
-`no-mistakes-observer-pane` by default and attaches an untracked sibling Herdr
-pane. Observer creation failure is non-blocking when the installed Herdr lacks a
-supported pane operation, but supported observation should not be silently
-skipped.
+No-mistakes is a Watchtower-managed external gate. It owns its pipeline worktree,
+internal agents/model selection, branch custody, PR/CI work, and supported recovery
+surface. Watchtower uses `no-mistakes-gate` to submit/reattach, drive supported
+gates, and reconcile the result.
 
-A follow-up turn on the same live task is different: use `./bin/rozoro send` and
-preserve the existing crew context unless Watchtower is intentionally dispatching
-a new task-kind crew.
+There is no No-Mistakes Runner crew and no no-mistakes briefing skill.
 
-## Model routing
+## No-mistakes Observatory
 
-Current standard model selection remains authoritative in
-`templates/watchtower-crew-dispatch-guidelines.md`. Current no-mistakes target
-fallback also remains authoritative there/current no-mistakes policy.
+No agent pane owns the no-mistakes graph.
 
-`quick-crew-routing` is a bounded fast-path exception: eligible Quick Scout and
-Quick Coder tasks use `gpt-5.3-codex-spark` at low effort. It does not redefine
-any standard role assignment and must not be retried when the quick path fails.
+Use one persistent, untracked **no-mistakes Observatory** Herdr tab per Watchtower
+workspace. Put one `no-mistakes attach` pane in that tab for each active gate/run,
+using enough task/run identity to distinguish concurrent pipelines.
 
-Do not import machine-specific harness defaults into global role policy.
+The Observatory is deliberately separate from Planner/Coder/Reviewer/Tester/Merge
+Finisher panes and from the Watchtower pane. It does not consume crew capacity and
+must not become a second no-mistakes controller.
 
-## Attempt budget
+Keep terminal graph/scrollback visible through the associated landing/post-merge
+episode when practical so the operator can compare stage behavior and identify
+optimization opportunities. For durable analysis, retain run IDs and prefer
+structured timing/retry/fix/model evidence from no-mistakes rather than scraping
+the TUI.
 
-Implementation lineages have ten coder attempts derived from durable coder turns.
-Attempt 10 may complete normal review/test/gate assurance. If that evidence asks
-for another coder repair, do not start attempt 11.
+## Merge/post-merge is crew
 
-An exhausted lineage is deferred while other runnable work exists. Reconsider
-deferred work when the runnable queue is empty, or earlier only when materially
-new evidence/tooling changes the premise or the operator explicitly reprioritizes
-it.
+Once Watchtower judges that the candidate is eligible to land, it dispatches a
+**Merge Finisher** (`gpt-5.6-luna`, low). The finisher performs repository/provider
+merge and required post-merge activities and returns exact landed evidence.
+Watchtower does not perform the repository mutation itself.
 
-## Boundary rule
+Merge Finisher activity does not consume coder attempts unless a later failure is
+routed to a Coder for a new implementation turn.
 
-**Watchtower chooses the task kind, prepares the brief, dispatches, reconciles
-reports, and decides what runs next. Crew performs repository planning,
-implementation, review, testing, and pipeline/recovery work described by its
-brief.**
+## Boundary
 
-When a crew report exposes a new routing decision, Watchtower consumes the report,
-records the decision, and dispatches the next task-kind crew. Do not silently
-change the current crew's role just to avoid another dispatch.
+**Watchtower chooses, briefs, dispatches, drives external gates, reconciles
+evidence, and decides what runs next. Crew performs repository planning,
+implementation, review, testing, merge, and post-merge work. No-mistakes performs
+its own pipeline work under its own custody. The Observatory is presentation only.**
