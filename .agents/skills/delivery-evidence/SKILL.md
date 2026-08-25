@@ -2,10 +2,12 @@
 name: delivery-evidence
 description: >-
   Audit whether review, test, CI, publication, and delivery claims apply to the
-  exact current software head. Use when an unattended Watchtower needs to decide
-  whether work has enough evidence to continue, publish, or close, and to record
-  any bounded decision or unresolved exception without inventing approval.
+  exact current software head. This is a Watchtower-owned skill used to judge
+  crew reports, decide whether work can continue or close, and record bounded
+  unattended decisions.
 metadata:
+  execution-owner: watchtower
+  watchtower-action: invoke-directly
   derived-from:
     - docs/runbooks/human-gates-and-evidence.md
     - templates/watchtower.md
@@ -13,8 +15,13 @@ metadata:
 
 # Delivery evidence
 
-Use exact-head evidence to support unattended decisions. Do not turn ordinary
-delivery into a human-approval queue.
+Use exact-head evidence to support unattended Watchtower decisions. Do not turn
+ordinary delivery into a human-approval queue.
+
+This skill is executed by the **Watchtower**. Crew members produce review, test,
+CI, no-mistakes, and implementation evidence; the Watchtower reconciles those
+reports here and decides what should run next. Do not pass this skill to a coder
+as a substitute for independent verification.
 
 Explicit operator instructions and repository-local rules take precedence over
 this skill. Existing branch protection, provider authorization, and destructive
