@@ -1,6 +1,6 @@
 {
   "fixture_version": 2,
-  "claude_code_version": "2.1.240",
+  "claude_code_version": "2.1.241",
   "captured_with": [
     "--no-session-persistence",
     "--setting-sources=",
@@ -160,7 +160,7 @@
   ],
   "outcome_evidence": {
     "certification": {
-      "claude_code_version": "2.1.240",
+      "claude_code_version": "2.1.241",
       "probe": "background-agent",
       "observed_sequence": ["active", "active", "clear"],
       "capture": "live-hook-capability-probe"

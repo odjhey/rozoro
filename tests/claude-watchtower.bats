@@ -4,7 +4,7 @@ load test_helper/common
 @test "Claude watchtower launch activates authority and exact resume uses a fresh incarnation" {
   export PYTHONDONTWRITEBYTECODE=1
   if [ -x /opt/homebrew/bin/python3 ]; then mkdir "$TEST_ROOT/pybin"; ln -s /opt/homebrew/bin/python3 "$TEST_ROOT/pybin/python3"; export PATH="$TEST_ROOT/pybin:$PATH"; fi
-  export HERDR_PANE_ID=p1 FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log" FAKE_CLAUDE_SLEEP=10
+  export HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.1.241 FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log" FAKE_CLAUDE_SLEEP=10
   fake_pane p1 idle claude true
   chmod 700 "$ROZORO_HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks"
   "$REPO_ROOT/bin/rozoro" monitor start >/dev/null || { cat "$ROZORO_HOME/monitor.log" >&2; false; }
@@ -43,12 +43,21 @@ PY2
 }
 
 @test "installed unsupported Claude version fails before settings or launch" {
-  export HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.1.241 FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log"
-  fake_pane p1 idle claude true
+  export HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.2.0 FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log"
   run "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --cwd "$TEST_ROOT"
   assert_failure
-  assert_output_contains "certified only for 2.1.240"
+  assert_output_contains "certified only for >=2.1.240 <2.2.0"
   [ ! -d "$ROZORO_HOME/watchtowers" ]
+}
+
+@test "older or malformed Claude versions fail before settings or launch" {
+  for version in 2.1.239 2.1.240rc 2.2.0-rc 3.0.0; do
+    export HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION="$version" FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log"
+    run "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --cwd "$TEST_ROOT"
+    assert_failure
+    assert_output_contains "certified only for >=2.1.240 <2.2.0"
+    [ ! -d "$ROZORO_HOME/watchtowers" ]
+  done
 }
 
 @test "watchtower settings failure leaves no random temporary" {

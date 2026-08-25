@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code 2.1.240 lifecycle hook for managed Rozoro crew and watchtower sessions.
+"""Claude Code lifecycle hook for managed Rozoro crew and watchtower sessions.
 
 The hook deliberately extracts only opaque lifecycle identifiers and never
 publishes prompt, transcript, command, description, or assistant content.
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -20,7 +21,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from rozoro_monitor.client import ClientError, ProducerClient, prepare_event  # noqa: E402
 
-CAPABILITY = "2.1.240"
+CAPABILITY_MIN = (2, 1, 240)
+CAPABILITY_MAX_EXCLUSIVE = (2, 2, 0)
 EVENTS = {"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"}
 
 
@@ -41,14 +43,27 @@ def _claude_version() -> str | None:
         actual = os.stat(os.path.realpath(binary))
         if value.get("binary") != os.path.realpath(binary) or [actual.st_dev, actual.st_ino] != value.get("identity"):
             return None
-        return value.get("version") if isinstance(value.get("version"), str) else None
+        version = value.get("version")
+        if isinstance(version, str) and _is_supported_claude_version(version):
+            return version
+        return None
     except (OSError, ValueError, json.JSONDecodeError):
         return None
 
 
+def _is_supported_claude_version(version: str | None) -> bool:
+    if not isinstance(version, str):
+        return False
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)
+    if not match:
+        return False
+    parsed = tuple(int(part) for part in match.groups())
+    return CAPABILITY_MIN <= parsed < CAPABILITY_MAX_EXCLUSIVE
+
+
 def _identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     role = os.environ.get("ROZORO_ROLE")
-    if role not in {"crew", "watchtower"} or _claude_version() != CAPABILITY:
+    if role not in {"crew", "watchtower"} or _claude_version() is None:
         return None
     expected_session = os.environ.get("ROZORO_SESSION_ID", "")
     native_session = os.environ.get("ROZORO_NATIVE_SESSION_ID", expected_session)
@@ -66,6 +81,8 @@ def _event(base: dict[str, Any], event_type: str, **fields: Any) -> dict[str, An
 
 def map_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Map a certified payload to frozen protocol events, without prose fields."""
+    if not isinstance(payload, dict):
+        return []
     name = payload.get("hook_event_name")
     if name not in EVENTS:
         return []
