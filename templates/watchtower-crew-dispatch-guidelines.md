@@ -95,10 +95,11 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Dispatch the runner itself with model `gpt-5.6-luna` and high reasoning effort.
   * Dispatch it after the normal coding, review, and test work when you want the no-mistakes pass.
   * Ask it to run the actual no-mistakes workflow. Do not substitute a normal review prompt.
-  * When invoking no-mistakes, pass the canonical model ID explicitly through its model flag or local config. Set reasoning effort separately.
-  * Prefer model `claude-sonnet-5` with high reasoning effort for the no-mistakes workflow.
-  * If `claude-sonnet-5` is usage-limited and waiting for cooldown, use model `gpt-5.6-luna` with high reasoning effort instead. Do not hold the task just to wait for Sonnet capacity.
-  * Do not invent or substitute another Luna or Sonnet model ID.
+  * Invoke no-mistakes through its configured default execution-target policy. Normal callers must not select a provider, harness, config directory, model, or fallback themselves.
+  * Let the configured policy try only its declared targets in order. Do not hold the task for a preferred target's cooldown when another configured target is available.
+  * If every configured target is unavailable, report that condition. Do not silently choose an undeclared target.
+  * Explicit target or model overrides are for debugging or controlled experiments, not normal crew dispatch.
+  * Keep harness identity, target/profile name, model ID, and reasoning effort separate. Do not derive model IDs from human-readable labels.
   * It should look for things the coder, reviewer, and tester may all have missed.
   * This includes failure paths, concurrency, retries, idempotency, cleanup, corrupted state, security boundaries, regressions, and bad assumptions.
   * Ask for a report that includes:
@@ -109,7 +110,8 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
     * affected contract, invariant, or use case;
     * whether the problem is local or needs re-planning;
     * remaining uncertainty;
-    * model ID and reasoning effort used by the no-mistakes workflow;
+    * execution target/profile, harness, model ID, and reasoning effort actually used by the no-mistakes workflow;
+    * fallback position and reason, when fallback occurred;
     * `attempt_count`;
     * `caused_by`.
 
