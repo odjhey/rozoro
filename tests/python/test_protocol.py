@@ -191,6 +191,27 @@ class StrictValidationTest(unittest.TestCase):
         valid_result = {**result, "reports": [valid]}
         self.assertIs(validate(valid_result), valid_result)
 
+    def test_reconcile_pending_scope_is_optional_bounded_enum(self) -> None:
+        base = {"v": 1, "type": "reconcile.pending", "request_id": "req-1", "driver_id": "driver-1"}
+        self.assertIs(validate(base), base)  # absent scope = delta default
+        for scope in ("delta", "full"):
+            message = {**base, "scope": scope}
+            self.assertIs(validate(message), message)
+        self.assert_code("invalid-field", {**base, "scope": "partial"})
+        self.assert_code("invalid-field", {**base, "scope": 1})
+
+    def test_reconcile_pending_result_delta_fields_are_optional_nonnegative(self) -> None:
+        base = {"v": 1, "type": "reconcile.pending.result", "request_id": "req-1",
+                "through": 5, "reports": []}
+        self.assertIs(validate(base), base)  # additive fields may be absent
+        annotated = {**base, "since": 2, "unchanged_count": 168}
+        self.assertIs(validate(annotated), annotated)
+        zeroed = {**base, "since": 0, "unchanged_count": 0}
+        self.assertIs(validate(zeroed), zeroed)
+        self.assert_code("invalid-field", {**base, "since": -1})
+        self.assert_code("invalid-field", {**base, "unchanged_count": -1})
+        self.assert_code("invalid-field", {**base, "unchanged_count": "many"})
+
     def test_frame_error_covers_every_uncorrelatable_failure_without_id(self) -> None:
         codes = ("invalid-json", "frame-too-large", "invalid-message", "invalid-version",
                  "invalid-event", "invalid-field", "unsupported-type")

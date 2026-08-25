@@ -505,9 +505,11 @@ class MonitorServer:
                                  "authority": self._store.driver_authority(message["driver_id"])}
                     elif message["type"] == "reconcile.pending":
                         assert self._store is not None
-                        through, reports = self._store.reconcile_delivered(message["driver_id"])
+                        through, reports, since, unchanged = self._store.reconcile_delivered(
+                            message["driver_id"], full=message.get("scope") == "full")
                         reply = {"v": 1, "type": "reconcile.pending.result",
-                                 "request_id": message["request_id"], "through": through, "reports": reports}
+                                 "request_id": message["request_id"], "through": through, "reports": reports,
+                                 "since": since, "unchanged_count": unchanged}
                     elif message["type"] == "reconcile.ack":
                         assert self._store is not None
                         self._store.ack_delivered(message["driver_id"], message["through"])

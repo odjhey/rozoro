@@ -184,7 +184,7 @@ def compat(report):
       "snapshot_folder_present":p.get("folder_present")}
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true")
+    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true"); ap.add_argument("--full",action="store_true")
     a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME",str(Path.home()/".rozoro"))
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
@@ -217,16 +217,29 @@ def main():
             authority=flow.request(req("driver.authority",driver_id=a.driver))["authority"]
             if authority!="active": raise BridgeError(f"driver {a.driver} has {authority} daemon authority; reconcile through explicit fallback")
             boundary.require_clean(a.driver); boundary.activate(a.driver)
-            snap=flow.request(req("reconcile.pending",driver_id=a.driver)); through=snap["through"]
+            # Omit `scope` by default so a new client degrades to today's behavior
+            # (full snapshot) against an old daemon; only `--full` sends a field.
+            pending=req("reconcile.pending",driver_id=a.driver)
+            if a.full: pending["scope"]="full"
+            snap=flow.request(pending); through=snap["through"]
             projected=[compat(r) for r in snap["reports"]]
             vanished=[r["id"] for r in projected if r["snapshot_folder_present"] is False]
             reports=[r for r in projected if r["snapshot_folder_present"] is True]
+            # Surface action-required tasks first; the format is otherwise unchanged.
+            reports.sort(key=lambda r: not r["action_required"])
+            since=snap.get("since"); unchanged=snap.get("unchanged_count")
             out={"driver":a.driver,"acknowledged_generation":through,"reports":reports,"vanished":vanished,"source":"event-bus"}
+            if since is not None: out["changed_since_generation"]=since
+            if unchanged is not None: out["unchanged_count"]=unchanged
+            out["scope"]="full" if a.full else "delta"
             if a.json: print(json.dumps(out,sort_keys=True,separators=(",",":")))
             else:
               print(f"reconciled driver {a.driver} through generation {through}")
               for r in reports: print(f"  {r['id']}: runtime={r['runtime_status']} task={r['task_status']} turn={r['turn_report_status']} action={r['action_reason'] or 'none'}")
               for task_id in vanished: print(f"  {task_id} : vanished (no task folder)")
+              if since is not None and unchanged is not None and not a.full:
+                changed=len(reports)+len(vanished)
+                print(f"  {changed} changed since generation {since}; {unchanged} unchanged tracked tasks not shown (--full for complete snapshot)")
             sys.stdout.flush()
             if through>0 and snap["reports"]: flow.request(req("reconcile.ack",driver_id=a.driver,through=through))
         finally: flow.close()

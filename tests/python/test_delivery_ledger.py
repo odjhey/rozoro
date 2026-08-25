@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.rozoro_monitor.store import EventStore
+from lib.rozoro_monitor.store import ActionableChange, EventStore
 
 
 def event(number):
@@ -72,6 +72,49 @@ class DeliveryLedgerTests(unittest.TestCase):
             self.assertEqual(tuple(store._connection.execute(
                 "SELECT latest_generation,delivered_generation,acked_generation FROM watchtower_deliveries"
             ).fetchone()), (2, 1, 0))
+
+    def test_reconcile_delivered_returns_changed_task_delta(self):
+        def reducer(task_id, availability):
+            def apply(tx, item, durable_seq):
+                tx.upsert_task_projection(task_id, durable_seq, availability=availability,
+                                          projection={"availability": availability})
+            return apply
+        def actionable(task_id, reason):
+            return lambda tx, item, durable_seq, reduced: ActionableChange(task_id, reason)
+        with self.open_ready() as store:
+            # g1 changes task-1, g2 changes task-2.
+            store.accept_event(event(1), reducer=reducer("task-1", "quiescent"),
+                               actionable=actionable("task-1", "quiescent"))
+            store.accept_event(event(2), reducer=reducer("task-2", "blocked"),
+                               actionable=actionable("task-2", "blocked"))
+            store.offer_notification("driver-1", "watch-1", self.epoch)
+            store.confirm_delivery("driver-1", "watch-1", self.epoch, 2)
+            # First reconcile spans (0, 2]: both tasks, nothing suppressed.
+            delivered, reports, since, unchanged = store.reconcile_delivered("driver-1")
+            self.assertEqual(delivered, 2)
+            self.assertEqual(sorted(r["task_id"] for r in reports), ["task-1", "task-2"])
+            self.assertEqual((since, unchanged), (0, 0))
+            store.ack_delivered("driver-1", 2)
+
+            # g3 changes only task-1; task-2 is unchanged and must not reappear.
+            store.accept_event(event(3), reducer=reducer("task-1", "blocked"),
+                               actionable=actionable("task-1", "blocked"))
+            store.offer_notification("driver-1", "watch-1", self.epoch)
+            store.confirm_delivery("driver-1", "watch-1", self.epoch, 3)
+            delivered, reports, since, unchanged = store.reconcile_delivered("driver-1")
+            self.assertEqual(delivered, 3)
+            # delivered (3) > acked (2) so the delta is provably non-empty.
+            self.assertEqual([r["task_id"] for r in reports], ["task-1"])
+            self.assertEqual((since, unchanged), (2, 1))
+
+            # full=True recovers the complete latest-per-task snapshot.
+            _, full_reports, full_since, full_unchanged = store.reconcile_delivered("driver-1", full=True)
+            self.assertEqual(sorted(r["task_id"] for r in full_reports), ["task-1", "task-2"])
+            self.assertEqual((full_since, full_unchanged), (2, 0))
+            # Every generation re-freezes all projections, so the full snapshot
+            # carries each task's latest frozen generation (the delivered cursor).
+            self.assertEqual({r["task_id"]: r["generation"] for r in full_reports},
+                             {"task-1": 3, "task-2": 3})
 
     def test_ack_n_cannot_consume_n_plus_one_and_duplicates_are_idempotent(self):
         with self.open_ready() as store:

@@ -188,7 +188,7 @@ List known tasks:
 | `./bin/rozoro send` | send DATA text to the coding agent |
 | `./bin/rozoro control` | interrupt, cancel, send a key, stop, or restart the runtime |
 | `./bin/rozoro resume` | reopen the exact linked conversation where supported |
-| `./bin/rozoro reconcile` | reconcile the current wake generation |
+| `./bin/rozoro reconcile` | reconcile the changed-task delta since last ACK (`--full` for the complete snapshot) |
 | `./bin/rozoro ack` | advance task open-item acknowledgement |
 | `./bin/rozoro list` | list known tasks and live state |
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |

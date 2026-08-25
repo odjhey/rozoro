@@ -1203,13 +1203,24 @@ class EventStore:
             )
             return True
 
-    def _snapshot_rows(self, connection: sqlite3.Connection, through: int) -> list[dict[str, Any]]:
+    def _snapshot_rows(self, connection: sqlite3.Connection, through: int,
+                       changed_after: int | None = None) -> list[dict[str, Any]]:
+        # `changed_after` restricts the latest-per-task snapshot to tasks that a
+        # generation in (changed_after, through] actually touched. `bump_actionable`
+        # records exactly one `pending_generation_tasks` row per generation, so this
+        # is the true changed-task delta for that window (not a full-state dump).
+        params: list[Any] = [through]
+        delta_clause = ""
+        if changed_after is not None:
+            delta_clause = (" WHERE s.task_id IN (SELECT task_id FROM pending_generation_tasks"
+                            " WHERE generation>? AND generation<=?)")
+            params += [changed_after, through]
         rows = connection.execute(
-            """SELECT s.* FROM generation_task_snapshots s
+            f"""SELECT s.* FROM generation_task_snapshots s
                JOIN (SELECT task_id,MAX(generation) generation FROM generation_task_snapshots
                      WHERE generation<=? GROUP BY task_id) latest
-                 ON latest.task_id=s.task_id AND latest.generation=s.generation
-               ORDER BY s.generation,s.task_id""", (through,)
+                 ON latest.task_id=s.task_id AND latest.generation=s.generation{delta_clause}
+               ORDER BY s.generation,s.task_id""", params
         ).fetchall()
         if any(not int(row["compat_complete"]) for row in rows):
             raise ValueError("generation snapshot lacks immutable compatibility fields")
@@ -1230,8 +1241,18 @@ class EventStore:
                 raise ValueError("unavailable generation")
             return self._snapshot_rows(self._connection, through)
 
-    def reconcile_delivered(self, driver_id: str) -> tuple[int, list[dict[str, Any]]]:
-        """Consume only the exact confirmed delivered-but-unacked offer, without changing cursors."""
+    def reconcile_delivered(self, driver_id: str, *, full: bool = False
+                            ) -> tuple[int, list[dict[str, Any]], int, int]:
+        """Consume only the exact confirmed delivered-but-unacked offer, without changing cursors.
+
+        Returns ``(delivered, reports, since, unchanged_count)``. By default the
+        reports are the changed-task delta of the ``(acked, delivered]`` window;
+        ``full=True`` returns the complete latest-per-task snapshot through
+        ``delivered``. ``since`` is the ACK cursor the delta starts after;
+        ``unchanged_count`` is how many tracked tasks were suppressed from the delta.
+        Because ``delivered > acked`` implies a ``pending_generation_tasks`` row at
+        ``delivered`` itself, the delta is never empty when there is anything to
+        deliver, so a client's non-empty-reports ACK condition cannot stall."""
         with self._lock, self._immediate() as connection:
             ledger = connection.execute(
                 "SELECT delivered_generation,acked_generation FROM watchtower_deliveries WHERE driver_id=?",
@@ -1244,7 +1265,7 @@ class EventStore:
                 raise ValueError("unknown driver")
             delivered, acked = map(int, ledger)
             if delivered <= acked:
-                return acked, []
+                return acked, [], acked, 0
             confirmed = connection.execute(
                 "SELECT 1 FROM delivery_offers WHERE driver_id=? AND generation=? AND confirmed=1",
                 (driver_id, delivered),
@@ -1266,7 +1287,13 @@ class EventStore:
             ).fetchone()
             if older is not None:
                 raise ValueError("an older valid delivery offer remains unconfirmed")
-            return delivered, self._snapshot_rows(connection, delivered)
+            reports = self._snapshot_rows(connection, delivered,
+                                          changed_after=None if full else acked)
+            total = connection.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM generation_task_snapshots WHERE generation<=?",
+                (delivered,),
+            ).fetchone()[0]
+            return delivered, reports, acked, int(total) - len(reports)
 
     def ack_delivered(self, driver_id: str, through: int) -> bool:
         """ACK an exact confirmed delivered cursor without registering or retiring offers."""

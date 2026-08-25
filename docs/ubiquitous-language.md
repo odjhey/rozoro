@@ -24,7 +24,7 @@ Use these terms consistently in code, docs, prompts, issues, and reviews. Prefer
 | **Generation** | Immutable delivery batch used to coalesce and reconcile wake work. | attention item, task, open item |
 | **Generation membership** | Tasks/actionable reasons captured in one generation. | independent per-item handling |
 | **Delivery offer** | One generation offered to a specific registered watchtower epoch. | successful handling |
-| **Reconcile** | Read the exact durable generation snapshot/current facts and advance generation ACK according to protocol. | task resolution |
+| **Reconcile** | Read the changed-since-last-ACK snapshot (full on request) and advance generation ACK according to protocol. | task resolution |
 | **Generation ACK** | Durable acknowledgement that a delivery generation was reconciled. | task ACK, attention-item handled state |
 | **Task open item** | Unresolved report/handoff item belonging to a task. | wake generation |
 | **Task ACK** | Resolution/acknowledgement of surfaced task open-item state. | generation ACK |
