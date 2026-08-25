@@ -28,6 +28,19 @@ instructions available in that crew's context.
 | `no-mistakes-branch-recovery` | No-Mistakes Runner | Dispatch/resume the dedicated runner; pass or expose the recovery skill. Watchtower judges the returned custody report. |
 | `rozoro-authoring` | Coder working on Rozoro | Make the repository-specific authoring rules available to the coder. |
 
+## Routing rule
+
+Use `metadata.execution-owner` and `metadata.watchtower-action` as the quick
+machine-readable distinction:
+
+- `execution-owner: watchtower` + `watchtower-action: invoke-directly` means the
+  Watchtower performs that skill itself.
+- `execution-owner: crew` + `watchtower-action: dispatch-and-pass` means the
+  Watchtower must dispatch the named crew role and make the skill instructions
+  available to that crew.
+
+The `crew-role` metadata names the intended role for crew-facing skills.
+
 ## Passing crew-facing skills
 
 A crew-facing skill is not considered applied merely because the Watchtower read
