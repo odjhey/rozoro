@@ -1,67 +1,61 @@
 # Skill ownership and routing
 
-Rozoro skills fall into two execution classes. Keep the boundary explicit so the
-Watchtower does not accidentally perform repository work that belongs to crew,
-and so crew-facing instructions are not lost at dispatch time.
+These skills are loaded in the **Watchtower context**. Rozoro does not currently
+pass skill objects or skill references into crew sessions.
 
-## Watchtower-owned skills
+There are two semantic categories. The distinction is documented here and in each
+skill's `description` and body; do not rely on custom frontmatter metadata for
+routing because the supported harnesses do not provide a portable contract for
+our own ownership keys.
 
-The Watchtower executes these itself as part of orchestration, evidence
-reconciliation, routing, and durable decision making.
+## Watchtower action skills
 
-| Skill or prompt | Owner | Watchtower action |
+Watchtower uses these directly while orchestrating, reconciling evidence, routing,
+or observing work.
+
+| Skill or prompt | When Watchtower uses it |
+| --- | --- |
+| `delivery-evidence` | Reconcile exact-head evidence, decide what runs next, and record bounded unattended decisions. |
+| `attempt-budget` | Decide whether another coder attempt is allowed and when exhausted work should be deferred/revisited. |
+| `quick-crew-routing` | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
+| `no-mistakes-observer-pane` | Open/close an untracked observer pane around an active no-mistakes run. |
+| `prompts/watchtower-model-selection.md` | Retrieve current standard role/model/effort and no-mistakes fallback policy before dispatch. |
+
+These are Watchtower actions. They are not instructions to paste wholesale into a
+crew brief.
+
+## Crew-briefing guidelines
+
+These skills tell Watchtower **what to put in the brief when spawning a specific
+task-kind crew**. Loading one does not mean Watchtower should perform that crew's
+repository work.
+
+| Briefing guideline | Task-kind crew | Watchtower action |
 | --- | --- | --- |
-| `delivery-evidence` | Watchtower | Invoke directly to reconcile exact-head evidence, decide what runs next, and record bounded decisions. |
-| `attempt-budget` | Watchtower | Derive coder-attempt count from durable turns, enforce no attempt 11, and defer exhausted lineages while other runnable work exists. |
-| `quick-crew-routing` | Watchtower | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
-| `no-mistakes-observer-pane` | Watchtower | Create/close an untracked observer pane around an active no-mistakes run without creating another crew or taking custody. |
-| `prompts/watchtower-model-selection.md` | Watchtower | Read before selecting the standard crew role/model/effort. It is a retrieval prompt, not crew instructions. |
+| `task-decomposer` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
+| `independent-review` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
+| `adversarial-testing` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
+| `no-mistakes-branch-recovery` | No-Mistakes Runner | Render the supported recovery/custody contract and exact branch/run evidence into the runner brief, then dispatch/resume. |
+| `rozoro-authoring` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
+| `quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
+| `quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
 
-## Crew-facing skills
+### Briefing rule
 
-The Watchtower does **not** execute these as repository work. It recognizes the
-need for the role, reads the relevant skill, includes the applicable instructions
-in the crew brief, and dispatches the appropriate crew.
+A crew-briefing guideline is applied only when its relevant instructions are
+included in the task brief that the crew actually receives.
 
-| Skill | Crew role | Watchtower action |
-| --- | --- | --- |
-| `task-decomposer` | Task Decomposer / Replanner | Dispatch a planning crew with the skill instructions included in its brief. Do not plan the repository task in Watchtower. |
-| `independent-review` | Reviewer | Dispatch a fresh reviewer with the review instructions and bounded task/evidence in its brief. |
-| `adversarial-testing` | Tester | Dispatch a tester with the testing instructions and bounded task/evidence in its brief. |
-| `no-mistakes-branch-recovery` | No-Mistakes Runner | Dispatch/resume the dedicated runner with the recovery instructions in its brief. Watchtower judges the returned custody report. |
-| `rozoro-authoring` | Coder working on Rozoro | Include the repository-specific authoring instructions in the coder brief. |
-| `quick-scout` | Quick Scout | Include the narrow read-only contract and escalation marker in a Spark/low scout brief. |
-| `quick-coder` | Quick Coder | Include the one-attempt mechanical implementation contract and escalation marker in a Spark/low coder brief. |
+Keep the brief focused. Include:
 
-## Routing rule
+- the task-kind/role contract;
+- constraints that matter to this task;
+- task-specific source pointers and evidence;
+- acceptance criteria or exact-head identity when relevant; and
+- the required report/escalation shape.
 
-Use `metadata.execution-owner` and `metadata.watchtower-action` as the quick
-machine-readable distinction:
-
-- `execution-owner: watchtower` + `watchtower-action: invoke-directly` means the
-  Watchtower performs that skill itself.
-- `execution-owner: crew` + `watchtower-action: dispatch-and-brief` means the
-  Watchtower must dispatch the named crew role and include the relevant skill
-  instructions in that crew's brief.
-
-The `crew-role` metadata names the intended role for crew-facing skills.
-
-## Briefing crew-facing skills
-
-Rozoro does not currently pass a skill object or skill reference into a crew
-session. Crew-facing skills are therefore **Watchtower briefing sources**.
-
-A crew-facing skill is not considered applied merely because the Watchtower read
-it. Before dispatch, the Watchtower must incorporate the applicable instructions
-into the task brief that the crew actually receives.
-
-Keep the brief focused: include the role contract, important constraints,
-required report shape, and task-specific inputs. Do not paste unrelated policy or
-turn the brief into a second copy of the whole skill library.
-
-A future mechanism may support first-class skill delivery to crews. Until that
-exists, do not claim repo-local skill discovery, presets, system rules, or a skill
-name/reference alone as a supported way to transmit these instructions.
+Do not paste unrelated policy or the entire skill library. Do not assume a skill
+name, repo-local skill discovery, preset, system rule, or custom frontmatter field
+is transmitted to a crew by Rozoro today.
 
 ## Model routing
 
@@ -88,9 +82,11 @@ it.
 
 ## Boundary rule
 
-**Watchtower decides who should work and what evidence is sufficient. Crew does
-repository planning, implementation, review, testing, and pipeline/recovery work.**
+**Watchtower chooses the task kind, prepares the brief, dispatches, reconciles
+reports, and decides what runs next. Crew performs repository planning,
+implementation, review, testing, and pipeline/recovery work described by its
+brief.**
 
-When a crew report exposes a new routing decision, the Watchtower consumes the
-report, records the decision, and dispatches the next role. Do not silently change
-the current crew's role just to avoid another dispatch.
+When a crew report exposes a new routing decision, Watchtower consumes the report,
+records the decision, and dispatches the next task-kind crew. Do not silently
+change the current crew's role just to avoid another dispatch.
