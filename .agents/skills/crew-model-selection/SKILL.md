@@ -26,8 +26,10 @@ answer from remembered defaults.
 4. If the selected task kind is **No-Mistakes Runner**, read
    `.agents/skills/no-mistakes-harness-selection/SKILL.md` and use it to select
    the runner harness/model/account target. When no-mistakes model selection is
-   `auto`, the selected runner harness/model is the workflow model; do not mutate
-   global no-mistakes model configuration merely to select it.
+   `auto`, the selected runner harness/model **is** the workflow target. There is
+   no separate outer-runner model followed by a different inner no-mistakes model.
+   Do not spawn Pi merely because an older role table called the runner
+   `gpt-5.6-luna` and then instruct that Pi runner to use Claude inside.
 5. If the selected task kind has a `brief-*` guideline, load it and render the
    applicable role contract, constraints, task-specific evidence, and report
    shape into the crew brief before dispatch.
@@ -52,8 +54,13 @@ repository's own rules unless another applicable briefing guideline exists.
 - Current No-Mistakes target/fallback order wins over older snapshots or
   machine-local policy copies.
 - In No-Mistakes `auto` mode, target selection is performed by choosing the
-  runner's actual invoking harness/model/account context. Global no-mistakes
-  model save/override/restore is not part of the normal selection path.
+  runner's actual invoking harness/model/account context. The runner selection and
+  the no-mistakes workflow selection are one decision, not two layers.
+- For the first available Claude target, dispatch the No-Mistakes Runner itself as
+  Claude Sonnet. Pi `gpt-5.6-luna`/high is the configured later fallback, not a
+  mandatory outer wrapper around a Claude workflow.
+- Global no-mistakes model save/override/restore is not part of the normal
+  `auto` selection path.
 - Use canonical model IDs exactly as written. Do not invent shorthand model
   names.
 - Standard crew is the default. Quick Crew is an explicit bounded fast path only.
