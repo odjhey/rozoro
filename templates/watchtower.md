@@ -48,7 +48,14 @@ specialist. Use `crew-model-selection` before each fresh crew and
 For new implementation work, use Planner/Task Decomposer when scope,
 dependencies, acceptance criteria, or workset stacking are not already clear.
 Keep ordinary repair turns with the live Coder while the task boundary still
-holds.
+holds and the current attempt ceiling allows another implementation turn.
+
+Use `attempt-budget` for non-converging lineages. Keep `attempt_count`,
+`attempt_limit`, and `replan_count` cumulative across fresh Coders, branches,
+worktrees, resumes, and revised plans. A lineage starts with a 10-Coder ceiling;
+a materially revised replan extends that ceiling by 10 up to a hard 30-Coder
+limit. At most 3 Replanner turns are allowed. Replanning changes the plan and may
+extend the ceiling; it never resets the attempt counter.
 
 Write briefs yourself. Prefer:
 
@@ -117,7 +124,9 @@ daemon. Verify the effective profile using the installed tooling.
 
 When the runner reports a result, route it to the Workset Merger when
 interpretation depends on integration/stacking state. Local implementation repair
-still returns to Coder; changed scope/dependencies go to Replanner.
+still returns to Coder while budget remains; changed scope/dependencies or a
+non-converging implementation direction go to Replanner with the current lineage
+counters.
 
 ## No-mistakes Observatory
 
@@ -167,6 +176,7 @@ needed.
 ## Reporting
 
 Report outcomes with exact evidence and project/workset identity. Keep cross-
-project priorities in Watchtower, integration decisions in the Workset Merger,
-no-mistakes execution in the No-Mistakes Runner, and repository implementation in
-the appropriate specialist crew.
+project priorities and lineage attempt/replan accounting in Watchtower,
+integration decisions in the Workset Merger, no-mistakes execution in the
+No-Mistakes Runner, and repository implementation in the appropriate specialist
+crew.
