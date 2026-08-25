@@ -15,12 +15,12 @@ or observing work.
 
 | Skill | When Watchtower uses it |
 | --- | --- |
-| `crew-model-selection` | Immediately before every fresh crew dispatch: choose task kind, current canonical model/effort, Quick Crew eligibility, and applicable `brief-*` guideline. |
-| `no-mistakes-harness-selection` | Before every fresh No-Mistakes Runner when no-mistakes selection is `auto`: choose the actual invoking harness/model/account target from the canonical fallback order without changing global no-mistakes model config. |
+| `crew-model-selection` | Immediately before every fresh Rozoro crew dispatch: choose task kind, current canonical model/effort, Quick Crew eligibility, and applicable `brief-*` guideline. |
+| `no-mistakes-gate` | When a clean committed candidate is ready for no-mistakes assurance: submit or reattach the external run, drive AXI gates, reconcile exact-head/custody evidence, and route findings. |
 | `delivery-evidence` | Reconcile exact-head evidence, decide what runs next, and record bounded unattended decisions. |
 | `attempt-budget` | Decide whether another coder attempt is allowed and when exhausted work should be deferred/revisited. |
 | `quick-crew-routing` | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
-| `no-mistakes-observer-pane` | For every active No-Mistakes Runner, open/close the untracked sibling observer pane when the local Herdr pane operation is supported. |
+| `no-mistakes-observer-pane` | For every active no-mistakes gate, open/close the untracked side pane beside Watchtower when the local Herdr pane operation is supported. |
 
 These are Watchtower actions. They are not instructions to paste wholesale into a
 crew brief.
@@ -36,10 +36,12 @@ Watchtower should perform that crew's repository work.
 | `brief-task-planner` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
 | `brief-reviewer` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
 | `brief-tester` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
-| `brief-no-mistakes-recovery` | No-Mistakes Runner | Render the supported recovery/custody contract and exact branch/run evidence into the runner brief, then dispatch/resume. |
 | `brief-rozoro-coder` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
 | `brief-quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
 | `brief-quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
+
+There is intentionally **no `brief-no-mistakes-*` crew role**. No-mistakes is a
+Watchtower-managed external gate, not a spawned Rozoro crew.
 
 ### Briefing rule
 
@@ -60,38 +62,36 @@ is transmitted to a crew by Rozoro today.
 
 ## Fresh-dispatch bootstrap
 
-`templates/watchtower.md` requires `crew-model-selection` before every fresh crew
-start. That skill reads the canonical standard dispatch policy and, when relevant,
-Quick Crew routing, then names the applicable `brief-*` guideline to render into
-the task body.
+`templates/watchtower.md` requires `crew-model-selection` before every fresh
+**Rozoro crew** start. That skill reads the canonical standard dispatch policy and,
+when relevant, Quick Crew routing, then names the applicable `brief-*` guideline
+to render into the task body.
 
-For a fresh No-Mistakes Runner, `crew-model-selection` also requires
-`no-mistakes-harness-selection`. In no-mistakes `auto` mode, the workflow model is
-selected by the actual harness/model/account context that invokes no-mistakes.
-Normal routing therefore does not save, override, or restore a global no-mistakes
-model just to choose the target.
+No-mistakes assurance is outside that fresh-crew path. When a committed candidate
+is ready, Watchtower invokes `no-mistakes-gate` directly. Once an active run
+exists, Watchtower invokes `no-mistakes-observer-pane` by default and attaches an
+untracked side pane beside the Watchtower pane.
 
-Once that runner has created an active no-mistakes run, Watchtower invokes
-`no-mistakes-observer-pane` by default and attaches an untracked sibling Herdr
-pane. Observer creation failure is non-blocking when the installed Herdr lacks a
-supported pane operation, but supported observation should not be silently
-skipped.
-
-A follow-up turn on the same live task is different: use `./bin/rozoro send` and
-preserve the existing crew context unless Watchtower is intentionally dispatching
-a new task-kind crew.
+A follow-up turn on the same live crew task is different: use `./bin/rozoro send`
+and preserve the existing crew context unless Watchtower is intentionally
+dispatching a new task-kind crew.
 
 ## Model routing
 
-Current standard model selection remains authoritative in
-`templates/watchtower-crew-dispatch-guidelines.md`. Current no-mistakes target
-fallback also remains authoritative there/current no-mistakes policy.
+Current standard Rozoro crew model selection remains authoritative in
+`templates/watchtower-crew-dispatch-guidelines.md`.
 
 `quick-crew-routing` is a bounded fast-path exception: eligible Quick Scout and
 Quick Coder tasks use `gpt-5.3-codex-spark` at low effort. It does not redefine
 any standard role assignment and must not be retried when the quick path fails.
 
-Do not import machine-specific harness defaults into global role policy.
+No-mistakes owns its own internal pipeline-agent/model/fallback configuration.
+Rozoro does not select those internal models by wrapping the pipeline in a crew.
+If the desired no-mistakes agent/account/fallback policy cannot be expressed by
+the installed no-mistakes version, treat that as an integration/configuration gap
+in no-mistakes rather than adding a wrapper crew.
+
+Do not import machine-specific harness defaults into global Rozoro role policy.
 
 ## Attempt budget
 
@@ -106,11 +106,11 @@ it.
 
 ## Boundary rule
 
-**Watchtower chooses the task kind, prepares the brief, dispatches, reconciles
-reports, and decides what runs next. Crew performs repository planning,
-implementation, review, testing, and pipeline/recovery work described by its
-brief.**
+**Watchtower chooses task kinds, prepares crew briefs, dispatches crews, drives
+external gates, reconciles reports/evidence, and decides what runs next. Crew
+performs repository planning, implementation, review, and testing described by its
+brief. No-mistakes performs its own pipeline work under its own custody.**
 
-When a crew report exposes a new routing decision, Watchtower consumes the report,
-records the decision, and dispatches the next task-kind crew. Do not silently
-change the current crew's role just to avoid another dispatch.
+When a crew report or no-mistakes run exposes a new routing decision, Watchtower
+records the decision and sends work to the appropriate existing or fresh crew. Do
+not create an extra crew merely to proxy a tool that already owns its pipeline.
