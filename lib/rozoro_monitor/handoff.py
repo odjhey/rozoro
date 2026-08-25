@@ -34,6 +34,12 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
         text = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
+    return parse_text(text, cursor(ack_v2), cursor(ack_legacy))
+
+
+def parse_text(text: str, ack_v2: int | str | None = None,
+               ack_legacy: int | str | None = None) -> dict[str, Any]:
+    """Parse already-captured handoff text and cursor values without reopening paths."""
     lines = text.splitlines()
     starts: list[tuple[int, int]] = []
     legacy: list[int] = []
@@ -86,8 +92,8 @@ def parse(path: str | os.PathLike[str], ack_v2: str | os.PathLike[str] | None = 
     malformed = [lines[index] for index in legacy if not TURN.match(lines[index])]
     if malformed:
         errors.append("noncanonical H2 heading(s): " + ", ".join(malformed))
-    v2 = cursor(ack_v2)
-    old = cursor(ack_legacy)
+    v2 = ack_v2
+    old = ack_legacy
     source = "none"
     acked: int | str = 0
     if v2 is not None:

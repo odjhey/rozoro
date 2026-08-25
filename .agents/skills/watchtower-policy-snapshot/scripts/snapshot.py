@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persist an immutable, owner-private snapshot of the active Watchtower prompt."""
+"""Persist an immutable, owner-private snapshot of explicit Watchtower policy."""
 from __future__ import annotations
 
 import argparse
@@ -8,12 +8,19 @@ import hashlib
 import json
 import os
 import secrets
-import stat
 import subprocess
+import sys
 from pathlib import Path
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v1"
-SOURCE = Path("templates/watchtower.md")
+SCRIPT_REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(SCRIPT_REPO))
+
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
+
+SCHEMA = "rozoro.watchtower-policy-snapshot/v2"
+SOURCE = "templates/watchtower.md"
+PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
+CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 
 
 def utc_now(value: str | None) -> dt.datetime:
@@ -29,56 +36,47 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def ensure_private_dir(path: Path) -> None:
-    if path.is_symlink():
-        raise SystemExit(f"refusing symlink artifact directory: {path}")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.stat(follow_symlinks=False)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
-        raise SystemExit(f"artifact directory is not an owned directory: {path}")
-    path.chmod(0o700)
+def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
+    parts = relative.split("/")
+    current = repo
+    opened: list[SafeDirectory] = []
+    try:
+        for component in parts[:-1]:
+            current = current.open_child(component, require_owner=True)
+            opened.append(current)
+        state, data = current.read_regular(parts[-1])
+        if state != "regular" or data is None:
+            raise UnsafePath(f"required repository source {relative} is {state}")
+        return data
+    finally:
+        for directory in reversed(opened):
+            directory.close()
 
 
-def new_run_dir(root: Path, category: str, now: dt.datetime) -> tuple[Path, str]:
-    ensure_private_dir(root)
-    category_dir = root / category
-    date_dir = category_dir / now.strftime("%Y-%m-%d")
-    ensure_private_dir(category_dir)
-    ensure_private_dir(date_dir)
-    stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
-    for _ in range(20):
-        run_id = f"{stamp}-{secrets.token_hex(4)}"
-        path = date_dir / run_id
-        try:
-            path.mkdir(mode=0o700)
-            return path, run_id
-        except FileExistsError:
-            continue
+def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:
+    with root.open_or_create_private_child("watchtower-policy-snapshots") as category:
+        with category.open_or_create_private_child(now.strftime("%Y-%m-%d")) as date_dir:
+            stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
+            for _ in range(20):
+                run_id = f"{stamp}-{secrets.token_hex(4)}"
+                try:
+                    return date_dir.open_or_create_private_child(run_id, exclusive=True), run_id
+                except FileExistsError:
+                    continue
     raise SystemExit("could not reserve a unique artifact directory")
 
 
-def write_private(path: Path, data: bytes) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
+def git_value(repo: Path, *args: str, input_bytes: bytes | None = None) -> str | None:
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def git_value(repo: Path, *args: str) -> str | None:
-    try:
-        return subprocess.run(
+        result = subprocess.run(
             ["git", "-C", str(repo), *args],
+            input=input_bytes,
             check=True,
             capture_output=True,
-            text=True,
             timeout=10,
-        ).stdout.strip() or None
-    except (OSError, subprocess.SubprocessError):
+        )
+        return result.stdout.decode("utf-8", "strict").strip() or None
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return None
 
 
@@ -89,31 +87,39 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo = (args.repo_root or Path(__file__).resolve().parents[4]).resolve()
-    source = repo / SOURCE
-    if source.is_symlink() or not source.is_file():
-        raise SystemExit(f"active Watchtower policy source is not a regular file: {source}")
-    source_bytes = source.read_bytes()
+    repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
+    try:
+        with SafeDirectory.open_path(repo_path, create=False, require_owner=True) as repo:
+            source_bytes = read_repo_file(repo, SOURCE)
+            pi_launcher = read_repo_file(repo, PI_LAUNCHER)
+            claude_launcher = read_repo_file(repo, CLAUDE_LAUNCHER)
+    except UnsafePath as exc:
+        raise SystemExit(str(exc)) from exc
+
+    source_marker = SOURCE.encode()
+    if source_marker not in pi_launcher:
+        raise SystemExit(f"cannot verify {SOURCE} as the explicit Pi Watchtower policy source")
+    pi_captured = True
+    claude_captured = source_marker in claude_launcher
+    applicable = ["pi"] + (["claude"] if claude_captured else [])
 
     home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    artifact_root = (args.artifact_root or home / "artifacts").expanduser()
+    artifact_root = args.artifact_root or home / "artifacts"
     now = utc_now(args.now)
     created_at = now.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    run_dir, run_id = new_run_dir(artifact_root, "watchtower-policy-snapshots", now)
 
+    commit = git_value(repo_path, "rev-parse", "HEAD")
+    tracked_blob = git_value(repo_path, "rev-parse", f"HEAD:{SOURCE}")
+    current_blob = git_value(repo_path, "hash-object", "--stdin", input_bytes=source_bytes)
     snapshot_name = "watchtower-policy.md"
-    write_private(run_dir / snapshot_name, source_bytes)
-    commit = git_value(repo, "rev-parse", "HEAD")
-    tracked_blob = git_value(repo, "rev-parse", f"HEAD:{SOURCE.as_posix()}")
-    current_blob = git_value(repo, "hash-object", "--", str(source))
     metadata = {
         "schema": SCHEMA,
         "artifact_type": "watchtower-policy-snapshot",
         "created_at": created_at,
-        "run_id": run_id,
         "source": {
-            "repository_relative_path": SOURCE.as_posix(),
-            "role": "launch-time Watchtower system prompt",
+            "repository_relative_path": SOURCE,
+            "role": "explicit Watchtower launch policy source",
+            "applies_to_harnesses": applicable,
             "sha256": digest(source_bytes),
             "bytes": len(source_bytes),
             "git_commit": commit,
@@ -121,16 +127,37 @@ def main() -> int:
             "git_blob_current": current_blob,
             "matches_git_commit": tracked_blob == current_blob if tracked_blob and current_blob else None,
         },
+        "harness_coverage": {
+            "pi": {
+                "status": "captured" if pi_captured else "not-captured",
+                "launcher": PI_LAUNCHER,
+                "launcher_sha256": digest(pi_launcher),
+            },
+            "claude": {
+                "status": "captured" if claude_captured else "no-explicit-reference-to-captured-source",
+                "launcher": CLAUDE_LAUNCHER,
+                "launcher_sha256": digest(claude_launcher),
+            },
+        },
         "files": {snapshot_name: {"sha256": digest(source_bytes), "bytes": len(source_bytes)}},
         "privacy": {
-            "included": [SOURCE.as_posix()],
-            "excluded": ["environment", "credentials", "task data", "session data", "repository paths"],
+            "included": [SOURCE, "non-content launcher hashes and coverage"],
+            "excluded": ["environment", "credentials", "task data", "session data", "absolute repository paths"],
         },
         "retention": "preserve-until-explicit-operator-deletion",
     }
-    encoded = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode()
-    write_private(run_dir / "metadata.json", encoded)
-    print(run_dir)
+
+    try:
+        with SafeDirectory.open_path(artifact_root, create=True, require_owner=True, private=True) as root:
+            run, run_id = reserve_run(root, now)
+            with run:
+                metadata["run_id"] = run_id
+                run.write_exclusive(snapshot_name, source_bytes)
+                run.write_exclusive("metadata.json", (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode())
+                output = run.path
+    except (OSError, UnsafePath) as exc:
+        raise SystemExit(f"cannot create safe artifact: {exc}") from exc
+    print(output)
     return 0
 
 

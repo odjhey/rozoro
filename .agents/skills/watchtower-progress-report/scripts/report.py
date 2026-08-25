@@ -10,12 +10,19 @@ import json
 import os
 import re
 import secrets
-import stat
+import sys
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "rozoro.watchtower-progress-report/v1"
+SCRIPT_REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(SCRIPT_REPO))
+
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
+
+SCHEMA = "rozoro.watchtower-progress-report/v2"
 SAFE_TASK = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
+BAD_AUXILIARY = {"missing", "unsafe", "unreadable", "malformed"}
+NONE = {"", "none", "n/a", "na", "-"}
 
 
 def utc_now(value: str | None) -> dt.datetime:
@@ -31,64 +38,27 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def ensure_private_dir(path: Path) -> None:
-    if path.is_symlink():
-        raise SystemExit(f"refusing symlink artifact directory: {path}")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.stat(follow_symlinks=False)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
-        raise SystemExit(f"artifact directory is not an owned directory: {path}")
-    path.chmod(0o700)
-
-
-def new_run_dir(root: Path, now: dt.datetime) -> tuple[Path, str]:
-    ensure_private_dir(root)
-    category = root / "watchtower-progress-reports"
-    date_dir = category / now.strftime("%Y-%m-%d")
-    ensure_private_dir(category)
-    ensure_private_dir(date_dir)
-    stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
-    for _ in range(20):
-        run_id = f"{stamp}-{secrets.token_hex(4)}"
-        path = date_dir / run_id
-        try:
-            path.mkdir(mode=0o700)
-            return path, run_id
-        except FileExistsError:
-            continue
+def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:
+    with root.open_or_create_private_child("watchtower-progress-reports") as category:
+        with category.open_or_create_private_child(now.strftime("%Y-%m-%d")) as date_dir:
+            stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
+            for _ in range(20):
+                run_id = f"{stamp}-{secrets.token_hex(4)}"
+                try:
+                    return date_dir.open_or_create_private_child(run_id, exclusive=True), run_id
+                except FileExistsError:
+                    continue
     raise SystemExit("could not reserve a unique artifact directory")
 
 
-def write_private(path: Path, data: bytes) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
+def json_shape(task: SafeDirectory, name: str) -> str:
+    state, data = task.read_regular(name)
+    if state != "regular" or data is None:
+        return state
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def json_shape(path: Path) -> str:
-    if not path.exists():
-        return "missing"
-    if path.is_symlink() or not path.is_file():
-        return "unsafe"
-    try:
-        return "valid" if isinstance(json.loads(path.read_text(encoding="utf-8")), dict) else "malformed"
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "valid" if isinstance(json.loads(data.decode("utf-8")), dict) else "malformed"
+    except (UnicodeError, json.JSONDecodeError):
         return "malformed"
-
-
-def regular_bytes(path: Path) -> bytes | None:
-    if path.is_symlink() or not path.is_file():
-        return None
-    try:
-        return path.read_bytes()
-    except OSError:
-        return None
 
 
 def load_handoff_parser(repo: Path):
@@ -98,39 +68,52 @@ def load_handoff_parser(repo: Path):
         raise SystemExit(f"cannot load canonical handoff parser: {location}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if not hasattr(module, "parse_text"):
+        raise SystemExit("canonical handoff parser lacks captured-text support")
     return module
 
 
-def inspect_task(task: Path, parser_module: Any) -> dict[str, Any]:
-    handoff = task / "handoff.md"
-    handoff_bytes = regular_bytes(handoff)
-    ack_v2 = task / ".acked-blocks-v2"
-    ack_legacy = task / ".acked-blocks"
-    ack_states = {
-        "v2": "missing" if not ack_v2.exists() else ("regular" if regular_bytes(ack_v2) is not None else "unsafe"),
-        "legacy": "missing" if not ack_legacy.exists() else ("regular" if regular_bytes(ack_legacy) is not None else "unsafe"),
-    }
+def cursor_value(state: str, data: bytes | None) -> int | str | None:
+    if state == "missing":
+        return None
+    if state != "regular" or data is None:
+        return None
+    try:
+        value = int(data.decode("utf-8").strip())
+        if value < 0:
+            raise ValueError
+        return value
+    except (UnicodeError, ValueError):
+        return "invalid"
+
+
+def inspect_task(task_id: str, task: SafeDirectory, parser_module: Any) -> dict[str, Any]:
+    handoff_state, handoff_bytes = task.read_regular("handoff.md")
+    ack_v2_state, ack_v2_bytes = task.read_regular(".acked-blocks-v2")
+    ack_legacy_state, ack_legacy_bytes = task.read_regular(".acked-blocks")
+    ack_states = {"v2": ack_v2_state, "legacy": ack_legacy_state}
     record: dict[str, Any] = {
-        "task_id": task.name,
-        "identity_json": json_shape(task / "identity.json"),
-        "session_json": json_shape(task / "session.json"),
+        "task_id": task_id,
+        "identity_json": json_shape(task, "identity.json"),
+        "session_json": json_shape(task, "session.json"),
         "ack_cursor_files": ack_states,
         "handoff": {
-            "file_state": "regular" if handoff_bytes is not None else ("missing" if not handoff.exists() else "unsafe"),
+            "file_state": handoff_state,
             "sha256": digest(handoff_bytes) if handoff_bytes is not None else None,
             "bytes": len(handoff_bytes) if handoff_bytes is not None else None,
         },
         "classifications": [],
     }
-    if handoff_bytes is None:
+    if handoff_state != "regular" or handoff_bytes is None:
         record["classifications"].append("unknown-or-malformed")
         return record
     try:
-        if "unsafe" in ack_states.values():
-            parsed = parser_module.parse(handoff)
-        else:
-            parsed = parser_module.parse_task_report(task)
-    except (OSError, UnicodeError, ValueError):
+        parsed = parser_module.parse_text(
+            handoff_bytes.decode("utf-8"),
+            cursor_value(ack_v2_state, ack_v2_bytes),
+            cursor_value(ack_legacy_state, ack_legacy_bytes),
+        )
+    except (UnicodeError, ValueError):
         record["handoff"].update({"parse_state": "unreadable", "protocol_error_count": 1})
         record["classifications"].append("unknown-or-malformed")
         return record
@@ -140,7 +123,7 @@ def inspect_task(task: Path, parser_module: Any) -> dict[str, Any]:
         {
             "turn": item["turn"],
             "verdict": item["verdict"].lower(),
-            "operator_input_requested": bool(item["inputs_needed"].strip().lower() not in {"", "none", "n/a", "na", "-"}),
+            "operator_input_requested": item["inputs_needed"].strip().lower() not in NONE,
         }
         for item in parsed["open_items"]
     ]
@@ -156,9 +139,11 @@ def inspect_task(task: Path, parser_module: Any) -> dict[str, Any]:
             "latest": None
             if latest is None
             else {
+                "index": latest["index"],
                 "turn": latest["turn"],
                 "verdict": latest["fields"].get("verdict", "").lower(),
                 "valid": latest["valid"],
+                "acknowledged": latest["index"] <= parsed["acked_through"],
             },
         }
     )
@@ -166,13 +151,17 @@ def inspect_task(task: Path, parser_module: Any) -> dict[str, Any]:
     evidence_problem = (
         bool(parsed["protocol_errors"])
         or latest is None
-        or record["identity_json"] in {"unsafe", "malformed"}
-        or record["session_json"] in {"unsafe", "malformed"}
-        or "unsafe" in ack_states.values()
+        or record["identity_json"] in BAD_AUXILIARY
+        or record["session_json"] in BAD_AUXILIARY
+        or any(state in {"unsafe", "unreadable"} for state in ack_states.values())
     )
     if evidence_problem:
         record["classifications"].append("unknown-or-malformed")
-    if latest is not None and latest["valid"] and not parsed["protocol_errors"]:
+
+    latest_unacknowledged = latest is not None and latest["index"] > parsed["acked_through"]
+    if latest is not None and not latest_unacknowledged and not evidence_problem:
+        record["classifications"].append("acknowledged-report-no-current-outcome")
+    if latest is not None and latest["valid"] and latest_unacknowledged and not evidence_problem:
         verdict = latest["fields"].get("verdict", "").lower()
         if verdict == "waiting":
             record["classifications"].append("reported-active-runtime-unverified")
@@ -182,7 +171,7 @@ def inspect_task(task: Path, parser_module: Any) -> dict[str, Any]:
             record["classifications"].append("human-decision-needed")
         elif verdict == "done":
             record["classifications"].append("reported-done-unverified")
-    if not parsed["protocol_errors"]:
+    if not evidence_problem:
         if any(item["operator_input_requested"] or item["verdict"] == "needs-action" for item in open_items):
             if "human-decision-needed" not in record["classifications"]:
                 record["classifications"].append("human-decision-needed")
@@ -207,17 +196,18 @@ def bullet_tasks(records: list[dict[str, Any]], classification: str, empty: str)
     return lines
 
 
-def render_report(created_at: str, records: list[dict[str, Any]], skipped: int) -> str:
+def render_report(created_at: str, records: list[dict[str, Any]], skipped: int, source: dict[str, Any]) -> str:
     canonical = sum(record["handoff"].get("parse_state") == "canonical" for record in records)
     lines = [
         "# Watchtower progress report",
         "",
         f"Generated: `{created_at}`",
         "",
-        "This is a point-in-time, best-effort reading of durable task folders. It does not read live runtime state, repository/PR/CI state, prompts, transcripts, environment variables, or session contents. Free-form handoff text is deliberately excluded.",
+        "This is a point-in-time reading of securely captured durable task files. It does not read live runtime state, repository/PR/CI state, prompts, transcripts, environment variables, or session contents. Free-form handoff text is deliberately excluded.",
         "",
         "## Verified durable facts",
         "",
+        f"- Source selection: `{source['selection']}`; root identifier: `{source['root_id']}`.",
         f"- Read {len(records)} safe task director{'y' if len(records) == 1 else 'ies'}; skipped {skipped} unsafe or invalid task entries.",
         f"- {canonical} task handoff(s) passed the canonical parser without protocol errors.",
         "- No task outcome is marked verified or operator-accepted by the evidence boundary used here. A `done` report is not acceptance.",
@@ -238,6 +228,12 @@ def render_report(created_at: str, records: list[dict[str, Any]], skipped: int) 
         "",
         *bullet_tasks(records, "human-decision-needed", "None found in canonical unacknowledged evidence."),
         "",
+        "## Acknowledged reports (not current outcomes)",
+        "",
+        "Task acknowledgement means the report/open item was handled; it does not establish correctness or operator acceptance.",
+        "",
+        *bullet_tasks(records, "acknowledged-report-no-current-outcome", "None found."),
+        "",
         "## Reported done (unverified and unaccepted)",
         "",
         *bullet_tasks(records, "reported-done-unverified", "None reported."),
@@ -249,12 +245,22 @@ def render_report(created_at: str, records: list[dict[str, Any]], skipped: int) 
         "## Provenance and safety",
         "",
         "- Machine-readable classifications and per-handoff SHA-256 digests are in `evidence.json`.",
-        "- The scan is not transactional; each digest identifies the handoff bytes observed immediately before parsing, and a task may change during the scan.",
+        "- Files are opened without following symlinks and parsed from the captured bytes identified by those digests.",
         "- Brief text, handoff prose, cwd values, session identifiers, credentials, environment, daemon databases, and live host state are excluded.",
         "- Artifacts are owner-private and retained until an operator explicitly deletes the exact run directory.",
         "",
     ]
     return "\n".join(lines)
+
+
+def source_provenance(tasks: SafeDirectory, explicit: bool) -> dict[str, str]:
+    info = tasks.stat()
+    root_id = "fs-" + digest(f"{info.st_dev}:{info.st_ino}".encode())[:20]
+    return {
+        "selection": "explicit-override" if explicit else "default-rozoro-home",
+        "display": "<explicit-tasks-root>" if explicit else "$ROZORO_HOME/tasks",
+        "root_id": root_id,
+    }
 
 
 def main() -> int:
@@ -265,65 +271,73 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo = (args.repo_root or Path(__file__).resolve().parents[4]).resolve()
-    home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    tasks_root = (args.tasks_root or home / "tasks").expanduser()
-    artifact_root = (args.artifact_root or home / "artifacts").expanduser()
-    if tasks_root.is_symlink():
-        raise SystemExit(f"refusing symlink task root: {tasks_root}")
-    if tasks_root.exists() and (not tasks_root.is_dir() or tasks_root.stat().st_uid != os.geteuid()):
-        raise SystemExit(f"task root is not an owned directory: {tasks_root}")
-
+    repo = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
     parser_module = load_handoff_parser(repo)
+    home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
+    tasks_path = args.tasks_root or home / "tasks"
+    artifact_root = args.artifact_root or home / "artifacts"
+
     records: list[dict[str, Any]] = []
     skipped = 0
-    if tasks_root.exists():
-        for entry in sorted(tasks_root.iterdir(), key=lambda path: path.name):
-            if (
-                entry.is_symlink()
-                or not entry.is_dir()
-                or entry.stat(follow_symlinks=False).st_uid != os.geteuid()
-                or not SAFE_TASK.fullmatch(entry.name)
-            ):
-                skipped += 1
-                continue
-            records.append(inspect_task(entry, parser_module))
+    try:
+        with SafeDirectory.open_path(tasks_path, create=False, require_owner=True) as tasks:
+            source = source_provenance(tasks, args.tasks_root is not None)
+            for name in sorted(tasks.list_names()):
+                if not SAFE_TASK.fullmatch(name):
+                    skipped += 1
+                    continue
+                try:
+                    task = tasks.open_child(name, require_owner=True)
+                except (OSError, UnsafePath):
+                    skipped += 1
+                    continue
+                with task:
+                    records.append(inspect_task(name, task, parser_module))
+    except (OSError, UnsafePath) as exc:
+        raise SystemExit(f"cannot safely scan required task root: {exc}") from exc
 
     now = utc_now(args.now)
     created_at = now.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    run_dir, run_id = new_run_dir(artifact_root, now)
     evidence = {
         "schema": SCHEMA,
         "artifact_type": "watchtower-progress-report-evidence",
         "created_at": created_at,
-        "run_id": run_id,
-        "evidence_boundary": "$ROZORO_HOME/tasks safe regular files only",
-        "scan_consistency": "point-in-time-best-effort-pre-parse-file-digests",
+        "source": source,
+        "scan_consistency": "descriptor-captured-per-file-bytes",
         "skipped_unsafe_or_invalid_entries": skipped,
         "tasks": records,
     }
-    evidence_bytes = (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode()
-    report_bytes = render_report(created_at, records, skipped).encode()
-    write_private(run_dir / "evidence.json", evidence_bytes)
-    write_private(run_dir / "report.md", report_bytes)
-    metadata = {
-        "schema": SCHEMA,
-        "artifact_type": "watchtower-progress-report",
-        "created_at": created_at,
-        "run_id": run_id,
-        "source": {"task_root": "$ROZORO_HOME/tasks", "task_count": len(records)},
-        "files": {
-            "report.md": {"sha256": digest(report_bytes), "bytes": len(report_bytes)},
-            "evidence.json": {"sha256": digest(evidence_bytes), "bytes": len(evidence_bytes)},
-        },
-        "privacy": {
-            "included": ["task ids", "handoff structure/status", "ack structure", "file presence and digests"],
-            "excluded": ["free-form task text", "briefs", "cwd values", "session contents", "environment", "credentials", "live runtime and daemon databases"],
-        },
-        "retention": "preserve-until-explicit-operator-deletion",
-    }
-    write_private(run_dir / "metadata.json", (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode())
-    print(run_dir)
+    report_bytes = render_report(created_at, records, skipped, source).encode()
+
+    try:
+        with SafeDirectory.open_path(artifact_root, create=True, require_owner=True, private=True) as root:
+            run, run_id = reserve_run(root, now)
+            with run:
+                evidence["run_id"] = run_id
+                evidence_bytes = (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode()
+                metadata = {
+                    "schema": SCHEMA,
+                    "artifact_type": "watchtower-progress-report",
+                    "created_at": created_at,
+                    "run_id": run_id,
+                    "source": {**source, "task_count": len(records)},
+                    "files": {
+                        "report.md": {"sha256": digest(report_bytes), "bytes": len(report_bytes)},
+                        "evidence.json": {"sha256": digest(evidence_bytes), "bytes": len(evidence_bytes)},
+                    },
+                    "privacy": {
+                        "included": ["task ids", "handoff structure/status", "ack structure", "file presence and digests"],
+                        "excluded": ["free-form task text", "briefs", "cwd values", "session contents", "environment", "credentials", "live runtime and daemon databases", "absolute source paths"],
+                    },
+                    "retention": "preserve-until-explicit-operator-deletion",
+                }
+                run.write_exclusive("evidence.json", evidence_bytes)
+                run.write_exclusive("report.md", report_bytes)
+                run.write_exclusive("metadata.json", (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode())
+                output = run.path
+    except (OSError, UnsafePath) as exc:
+        raise SystemExit(f"cannot create safe artifact: {exc}") from exc
+    print(output)
     return 0
 
 

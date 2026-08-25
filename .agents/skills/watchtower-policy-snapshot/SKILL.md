@@ -1,9 +1,9 @@
 ---
 name: watchtower-policy-snapshot
-description: Persist an immutable, dated snapshot of the Watchtower policy currently used by this Rozoro checkout. Use when an operator asks to archive, capture, or compare the current Watchtower rules or policy.
+description: Persist an immutable, dated snapshot of the explicit Pi Watchtower policy source in this Rozoro checkout, with accurate per-harness coverage. Use when an operator asks to archive, capture, or compare current Watchtower rules or policy.
 compatibility: Requires Python 3.11+, a Rozoro checkout, and local filesystem access.
 metadata:
-  artifact-schema: rozoro.watchtower-policy-snapshot/v1
+  artifact-schema: rozoro.watchtower-policy-snapshot/v2
 ---
 
 # Watchtower policy snapshot
@@ -18,7 +18,7 @@ From this skill directory:
 python3 scripts/snapshot.py
 ```
 
-The script resolves the checkout containing this skill and copies the current `templates/watchtower.md`, which the Watchtower launchers pass as the launch-time system prompt. It prints the new run directory.
+The script resolves the checkout containing this skill, verifies that the Pi Watchtower launcher references `templates/watchtower.md`, and copies those current bytes. It records that the current Claude launcher does not reference the captured source instead of claiming false Claude coverage. It prints the new run directory.
 
 Default destination:
 
@@ -40,4 +40,4 @@ Do not paste the full policy unless asked. The script includes only the checked-
 
 ## Retention and safety
 
-Artifacts are owner-private (`0700` directories, `0600` files) and have no automatic retention deletion. Delete only an exact run directory after explicit operator direction. Do not create or update a `latest` alias. Treat a missing, symlinked, or non-regular policy source as a hard failure.
+Artifacts are owner-private (`0700` directories, `0600` files), use no-follow descriptor-relative creation across every path component, and have no automatic retention deletion. Delete only an exact run directory after explicit operator direction. Do not create or update a `latest` alias. Treat a missing, symlinked, or non-regular policy source as a hard failure.

@@ -245,7 +245,7 @@ Example:
 
 Project skills under `.agents/skills/` can persist two owner-private, dated operator records under `$ROZORO_HOME/artifacts`:
 
-- `watchtower-policy-snapshot` copies the current launch-time Watchtower policy source with hashes and Git provenance;
+- `watchtower-policy-snapshot` copies the explicit Pi Watchtower launch-policy source with hashes, Git provenance, and accurate per-harness coverage;
 - `watchtower-progress-report` records a conservative fleet summary from durable task folders without treating `done` as verified or accepted.
 
 Invoke them with Pi's `/skill:<name>` commands or run their bundled Python scripts directly. Each run gets a new unambiguous UTC path and is retained until explicitly deleted. See [Dated Watchtower artifacts](docs/dated-watchtower-artifacts.md) for schemas, privacy boundaries, and examples.
