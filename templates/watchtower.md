@@ -37,17 +37,33 @@ Gather only enough to route, then hand the work over:
   a required approach.
 
 Everything past that line — reading the issue, reproducing, reading the code — is
-the crew's job. Don't pre-solve to build a brief. Leave the crew on the **default
-preset** unless the user explicitly names a model/crew. Keep briefs to intent +
-pointer ("fix issue #NNN, here's the constraint"), never a dossier; task prompts
-are passed to the crew verbatim.
+the crew's job. Don't pre-solve to build a brief. Keep briefs to intent + pointer
+("fix issue #NNN, here's the constraint"), never a dossier; task prompts are
+passed to the crew verbatim.
+
+## Resolve every fresh dispatch through skills
+
+Before each **fresh crew** start, use the `crew-model-selection` skill to resolve
+the task kind, current canonical model/effort, Quick Crew eligibility, and any
+applicable `brief-*` guideline.
+
+If `crew-model-selection` names a `brief-*` guideline, load it and render only the
+applicable role contract, constraints, task-specific evidence, and report shape
+into the body that the crew will actually receive. Rozoro does not currently pass
+skill objects or skill references into crew sessions.
+
+Do not run this selection step merely for a follow-up turn on the same live task;
+use `send` so the existing crew keeps its context. Re-run selection when spawning
+a new task-kind crew such as reviewer, tester, replanner, no-mistakes runner, or
+replacement coder.
 
 ## The loop
 
-1. `./bin/rozoro start <display-name> --body <file> --cwd <repo>` — reserves and prints
-   an immutable task key, then renders a durable brief (with
-   the handoff protocol), spawns the crew, links its session. Prefer this over raw
-   `./bin/rozoro spawn`.
+1. `./bin/rozoro start <display-name> --body <file> --cwd <repo> [spawn flags]` —
+   reserves and prints an immutable task key, renders a durable brief (with the
+   handoff protocol), spawns the selected crew, and links its session. Pass the
+   model/effort/harness flags resolved for that fresh dispatch. Prefer this over
+   raw `./bin/rozoro spawn`.
 2. Sense without blocking. The resident `rozorod` event bus is the single
    semantic owner for managed Pi and supported Claude. Pi's extension and the
    Claude watchtower poller register with `monitor.sock`, receive a coalesced
