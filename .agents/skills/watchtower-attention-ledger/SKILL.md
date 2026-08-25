@@ -20,12 +20,16 @@ and observations, never system truth.**
 
 ## When to use
 
-- **During every reconcile.** After `./bin/rozoro reconcile`, for each surfaced task edge that
-  needs driver attention, `add` an item (or let supersession replace a stale one).
+- **During every reconcile.** `./bin/rozoro reconcile` prints a **delta of the tasks changed
+  since the last generation ACK** — unchanged tasks are intentionally absent, carried instead by
+  this durable ledger. For each surfaced task edge that needs driver attention, `add` an item (or
+  let supersession replace a stale one). Pass `--full` when a complete latest-per-task snapshot
+  is needed (e.g. auditing state the ledger does not cover).
 - **The moment a routing or handling decision is made.** `update` the item with a note — every
   transition must say why.
 - **On session start, after compaction, or after driver resume/cycling.** Run `prime` before
-  acting to re-orient from disk instead of from memory.
+  acting to re-orient from disk instead of from memory — a fresh session's reconcile only shows
+  the delta, so the ledger (and `--full` when needed) is how you recover unchanged state.
 - **Before a deliberate driver handoff.** Ensure open items carry current notes.
 
 ## Run

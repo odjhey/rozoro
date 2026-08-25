@@ -27,7 +27,7 @@ The current implementation therefore already satisfies much of the original #46 
 
 ### 1. First-class watchtower attention identity
 
-The shipped delivery ledger is still generation-centric. `pending_generation_tasks` preserves task attribution inside a generation, but the watchtower ultimately reconciles/ACKs the generation as a unit.
+The shipped delivery ledger is still generation-centric. `pending_generation_tasks` preserves task attribution inside a generation, but the watchtower ultimately reconciles/ACKs the generation as a unit. The CLI reconcile path (`reconcile_delivered`) now uses that `pending_generation_tasks` attribution to deliver only the changed-task delta of a generation window (`--full` for the complete snapshot); the Pi adapter path (`Store.reconcile`) remains full-snapshot (future work).
 
 The product still needs the capability usually described here as a Watchtower Mailbox:
 

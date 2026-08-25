@@ -2,23 +2,27 @@
 # rzr-reconcile.sh - process a watchtower's pending wake ledger and acknowledge it.
 #
 # Usage:
-#   rzr-reconcile.sh [--driver <id>] [--json]
+#   rzr-reconcile.sh [--driver <id>] [--json] [--full]
 #
-# The driver runs this when a wake nudge arrives. It snapshots the pending
-# generation, reports each affected task's handoff verdict (via rzr-status
-# --json), flags any task that vanished, and then advances `ack` to EXACTLY the
-# generation it snapshotted — never a later one, so an edge that lands mid-reconcile
+# The driver runs this when a wake nudge arrives. It reports the delta of tasks
+# changed since the last generation ACK — each affected task's handoff verdict
+# (via rzr-status --json) — flags any task that vanished, and then advances `ack`
+# to EXACTLY the generation it snapshotted. Pass --full for the complete
+# latest-per-task snapshot instead of just the changed-task delta.
+# It advances `ack` to EXACTLY the snapshotted
+# generation — never a later one, so an edge that lands mid-reconcile
 # stays pending and re-nudges. Acking a wake is separate from resolving a crew's
 # OPEN items: this never advances rzr-ack, so a needs-action/blocked verdict keeps
 # surfacing until the driver explicitly handles it.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-DRIVER="" JSON=0
+DRIVER="" JSON=0 FULL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --driver) DRIVER="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
+    --full) FULL=1; shift ;;
     -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) rzr_die "unknown flag: $1" ;;
   esac
@@ -29,8 +33,11 @@ DIR="$(rzr_resolve_driver_dir "$DRIVER")"
 if [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
   args=(reconcile --driver "$(basename "$DIR")")
   [ "$JSON" -eq 1 ] && args+=(--json)
+  [ "$FULL" -eq 1 ] && args+=(--full)
   exec python3 "$RZR_BIN/rzr-event-bus-client.py" "${args[@]}"
 fi
+
+# Legacy diagnostic path is already full-state; --full is a no-op here.
 
 GEN="$(rzr_ledger_int "$DIR" generation)"
 

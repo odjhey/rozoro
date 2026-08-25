@@ -22,6 +22,67 @@ PY
   printf '%s\n' '{"driver_id":"driver-1","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-1/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/target.json"
 }
 
+# Seed two tasks, ACK generation 2 offline, then leave a confirmed delivered
+# generation 3 that changed only task-1 — so a live reconcile spans (2, 3].
+seed_delta() {
+  for t in task-1 task-2; do
+    write_handoff "$t" '## turn 1 — done' 'verdict:       done' 'reason:        ' 'did:           tested' 'pending:       none' 'inputs-needed: none' 'artifacts:     none'
+  done
+  chmod 700 "$ROZORO_HOME"
+  PYTHONPATH="$REPO_ROOT/lib" python3 - <<'PY'
+import os
+from rozoro_monitor.store import EventStore
+s=EventStore(os.path.join(os.environ['ROZORO_HOME'],'monitor.db'))
+def ev(task, kind, eid, seq, **x):
+    return {'v':1,'session_id':f'crew-{task}','harness':'pi','role':'crew','task_id':task,
+            'type':kind,'event_id':eid,'producer_seq':seq, **x}
+s.accept_event(ev('task-1','session.register','r1',1))
+s.accept_event(ev('task-1','turn.stop','s1',2,background_active=False))   # generation 1
+s.accept_event(ev('task-2','session.register','r2',1))
+s.accept_event(ev('task-2','turn.stop','s2',2,background_active=False))   # generation 2
+r=s.register_driver('driver-1','adapter-1','pi'); epoch=r['epoch']
+o1=s.offer_notification('driver-1','adapter-1',epoch)
+s.confirm_delivery('driver-1','adapter-1',epoch,o1['generation'])
+s.ack_delivered('driver-1',o1['generation'])                             # ACK generation 2
+s.accept_event(ev('task-1','turn.start','t1b',3,turn_id='t1b'))
+s.accept_event(ev('task-1','turn.stop','s1b',4,background_active=False))  # generation 3 (task-1)
+o2=s.offer_notification('driver-1','adapter-1',epoch)
+s.confirm_delivery('driver-1','adapter-1',epoch,o2['generation'])
+s.close()
+PY
+  mkdir -p "$ROZORO_HOME/watchtowers/driver-1"; chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/driver-1"
+  printf '%s\n' '{"driver_id":"driver-1","harness":"pi"}' > "$ROZORO_HOME/watchtowers/driver-1/target.json"; chmod 600 "$ROZORO_HOME/watchtowers/driver-1/target.json"
+}
+
+@test "reconcile prints only the changed-task delta plus a rollup summary line" {
+  seed_delta; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1
+  assert_success
+  [ "$(grep -c '^  task-1:' <<<"$output")" = 1 ]
+  [ "$(grep -c '^  task-2:' <<<"$output")" = 0 ]
+  grep -q '1 changed since generation 2; 1 unchanged tracked tasks not shown (--full for complete snapshot)' <<<"$output"
+}
+
+@test "reconcile --json carries the delta cursor and unchanged count" {
+  seed_delta; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --json
+  assert_success
+  [ "$(jq -r '.through // .acknowledged_generation' <<<"$output")" = 3 ]
+  [ "$(jq -r '[.reports[].id]|sort|join(",")' <<<"$output")" = task-1 ]
+  [ "$(jq -r .changed_since_generation <<<"$output")" = 2 ]
+  [ "$(jq -r .unchanged_count <<<"$output")" = 1 ]
+  [ "$(jq -r .scope <<<"$output")" = delta ]
+}
+
+@test "reconcile --full shows every tracked task and no rollup suppression" {
+  seed_delta; start_monitor
+  run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" reconcile --driver driver-1 --full --json
+  assert_success
+  [ "$(jq -r '[.reports[].id]|sort|join(",")' <<<"$output")" = task-1,task-2 ]
+  [ "$(jq -r .unchanged_count <<<"$output")" = 0 ]
+  [ "$(jq -r .scope <<<"$output")" = full ]
+}
+
 @test "daemon status preserves v2 fields and adds daemon availability source" {
   seed_task; start_monitor
   run env ROZORO_EVENT_BUS=1 "$REPO_ROOT/bin/rozoro" status task-1 --json

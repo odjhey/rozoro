@@ -3,6 +3,7 @@ import errno
 import json
 import os
 import resource
+import select
 import signal
 import socket
 import sqlite3
@@ -406,6 +407,83 @@ class ServerProcessTests(unittest.TestCase):
         finally:
             for stream in streams: stream.close()
             for client in clients: client.close()
+
+    def _crew_register(self, task, seq=1, kind="session.register", eid=None, **extra):
+        message = {"v": 1, "type": kind, "event_id": eid or f"{kind}-{task}",
+                   "producer_seq": seq, "session_id": f"crew-{task}", "harness": "claude",
+                   "role": "crew", "task_id": task}
+        message.update(extra)
+        return message
+
+    def _offer_and_confirm(self, stream, client, generation):
+        # notification.pending only creates an offer once the coalescer's delay is
+        # due, so poll until the notification frame actually arrives (each poll
+        # replies ok, then optionally a notification once due).
+        notification = None
+        for attempt in range(40):
+            request_id = f"poll-{generation}-{attempt}"
+            stream.write(protocol.encode({"v": 1, "type": "notification.pending",
+                "request_id": request_id, "driver_id": "driver-1"}).encode())
+            self.assertEqual(protocol.decode(stream.readline()),
+                             {"v": 1, "type": "ok", "request_id": request_id})
+            if select.select([client], [], [], 0.3)[0]:
+                notification = protocol.decode(stream.readline())
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(notification, "daemon never offered a notification")
+        self.assertEqual((notification["type"], notification["generation"]),
+                         ("notification", generation))
+        confirm_id = f"delivered-{generation}"
+        stream.write(protocol.encode({"v": 1, "type": "notification.delivered",
+            "request_id": confirm_id, "driver_id": "driver-1", "generation": generation}).encode())
+        self.assertEqual(protocol.decode(stream.readline()),
+                         {"v": 1, "type": "ok", "request_id": confirm_id})
+
+    def test_reconcile_pending_scope_selects_delta_or_full_snapshot(self):
+        self.start()
+        # Two crew registrations produce generation 1 (task-1) and 2 (task-2).
+        self.assertEqual(self.exchange(self._crew_register("task-1"))["type"], "ack")
+        self.assertEqual(self.exchange(self._crew_register("task-2"))["type"], "ack")
+
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(3)
+        client.connect(str(self.socket_path))
+        stream = client.makefile("rwb", buffering=0)
+        try:
+            stream.write(protocol.encode({"v": 1, "type": "watchtower.register",
+                "request_id": "register-1", "session_id": "watch-session",
+                "harness": "pi", "driver_id": "driver-1"}).encode())
+            self.assertEqual(protocol.decode(stream.readline()),
+                             {"v": 1, "type": "ok", "request_id": "register-1"})
+
+            self._offer_and_confirm(stream, client, 2)
+            # Unacked (since 0): delta and full both span every changed task.
+            first = self.exchange({"v": 1, "type": "reconcile.pending",
+                "request_id": "rec-1", "driver_id": "driver-1"})
+            self.assertEqual(first["through"], 2)
+            self.assertEqual(sorted(r["task_id"] for r in first["reports"]), ["task-1", "task-2"])
+            self.assertEqual((first["since"], first["unchanged_count"]), (0, 0))
+            self.assertEqual(self.exchange({"v": 1, "type": "reconcile.ack",
+                "request_id": "ack-1", "driver_id": "driver-1", "through": 2})["type"], "ok")
+
+            # generation 3 changes only task-1.
+            self.assertEqual(self.exchange(self._crew_register(
+                "task-1", seq=2, kind="turn.start", eid="turn-1", turn_id="turn-1"))["type"], "ack")
+            self._offer_and_confirm(stream, client, 3)
+
+            delta = self.exchange({"v": 1, "type": "reconcile.pending",
+                "request_id": "rec-2", "driver_id": "driver-1"})
+            self.assertEqual(delta["through"], 3)
+            self.assertEqual([r["task_id"] for r in delta["reports"]], ["task-1"])
+            self.assertEqual((delta["since"], delta["unchanged_count"]), (2, 1))
+
+            full = self.exchange({"v": 1, "type": "reconcile.pending",
+                "request_id": "rec-3", "driver_id": "driver-1", "scope": "full"})
+            self.assertEqual(sorted(r["task_id"] for r in full["reports"]), ["task-1", "task-2"])
+            self.assertEqual(full["unchanged_count"], 0)
+        finally:
+            stream.close()
+            client.close()
 
     def test_connectable_socket_is_never_unlinked_when_lock_is_available(self):
         self.home.mkdir(mode=0o700)
