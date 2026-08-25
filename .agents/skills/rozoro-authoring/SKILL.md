@@ -3,12 +3,12 @@ name: rozoro-authoring
 description: >-
   Apply Rozoro's repository-specific coding and validation practices while
   modifying the Rozoro source tree. This is a crew-facing coder skill: the
-  Watchtower passes or exposes it to the coder rather than implementing the
-  repository change itself.
+  Watchtower includes the applicable instructions in the coder brief rather than
+  implementing the repository change itself.
 metadata:
   execution-owner: crew
   crew-role: coder
-  watchtower-action: dispatch-and-pass
+  watchtower-action: dispatch-and-brief
   scope: odjhey/rozoro
   derived-from: templates/crew-guidelines.md
 ---
@@ -16,8 +16,8 @@ metadata:
 # Rozoro authoring
 
 This skill is executed by a **crew member** modifying Rozoro, not by the
-Watchtower. The Watchtower should make these instructions available to the coder
-when the target repository is Rozoro.
+Watchtower. When the target repository is Rozoro, the Watchtower should include
+the applicable authoring instructions from this skill in the coder brief.
 
 This skill is repository-specific. Explicit operator instructions and repository rules take precedence.
 
