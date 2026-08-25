@@ -2,12 +2,13 @@
 name: adversarial-testing
 description: >-
   Test a software change as an independent adversarial tester. This is a
-  crew-facing assurance role: the Watchtower dispatches a tester and passes these
-  instructions rather than exercising repository behavior itself.
+  crew-facing assurance role: the Watchtower dispatches a tester with these
+  instructions included in the crew brief rather than exercising repository
+  behavior itself.
 metadata:
   execution-owner: crew
   crew-role: tester
-  watchtower-action: dispatch-and-pass
+  watchtower-action: dispatch-and-brief
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
@@ -16,8 +17,9 @@ metadata:
 Derive tests from the use case and contracts, not only from the implementation.
 
 This skill is executed by a **crew member**, not by the Watchtower. The
-Watchtower dispatches the tester, supplies the bounded task and relevant prior
-reports, and judges the returned evidence.
+Watchtower dispatches the tester with the applicable testing instructions,
+bounded task, and relevant prior reports included in the crew brief, then judges
+the returned evidence.
 
 Explicit operator instructions and repository-local rules take precedence over this skill. Record the exact commit tested when commit identity is available.
 
