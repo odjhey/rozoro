@@ -24,12 +24,30 @@ workset state are added when they materially constrain the current turn.
 ### Task Decomposer / Planner — `gpt-5.6-sol`, high
 
 Turn raw intent into bounded executable work when scope, dependencies, acceptance
-criteria, integration order, or repository boundaries are not already clear.
+criteria, execution strategy, integration order, or repository boundaries are not
+already clear.
 
-For work that will fan out, identify which tasks are independent, which depend on
-other tasks, and any intended stacking/integration order the Workset Merger should
-preserve. Produce enough structure for coders to work independently without
-pretending unknown repository facts are settled.
+The Planner owns the **workset execution strategy**. For work that can fan out, it
+should decide and record:
+
+- the bounded tasks in the workset;
+- dependency edges between tasks;
+- which tasks may run in parallel;
+- which tasks must be sequential or stacked;
+- the base/parent relationship for stacked work when known;
+- fan-out and fan-in points or execution waves when useful;
+- the intended integration/merge order; and
+- constraints that would invalidate that strategy and require replanning.
+
+Prefer parallel work where tasks are genuinely independent. Prefer stacking when a
+later task semantically or mechanically depends on an earlier candidate. Do not
+serialize independent work merely because it belongs to the same workset, and do
+not parallelize tasks whose branch/base or contract dependencies require order.
+
+Produce enough structure for Watchtower to dispatch the workset without inventing
+its own scheduling strategy and for the Workset Merger to preserve the intended
+stack/integration shape. Unknown repository facts may remain explicit assumptions
+or discovery tasks rather than being treated as settled.
 
 ### Coder — `gpt-5.6-sol`, low
 
@@ -57,12 +75,15 @@ task. Bind the result to the tested head.
 ### Escalation Replanner — `gpt-5.6-sol`, high
 
 Use when implementation/review/test/integration loops stop converging or new
-evidence changes the task boundary, dependency graph, or implementation direction.
+evidence changes the task boundary, dependency graph, parallel/stacking strategy,
+or implementation direction.
 
-Give it the current bounded task/plan, useful failure evidence, and the lineage's
-current `attempt_count`, `attempt_limit`, and `replan_count`. It produces a
-materially revised bounded task/dependency plan for fresh execution and explains
-what changed so the next Coder does not simply repeat the failed direction.
+Give it the current bounded task/workset plan, useful failure evidence, and the
+lineage's current `attempt_count`, `attempt_limit`, and `replan_count`. It owns a
+revised execution strategy: tasks, dependencies, parallel groups, stacks, fan-in,
+and intended integration order where those need to change. It explains what
+changed so Watchtower, fresh Coders, and the Workset Merger do not simply repeat
+the failed direction.
 
 Replanning **extends** the cumulative Coder budget; it never resets it. The normal
 lineage starts with `attempt_limit=10`. A materially revised replan extends that
@@ -112,26 +133,37 @@ known and verified.
 
 ### Workset Merger — `gpt-5.6-luna`, high
 
-Own integration and landing reasoning for one workset.
+Own integration and landing execution for one workset.
 
-Give it the workset intent, Planner/Task Decomposer output when available,
-participating task branches/heads, known dependencies, review/test/no-mistakes/CI
-evidence, repository merge policy, and current `/afk` state.
+Give it the workset intent, Planner/Task Decomposer execution strategy when one
+exists, participating task branches/heads, known dependencies, review/test/
+no-mistakes/CI evidence, repository merge policy, and current `/afk` state.
+
+The Planner/Replanner owns the intended parallel/stacking strategy. The merger
+should execute and reconcile that strategy against actual crew results, not invent
+a different work decomposition merely because integration is difficult.
 
 The merger should:
 
 1. reconstruct the current workset graph from the plan plus actual crew results;
-2. determine dependency, stacking, and merge order;
+2. validate the planned dependency, stacking, and merge order against current
+   branch/head reality;
 3. re-fetch exact branch/PR heads before mutation;
-4. integrate candidate branches in the order required by the workset;
-5. detect stale evidence or integration failures and route a bounded repair or
-   replan recommendation back to Watchtower;
+4. integrate candidate branches in the order required by the current plan;
+5. detect stale evidence, an invalidated stack assumption, or integration failures
+   and route a bounded repair or Replanner recommendation back to Watchtower;
 6. read no-mistakes results in workset context and decide whether findings are
-   local repair, integration fallout, or a plan/dependency problem;
+   local repair, integration fallout, or evidence that the plan/dependency strategy
+   must be revised;
 7. ensure the final integrated head has the assurance required by repository
    policy; and
 8. when authorized, perform the final supported merge and required post-merge
    checks/actions, reporting the actual landed identity.
+
+If actual repository evidence invalidates the Planner's strategy, preserve that
+evidence and request Replanner. The Workset Merger may make mechanical integration
+choices within the declared strategy, but it does not silently redesign which
+tasks should have been parallel, stacked, split, or reordered.
 
 For a single-task workset with no stacking, the same role reduces to the simple
 landing/post-merge case.
@@ -160,8 +192,12 @@ from repository docs, plans, crew handoffs, gate results, operator steering, and
 delivery outcomes. Reuse durable results when they matter; load deeper context on
 demand rather than trying to preload a project's entire history.
 
-Within a workset, delegate integration/stacking/landing judgment to the Workset
-Merger. Delegate no-mistakes execution/listening to the No-Mistakes Runner.
+Within a workset, dispatch according to the Planner/Replanner strategy: start
+independent tasks in parallel, preserve required stacks/sequences, and wait at
+fan-in points only when the plan requires it. Delegate integration/landing
+execution to the Workset Merger and no-mistakes execution/listening to the
+No-Mistakes Runner.
+
 Watchtower routes their results, handles cross-workset priorities, enforces the
 cumulative attempt/replan budget, and involves the operator when `/afk` or a
 genuine authority boundary requires it.
