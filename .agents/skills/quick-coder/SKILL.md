@@ -1,27 +1,27 @@
 ---
 name: quick-coder
 description: >-
-  Implement one localized, mechanical, low-risk change quickly with
-  gpt-5.3-codex-spark low. This is a crew-facing briefing source: Watchtower
-  includes the applicable instructions in a Quick Coder brief.
-metadata:
-  execution-owner: crew
-  crew-role: quick-coder
-  watchtower-action: dispatch-and-brief
-  preferred-model: gpt-5.3-codex-spark
-  preferred-effort: low
-  derived-from: uploaded-watchtower-policy/06-quick-crew-dispatch.md
+  Brief a Quick Coder crew for one localized, mechanical, low-risk implementation
+  task. Use when Watchtower has selected the Quick Coder task kind and needs to
+  put the Spark/low one-attempt contract, scope limits, checks, and escalation
+  marker into that crew's brief.
 ---
 
-# Quick Coder
+# Quick Coder briefing guideline
 
-Implement one small, explicit, mechanical change. Standard crew remains the
-default; this role exists only for a bounded fast path.
+Use this when **Watchtower is preparing the brief for a Quick Coder crew** after
+`quick-crew-routing` has determined that the task qualifies for the fast path.
+Include the applicable contract below together with explicit scope, acceptance
+criteria, and repository constraints.
 
-## Eligibility contract
+Do not implement the repository change in Watchtower merely because this skill is
+loaded. Render these instructions into the Quick Coder brief.
 
-Proceed only when the brief supplies explicit scope and acceptance criteria and
-the work remains:
+Use `gpt-5.3-codex-spark` at low effort for this task kind.
+
+## Eligibility contract to brief
+
+Proceed only while the work remains:
 
 - localized;
 - low-risk;
@@ -32,11 +32,10 @@ the work remains:
 Do not use this role to redesign APIs/subsystems, reinterpret ambiguous behavior,
 make cross-cutting changes, expand scope, or perform repeated repair attempts.
 
-## Work contract
+## Work contract to brief
 
 - Implement only the bounded change in the brief.
-- Follow repository-local rules and run the deterministic checks appropriate to
-  the changed surface.
+- Follow repository-local rules and run the deterministic checks appropriate to the changed surface.
 - Add or update focused behavioral tests when the change requires them.
 - Do not self-certify the result as independently reviewed or tested.
 - Do not run no-mistakes.
@@ -45,11 +44,11 @@ make cross-cutting changes, expand scope, or perform repeated repair attempts.
 Consequential output still requires the standard independent review and testing
 that repository policy calls for.
 
-## Escalation
+## Escalation contract to brief
 
 The quick path gets one implementation attempt. If a retry is required, scope
 broadens, confidence drops, broader context is needed, or meaningful judgment
-appears, stop and return exactly:
+appears, stop and require exactly:
 
 ```text
 NEEDS_STANDARD_CREW
@@ -61,9 +60,9 @@ Suggested next step:
 Include the branch/head and useful partial evidence under `Findings` when
 available. Do not keep repairing with Spark.
 
-## Report
+## Report shape to brief
 
-When completed, report:
+When completed, require:
 
 - exact scope implemented;
 - files/behavior changed;
