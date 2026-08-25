@@ -20,24 +20,35 @@ model or an inner no-mistakes model was authoritative. It made Rozoro responsibl
 for target/account/fallback decisions that belong to no-mistakes' own pipeline
 configuration.
 
+A second orchestration problem surfaced in the same refactor: `brief-*` skills
+turned Watchtower from a judgment layer into a prompt forwarder. Role policy and
+task prompts need to stay separate. Policy informs Watchtower; Watchtower writes
+the smallest task-specific brief.
+
 ## Options
 
 1. Keep a dedicated No-Mistakes Runner crew as a wrapper around no-mistakes.
 2. Treat no-mistakes as a Watchtower-managed external gate/job: submit or
    reattach the run directly, observe structured state, answer supported gates,
    reconcile exact-head/custody evidence, and route findings back to normal crew.
-3. Fold no-mistakes into the Coder/Reviewer/Tester roles and let those crews run
-   it opportunistically.
+3. Fold no-mistakes into Coder/Reviewer/Tester and let those crews run it
+   opportunistically.
+
+For crew briefing:
+
+A. Keep role-specific `brief-*` skills as prompt templates.
+B. Keep role/model policy in the canonical dispatch guide and let Watchtower
+   synthesize concise task-specific briefs.
 
 ## Choice
 
-Choose option 2.
+Choose option 2 and briefing option B.
 
 No-mistakes is **not a Rozoro crew role**.
 
 When a clean committed candidate is ready for no-mistakes assurance:
 
-1. Watchtower invokes the `no-mistakes-gate` skill directly.
+1. Watchtower invokes `no-mistakes-gate` directly.
 2. It records the exact submitted branch/head/tree and operator intent.
 3. It inspects current no-mistakes/AXI state and reattaches to a matching run
    instead of creating a duplicate.
@@ -48,22 +59,32 @@ When a clean committed candidate is ready for no-mistakes assurance:
 6. It responds to bounded gates within current authority and preserves/surfaces
    unsupported decisions without blocking unrelated work.
 7. It reconciles the final exact head, PR, CI, branch sync, and custody state.
-8. It routes actionable repository findings back to the active coder or to the
-   Escalation Replanner when the task boundary changed.
-9. If the gate result is acceptable and landing is authorized by current
-   repository/operator policy, Watchtower dispatches a **Merge Finisher** crew to
-   perform the actual merge and required post-merge activities. Watchtower does
-   not merge the repository itself.
+8. It routes local defects to Coder and task-boundary problems to Replanner.
+9. If landing is allowed, it dispatches Merge Finisher for the actual merge and
+   required post-merge work.
 
 No-mistakes owns its own pipeline-agent/model/account/fallback configuration.
 Rozoro selects models for Rozoro crews only. If the desired no-mistakes internal
 selection policy cannot be expressed by the installed no-mistakes version, that
 is a no-mistakes integration/configuration gap, not a reason to spawn a wrapper
-crew or mutate global model configuration around each run.
+crew or mutate model configuration around each run.
 
-The `no-mistakes-observer-pane` remains useful but attaches to the **active run
-beside Watchtower**. It is an untracked display surface only and never a crew,
-task, session, custody owner, or second control plane.
+The `no-mistakes-observer-pane` attaches to the **active run beside Watchtower**.
+It is an untracked display surface only and never a crew, task, session, custody
+owner, or second control plane.
+
+Current no-mistakes ownership stops at preparing/updating a clean PR, watching CI
+and mergeability, and fixing supported conflicts/failures. The final merge remains
+a separate repository/provider mutation. When Watchtower judges landing is
+allowed, it dispatches the **Merge Finisher** (`gpt-5.6-luna`, low).
+
+Crew briefs are authored by Watchtower. The removed `brief-*` layer is not
+replaced by another prompt schema. Default brief style is intent + pointer + only
+the context, constraints, and evidence the selected specialist needs.
+
+For new implementation work, raw operator intent normally goes through Planner
+before Coder unless the task is already genuinely bounded, is a normal repair
+turn, or clearly qualifies for Quick Coder.
 
 ## Consequences
 
@@ -71,17 +92,17 @@ task, session, custody owner, or second control plane.
   Rozoro crew role table.
 - Remove `no-mistakes-harness-selection`; no outer crew exists whose harness would
   select the pipeline model.
-- Remove `brief-no-mistakes-recovery`; custody/recovery is driven through the
-  Watchtower-owned no-mistakes gate and current structured recovery instructions.
-- Keep no-mistakes defects in the normal delivery loop: local repairs go back to
-  the coder; contract/scope failures go to replanning.
-- Gate success transitions to a separate Merge Finisher crew for merge and
-  post-merge repository/provider work; Watchtower remains the judgment/routing
-  layer.
-- Keep the side Herdr panel, but attach it to the active no-mistakes run beside
+- Remove the `brief-*` prompt-template layer.
+- Keep role/model boundaries in the canonical dispatch policy while restoring
+  Watchtower-authored task prompts.
+- Keep no-mistakes defects in the normal delivery loop: local repairs go to Coder;
+  contract/scope failures go to Replanner.
+- Keep the side Herdr panel attached to the active no-mistakes run beside
   Watchtower.
-- Avoid outer-versus-inner model ambiguity and duplicate agent orchestration.
+- Add Merge Finisher as the final merge/post-merge repository mutation owner.
+- Avoid outer-versus-inner model ambiguity, duplicate agent orchestration, and
+  mechanically templated crew prompts.
 - A future Rozoro adapter may integrate no-mistakes run events into the resident
-  monitor/event bus, but the semantic owner remains no-mistakes/AXI.
+  monitor/event bus, but semantic ownership remains with no-mistakes/AXI.
 - Tight polling of `axi status` is not the desired long-term integration; prefer
-  event/edge-driven observation when the installed interface supports it.
+  event/edge-driven observation where supported.
