@@ -2,35 +2,32 @@
 name: crew-model-selection
 description: >-
   Choose the task kind, model, reasoning effort, and dispatch path for a fresh
-  Watchtower crew. Use immediately before Watchtower spawns a new crew so current
-  standard model policy, Quick Crew eligibility, No-Mistakes harness fallback,
-  and the applicable brief-* guideline are resolved from the canonical sources.
+  Rozoro crew. Use immediately before Watchtower spawns a new planning, coding,
+  review, testing, or Quick Crew session so current model policy, Quick Crew
+  eligibility, and the applicable brief-* guideline are resolved from canonical
+  sources.
 ---
 
 # Crew model selection
 
-Use this in **Watchtower immediately before every fresh crew dispatch**. Do not
-answer from remembered defaults.
+Use this in **Watchtower immediately before every fresh Rozoro crew dispatch**.
+Do not answer from remembered defaults.
+
+No-mistakes validation is **not** a crew dispatch. Use `no-mistakes-gate` for that
+pipeline instead of this skill.
 
 ## Resolve the dispatch
 
 1. Read `templates/watchtower-crew-dispatch-guidelines.md`. Treat it as the source
-   of truth for standard role assignment, canonical model IDs, reasoning effort,
-   and current No-Mistakes execution-target fallback policy.
+   of truth for standard Rozoro crew roles, canonical model IDs, and reasoning
+   effort.
 2. Read `.agents/skills/quick-crew-routing/SKILL.md` when the work might qualify
    for the bounded Quick Crew fast path. Quick Crew does not replace or rewrite
    the standard model map.
 3. Choose the task kind/role first, then choose the model and reasoning effort for
-   that role. Keep harness/profile/target identity separate from model ID and
-   reasoning effort.
-4. If the selected task kind is **No-Mistakes Runner**, read
-   `.agents/skills/no-mistakes-harness-selection/SKILL.md` and use it to select
-   the runner harness/model/account target. When no-mistakes model selection is
-   `auto`, the selected runner harness/model **is** the workflow target. There is
-   no separate outer-runner model followed by a different inner no-mistakes model.
-   Do not spawn Pi merely because an older role table called the runner
-   `gpt-5.6-luna` and then instruct that Pi runner to use Claude inside.
-5. If the selected task kind has a `brief-*` guideline, load it and render the
+   that role. Keep harness/profile identity separate from model ID and reasoning
+   effort.
+4. If the selected task kind has a `brief-*` guideline, load it and render the
    applicable role contract, constraints, task-specific evidence, and report
    shape into the crew brief before dispatch.
 
@@ -39,7 +36,6 @@ answer from remembered defaults.
 - Task Decomposer / Escalation Replanner -> `brief-task-planner`
 - Reviewer -> `brief-reviewer`
 - Tester -> `brief-tester`
-- No-Mistakes branch recovery -> `brief-no-mistakes-recovery`
 - Coder modifying Rozoro -> `brief-rozoro-coder`
 - Quick Scout -> `brief-quick-scout`
 - Quick Coder -> `brief-quick-coder`
@@ -51,16 +47,6 @@ repository's own rules unless another applicable briefing guideline exists.
 
 - Current standard role/model/effort selection wins over older snapshots or
   machine-local policy copies.
-- Current No-Mistakes target/fallback order wins over older snapshots or
-  machine-local policy copies.
-- In No-Mistakes `auto` mode, target selection is performed by choosing the
-  runner's actual invoking harness/model/account context. The runner selection and
-  the no-mistakes workflow selection are one decision, not two layers.
-- For the first available Claude target, dispatch the No-Mistakes Runner itself as
-  Claude Sonnet. Pi `gpt-5.6-luna`/high is the configured later fallback, not a
-  mandatory outer wrapper around a Claude workflow.
-- Global no-mistakes model save/override/restore is not part of the normal
-  `auto` selection path.
 - Use canonical model IDs exactly as written. Do not invent shorthand model
   names.
 - Standard crew is the default. Quick Crew is an explicit bounded fast path only.
@@ -68,11 +54,13 @@ repository's own rules unless another applicable briefing guideline exists.
   be inferred as a global default.
 - Rozoro does not currently transmit skill objects/references to crew sessions.
   The relevant `brief-*` content must be incorporated into the actual task brief.
+- Do **not** create a No-Mistakes Runner role. A clean committed candidate is
+  submitted and driven through the Watchtower-owned `no-mistakes-gate`; the
+  no-mistakes pipeline owns its internal agents and model selection.
 - If a canonical source is missing, ambiguous, or internally inconsistent, report
   that condition instead of guessing.
 
 Follow-up on an existing live task normally uses the same crew/context via
 `./bin/rozoro send`; do not re-run fresh-crew selection merely because another
-turn is needed. Re-run selection when Watchtower is dispatching a new task-kind
-crew, such as reviewer, tester, replanner, No-Mistakes Runner, or replacement
-coder.
+turn is needed. Re-run selection when Watchtower is intentionally dispatching a
+new task-kind crew, such as reviewer, tester, replanner, or replacement coder.
