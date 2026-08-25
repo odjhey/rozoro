@@ -27,6 +27,11 @@ configuration for agent selection. Rozoro still benefits from a dedicated crew
 that performs the operational submit/reattach/listen work so Watchtower stays
 push-driven and the integration decision can remain with the workset owner.
 
+Long repair loops also need a bounded way to change direction without pretending a
+new Coder, branch, or revised plan is a fresh task. Replanning should be able to
+extend a lineage, but the cumulative attempt/replan history must remain visible and
+bounded.
+
 Finally, unattended operation needs an explicit operator control over the final
 merge mutation without turning all orchestration into a confirmation queue.
 
@@ -36,8 +41,8 @@ merge mutation without turning all orchestration into a confirmation queue.
    Merge Finisher after each candidate is judged ready.
 2. Let each Coder merge its own output and interpret its own no-mistakes result.
 3. Use a thin No-Mistakes Runner crew for pipeline operation and a Workset Merger
-   crew for dependency-aware integration/landing, with machine-local routing hints
-   and an explicit unattended merge toggle.
+   crew for dependency-aware integration/landing, with machine-local routing hints,
+   bounded cumulative replanning, and an explicit unattended merge toggle.
 
 ## Choice
 
@@ -73,6 +78,37 @@ verified.
 Repository policy and explicit operator requirements remain authoritative. The
 machine profile describes what this machine can or prefers to run; it does not
 change repository semantics or grant authority.
+
+### Attempt and replan budget
+
+Implementation attempts are cumulative across a lineage. A fresh Coder, branch,
+worktree, resume, or revised plan does not reset the counter.
+
+The lineage begins with an `attempt_limit` of 10 Coder attempts. Replanner receives
+the current plan/task, useful failure evidence, `attempt_count`, `attempt_limit`,
+and `replan_count`.
+
+A materially revised replan increments `replan_count`, preserves
+`attempt_count`, and extends `attempt_limit` by 10 up to a hard ceiling of **30
+Coder attempts**.
+
+At most **3 Replanner turns** are allowed for a lineage. The third Replanner turn
+may still restructure/split/defer the work, but it cannot open Coder attempts
+31–40. A replan that fails to produce a useful new direction still consumes one
+of the three Replanner turns so replanning cannot become an unbounded retry loop.
+
+This produces the normal progression:
+
+```text
+initial plan:  attempt_limit=10  replan_count=0
+replan #1:     attempt_limit=20  replan_count=1
+replan #2:     attempt_limit=30  replan_count=2
+replan #3:     attempt_limit=30  replan_count=3
+```
+
+Replanning may happen before the current attempt ceiling is exhausted when current
+evidence shows the task boundary, dependency graph, or implementation direction is
+wrong. Watchtower must not waste remaining attempts merely to reach the ceiling.
 
 ### No-Mistakes Runner
 
@@ -141,6 +177,9 @@ fresh Watchtower must understand before it can act.
   mixing project facts.
 - Machine-specific harness/account availability stops leaking into canonical role
   definitions.
+- Implementation lineages can change direction through explicit replanning without
+  resetting cost/accounting; the hard 30-Coder/3-Replanner bounds keep repair loops
+  finite.
 - No-mistakes execution remains push-friendly through a dedicated crew while
   no-mistakes retains semantic ownership of its pipeline.
 - Workset integration gets an explicit owner that understands dependencies,
