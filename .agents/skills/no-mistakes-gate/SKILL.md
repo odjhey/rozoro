@@ -78,8 +78,10 @@ Treat the current structured no-mistakes/AXI output as authoritative.
   with exact evidence while continuing unrelated work.
 - **checks-passed / passed / terminal success** — reconcile the final exact head,
   PR, required CI, and returned custody. If the candidate is now eligible to land,
-  dispatch a Merge Finisher using `brief-merge-finisher`; Watchtower does not
-  perform the merge itself.
+  dispatch a Merge Finisher. Watchtower writes a concise landing brief containing
+  the PR, expected exact head, landing evidence that must still apply, allowed
+  merge path/method, and required post-merge work. Watchtower does not perform the
+  merge itself.
 - **failed / cancelled / rejected** — preserve the run evidence and route actionable
   findings to the active coder or to replanning when the problem changes the task
   boundary.
