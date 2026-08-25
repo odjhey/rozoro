@@ -95,9 +95,13 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Dispatch the runner itself with model `gpt-5.6-luna` and high reasoning effort.
   * Dispatch it after the normal coding, review, and test work when you want the no-mistakes pass.
   * Ask it to run the actual no-mistakes workflow. Do not substitute a normal review prompt.
-  * Invoke no-mistakes through its configured default execution-target policy. Normal callers must not select a provider, harness, config directory, model, or fallback themselves.
-  * Let the configured policy try only its declared targets in order. Do not hold the task for a preferred target's cooldown when another configured target is available.
-  * If every configured target is unavailable, report that condition. Do not silently choose an undeclared target.
+  * Invoke no-mistakes through this fixed fallback order:
+
+    1. Claude Sonnet.
+    2. If that account is under its usage limit, fall back to `CLAUDE_CONFIG_DIR=~/.claude-asdverse claude sonnet`.
+    3. If that account is also under its usage limit, fall back to Pi `gpt-5.6-luna` and keep using it until the Claude accounts' limits are lifted.
+  * Do not hold the task waiting on a higher-priority target's cooldown when a later target in the order is ready.
+  * If every target in the order is unavailable, report that condition. Do not silently choose an undeclared target.
   * Explicit target or model overrides are for debugging or controlled experiments, not normal crew dispatch.
   * Keep harness identity, target/profile name, model ID, and reasoning effort separate. Do not derive model IDs from human-readable labels.
   * It should look for things the coder, reviewer, and tester may all have missed.
