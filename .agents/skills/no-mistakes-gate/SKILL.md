@@ -1,156 +1,142 @@
 ---
 name: no-mistakes-gate
 description: >-
-  Submit and drive a no-mistakes validation run directly from Watchtower. Use
-  when a clean committed candidate is ready for no-mistakes assurance. Watchtower
-  submits or reattaches the run, observes AXI state, responds to gates, reconciles
-  exact-head/custody evidence, and routes findings. Do not spawn a No-Mistakes
-  Runner crew.
+  Submit a no-mistakes validation run and reconcile it when Rozoro delivers a
+  no-mistakes notification. Use when a clean committed candidate is ready for
+  no-mistakes assurance or when Watchtower wakes for an actionable no-mistakes
+  run edge. Do not spawn a No-Mistakes Runner crew and do not poll from Watchtower.
 ---
 
 # No-mistakes gate
 
-Use this in **Watchtower when a candidate is ready for no-mistakes validation**.
 No-mistakes is an external pipeline/job, not a Rozoro crew role.
+
+The Watchtower is **push-driven**. It submits or reattaches a run, records its
+identity, then returns idle. A deterministic no-mistakes event adapter observes
+run state and publishes normalized events into `rozorod`; actionable edges wake
+Watchtower through the same durable generation/reconcile path used by crew.
 
 ## Ownership boundary
 
 Watchtower owns:
 
-- deciding when the candidate is ready for the gate;
-- supplying the full operator intent and exclusions;
-- recording the submitted branch/head and run identity;
-- observing structured run state;
-- responding to supported gates within existing authority;
-- reconciling final branch/PR/CI/custody evidence; and
-- routing defects or unresolved decisions back to the appropriate crew.
+- deciding when a candidate is ready for the gate;
+- supplying operator intent and exclusions;
+- submitting or reattaching the run;
+- recording task/run/head identity;
+- reconciling an actionable run after a Rozoro notification;
+- responding to supported gates within existing authority; and
+- routing findings or success to the next task kind.
 
-No-mistakes owns:
+The no-mistakes event adapter owns:
 
-- its disposable worktree and pipeline custody;
-- its internal review/fix/test/document/CI-repair agents;
-- internal agent/model/fallback selection;
-- branch forwarding, PR creation, and CI monitoring performed by its pipeline; and
-- the structured recovery actions it exposes through AXI/no-mistakes.
+- observing no-mistakes/AXI run transitions while Watchtower is idle;
+- publishing normalized, idempotent no-mistakes events to `monitor.sock` (with
+  the existing durable spool/ACK fallback when the daemon is unavailable); and
+- never making routing, approval, repository, or product decisions.
 
-Do not insert another LLM between Watchtower and no-mistakes merely to invoke or
-watch the pipeline.
+`rozorod` owns persistence, reduction, coalescing, pending generations, retry, and
+Watchtower wake delivery.
 
-## 1. Preflight
+No-mistakes owns its disposable worktree, pipeline custody, internal agents/model
+selection, fixes, PR/CI work, and structured recovery surface.
+
+The Observatory owns nothing; it is a human-readable visualization only.
+
+## Submit or reattach
 
 Before submission:
 
-1. Require a clean, committed candidate branch.
-2. Record the exact candidate head/tree, base, branch, and expected PR scope.
-3. Preserve the complete operator intent, important exclusions, and acceptance
-   criteria that no-mistakes must judge.
-4. Inspect current no-mistakes/AXI state for a matching active run. Reattach to a
-   matching run instead of creating a duplicate.
-5. Do not mutate no-mistakes global model/agent configuration as part of normal
-   Watchtower routing. Internal pipeline-agent selection belongs to no-mistakes.
+1. Require a clean committed candidate.
+2. Record repository, branch, exact head/tree, base, expected PR scope, intent,
+   exclusions, and acceptance source.
+3. Inspect current no-mistakes/AXI state once to avoid duplicating a matching run.
+4. Submit through the repository's supported no-mistakes path, including the
+   configured `no-mistakes` Git remote where applicable, or reattach as supported
+   by the installed no-mistakes version.
+5. Record the resulting run ID and bind it to the originating Rozoro task/lineage
+   for later notification reconciliation.
+6. Ensure the no-mistakes event adapter is tracking that run.
+7. Expose the run in `no-mistakes-observatory` for operator inspection.
+8. Return Watchtower to normal idle/push-driven operation.
 
-## 2. Submit or reattach
+Do not keep a Watchtower turn alive to wait for the run and do not build a polling
+loop around `axi status`.
 
-Use the repository's supported no-mistakes submission path. Where the repository
-is configured with a `no-mistakes` Git remote, submit the committed branch through
-that remote; use AXI/no-mistakes to start, identify, or reattach to the matching
-run as supported by the installed version.
+## Notification contract
 
-Record at least:
+The adapter should emit source events for meaningful run transitions. Persist all
+source events; coalesce only Watchtower wakeups.
 
-- no-mistakes run ID;
-- repository and branch;
-- submitted exact head/tree;
-- base;
-- submitted intent; and
-- current custody state.
+At minimum distinguish:
 
-Do **not** call `./bin/rozoro start` to create a No-Mistakes Runner crew.
+- progress-only state: persist, no wake;
+- approval/decision/input required: actionable wake;
+- actionable defect/failure/cancellation: actionable wake;
+- terminal/checks-passed success: actionable wake; and
+- custody/recovery state requiring a supported next action: actionable wake.
 
-## 3. Drive the run
+Every event needs stable run/task identity and an idempotent event ID. The daemon
+notification itself stays content-light; Watchtower gets authoritative detail by
+reconciling the referenced no-mistakes run state after wake.
 
-Treat the current structured no-mistakes/AXI output as authoritative.
+A wake does **not** mean the Observatory changed visually. The event adapter and
+structured no-mistakes state are the operational path.
 
-- **running/fixing/checking** — observe without issuing competing branch mutations.
-- **approval/decision gate** — respond through the supported AXI/no-mistakes
-  control path. Make bounded unattended decisions when existing operator/repository
-  policy already authorizes them; otherwise preserve state and surface an issue
-  with exact evidence while continuing unrelated work.
-- **checks-passed / passed / terminal success** — reconcile the final exact head,
-  PR, required CI, and returned custody. If the candidate is now eligible to land,
-  dispatch a Merge Finisher. Watchtower writes a concise landing brief containing
-  the PR, expected exact head, landing evidence that must still apply, allowed
-  merge path/method, and required post-merge work. Watchtower does not perform the
-  merge itself.
-- **failed / cancelled / rejected** — preserve the run evidence and route actionable
-  findings to the active coder or to replanning when the problem changes the task
-  boundary.
+## On Watchtower wake
 
-Prefer event/edge-driven observation where the installed interface supports it.
-Do not build a tight fixed-interval polling loop around `axi status`.
+When Rozoro reports a pending no-mistakes generation:
 
-## 4. Observatory
+1. run the normal Rozoro reconciliation path;
+2. identify the affected task/run(s);
+3. read current structured no-mistakes/AXI state for those run IDs;
+4. act only on current state, tolerating duplicate/at-least-once notifications;
+5. record/ack the reconciled generation; and
+6. return idle once no immediate decision or dispatch remains.
 
-Once an active run exists, use `no-mistakes-observatory` to make its graph/TUI
-visible in the dedicated untracked Herdr Observatory. Do not split the Watchtower
-pane for every run and do not attach the visualization to a Planner/Coder/Reviewer
-crew pane.
+Routing examples:
 
-The Observatory is for human inspection and learning. AXI/no-mistakes structured
-state remains authoritative for Watchtower decisions.
+- **running/fixing/checking only** — normally no actionable wake; if observed due
+  to replay/reconciliation, record and return idle;
+- **approval/decision gate** — respond through supported AXI/no-mistakes controls
+  when current policy authorizes the decision;
+- **local implementation defect** — route evidence to the active Coder;
+- **scope/contract failure** — dispatch Replanner;
+- **terminal success** — reconcile final exact head, PR, required CI, branch sync,
+  and custody; if landing is allowed, dispatch Merge Finisher;
+- **unsupported recovery/authority** — preserve state and surface the issue without
+  inventing Git surgery.
 
-Keep the run identity with the Observatory pane so concurrent no-mistakes gates
-can be distinguished and compared. Preserve terminal graph/scrollback through the
-associated landing/post-merge episode when practical; it may be cleaned up after
-final delivery evidence is captured or when superseded by a newer run.
+## Observatory
 
-## 5. Custody and recovery
+Use `no-mistakes-observatory` to keep each run's graph/TUI visible for operator
+inspection and optimization. The Observatory is not the notification mechanism,
+not a stable telemetry API, and not a source of operational truth.
 
-While no-mistakes owns the pipeline branch/worktree, do not manually edit, commit,
-pull, rebase, reset, merge, push, stash, replace refs, or otherwise compete with
-pipeline custody.
+Retain run IDs and prefer structured no-mistakes evidence for stage timing,
+retries, fixes, findings, agent/model usage, and outcomes when available.
 
-After terminal outcome, follow the structured `branch_sync.next_action` or other
-supported recovery instruction exactly. Do not translate an unsupported or
-ambiguous recovery state into improvised Git surgery.
+## Custody and model ownership
 
-If recovery changes the candidate head, invalidate stale review/test/no-mistakes/
-CI evidence as required and route any new repository work to the proper crew.
+While no-mistakes owns its pipeline branch/worktree, do not issue competing Git
+mutations. Follow supported structured recovery instructions exactly.
 
-## 6. Model and harness ownership
+Rozoro selects models for Rozoro crews only. no-mistakes owns its internal
+pipeline-agent/model/account/fallback configuration. If desired internal routing
+cannot be expressed by the installed version, track that as an integration gap;
+do not add a wrapper LLM crew.
 
-Rozoro selects models for **Rozoro crews**. It does not select no-mistakes'
-internal pipeline model by choosing an outer crew harness, because there is no
-outer No-Mistakes Runner crew in this design.
+## Evidence to retain
 
-Treat the installed no-mistakes configuration and current structured output as the
-source of truth for its internal agent/model/fallback behavior. If the desired
-agent/account/fallback policy cannot be expressed there, that is a no-mistakes
-integration/configuration gap to solve explicitly, not a reason to add a wrapper
-crew or mutate model configuration around each run.
+For each gate keep:
 
-## 7. Learning evidence
-
-The Observatory graph is useful for spotting optimization opportunities, but it is
-not a stable telemetry API.
-
-For each run, retain the run ID and prefer structured no-mistakes evidence for
-stage duration, retries, fixes, agent/model usage, findings, and outcomes when the
-installed version exposes them. If those data are not available, record the
-missing telemetry as an instrumentation gap rather than scraping terminal pixels.
-
-## 8. Report
-
-Record:
-
-- run ID and outcome;
+- originating Rozoro task/lineage;
+- run ID;
 - submitted and final exact head/tree;
 - base and branch;
-- structured gate/decision history relevant to the result;
-- no-mistakes pipeline-agent/model evidence when reported by no-mistakes;
-- fixes performed by the pipeline;
-- PR URL/state and required exact-head CI;
-- final custody state and supported recovery action, if any;
-- stale assurance invalidated by head movement; and
-- the next Rozoro routing decision, including `Merge Finisher` when the candidate
-  is ready to land.
+- actionable event/reconcile history;
+- relevant gate decisions;
+- fixes/findings reported by no-mistakes;
+- PR URL/state and exact-head CI;
+- final custody/recovery state; and
+- next routed action, including Merge Finisher when ready to land.
