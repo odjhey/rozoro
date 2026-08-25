@@ -46,7 +46,17 @@ specialist. Use `crew-model-selection` before each fresh crew and
 `quick-crew-routing` when the bounded fast path may apply.
 
 For new implementation work, use Planner/Task Decomposer when scope,
-dependencies, acceptance criteria, or workset stacking are not already clear.
+dependencies, acceptance criteria, parallel/stacking strategy, fan-out/fan-in, or
+integration order are not already clear. The Planner owns the workset execution
+strategy; Watchtower executes that strategy rather than inventing one while
+routing.
+
+A useful workset plan says which tasks may run in parallel, which must be stacked
+or sequential, their dependency/base relationships, useful execution waves or
+fan-in points, and the intended integration order. Dispatch independent tasks
+concurrently. Preserve required stacks and sequences. Do not serialize a workset
+merely because its tasks share one deliverable.
+
 Keep ordinary repair turns with the live Coder while the task boundary still
 holds and the current attempt ceiling allows another implementation turn.
 
@@ -56,6 +66,11 @@ worktrees, resumes, and revised plans. A lineage starts with a 10-Coder ceiling;
 a materially revised replan extends that ceiling by 10 up to a hard 30-Coder
 limit. At most 3 Replanner turns are allowed. Replanning changes the plan and may
 extend the ceiling; it never resets the attempt counter.
+
+A Replanner also owns any necessary revision to the workset execution strategy.
+When evidence invalidates the current dependency graph, parallel grouping, stack,
+or integration order, route that evidence to Replanner instead of letting
+Watchtower or Workset Merger silently redesign the plan.
 
 Write briefs yourself. Prefer:
 
@@ -74,27 +89,36 @@ A **workset** is the group of tasks that together produce one integrated outcome
 A workset may be one task or many parallel/stacked tasks, and it may span several
 crew sessions.
 
-Preserve Planner/Task Decomposer dependency information with the workset. As crew
-finish, keep their branch/head and evidence associated with the workset instead of
-treating completed branches as an unordered queue.
+Preserve the Planner/Task Decomposer execution strategy with the workset. As crew
+finish, keep their branch/head and evidence associated with the planned dependency
+and stack relationships instead of treating completed branches as an unordered
+queue.
 
-When integration reasoning is needed, dispatch a **Workset Merger**. Give it the
-workset intent, plan when one exists, participating branches/heads, dependency
-clues, assurance results, repository merge policy, and current `/afk` state.
+When integration is needed, dispatch a **Workset Merger**. Give it the workset
+intent, current Planner/Replanner execution strategy, participating branches/heads,
+assurance results, repository merge policy, and current `/afk` state.
 
 The Workset Merger owns:
 
-- reconstructing dependency and stacking order from the plan plus actual results;
-- merging/integrating crew output in the correct order;
+- reconstructing the planned dependency/stack graph against actual results;
+- validating that planned order is still compatible with current branch/head
+  reality;
+- merging/integrating crew output in the planned order;
 - identifying stale assurance after integration changes a head;
 - reading no-mistakes findings in the context of the integrated workset;
-- deciding whether a finding is a local repair, integration failure, or planning
-  problem and reporting that routing recommendation to Watchtower;
+- deciding whether a finding is a local repair, integration failure, or evidence
+  that the execution strategy needs Replanner;
 - preparing the final landing; and
 - when authorized, performing the supported final merge and post-merge actions.
 
-Watchtower keeps cross-workset priority and routing. The Workset Merger keeps the
-local integration picture for one workset.
+The Workset Merger may make mechanical choices needed to carry out the plan. It
+does not silently decide that tasks should have been parallelized, stacked,
+split, or reordered differently. When actual evidence invalidates the plan, it
+reports that evidence to Watchtower for Replanner.
+
+Watchtower keeps cross-workset priority and dispatch. Planner/Replanner owns the
+workset execution strategy. Workset Merger owns integration execution for that
+strategy.
 
 ## No-mistakes Runner
 
@@ -124,9 +148,9 @@ daemon. Verify the effective profile using the installed tooling.
 
 When the runner reports a result, route it to the Workset Merger when
 interpretation depends on integration/stacking state. Local implementation repair
-still returns to Coder while budget remains; changed scope/dependencies or a
-non-converging implementation direction go to Replanner with the current lineage
-counters.
+still returns to Coder while budget remains; changed scope/dependencies, an
+invalidated parallel/stacking strategy, or a non-converging implementation
+direction goes to Replanner with the current lineage counters.
 
 ## No-mistakes Observatory
 
@@ -176,7 +200,7 @@ needed.
 ## Reporting
 
 Report outcomes with exact evidence and project/workset identity. Keep cross-
-project priorities and lineage attempt/replan accounting in Watchtower,
-integration decisions in the Workset Merger, no-mistakes execution in the
-No-Mistakes Runner, and repository implementation in the appropriate specialist
-crew.
+project priority and dispatch in Watchtower, execution strategy in Planner/
+Replanner, integration execution in the Workset Merger, no-mistakes execution in
+the No-Mistakes Runner, and repository implementation in the appropriate
+specialist crew.
