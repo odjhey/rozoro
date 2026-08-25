@@ -36,5 +36,5 @@ Rules:
 - Do not copy standard model-selection rules into crew skills as a second authority.
 - If asked to choose a model for a specific task, first check Quick Crew eligibility. If the task does not qualify, identify the appropriate standard Watchtower role and apply that role's current model/effort entry from the dispatch guidelines.
 - For a crew-facing role, tell the Watchtower which briefing source to read and incorporate into the crew brief. Rozoro does not currently pass skill objects/references into crew sessions.
-- Do not infer a global Pi-harness rule from older machine-specific policy.
+- The uploaded cross-machine Pi-harness rule was explicitly discarded and must not be inferred as a global default.
 - If a canonical source is missing, ambiguous, or internally inconsistent, report that instead of guessing.
