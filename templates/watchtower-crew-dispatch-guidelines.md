@@ -57,9 +57,22 @@ task. Bind the result to the tested head.
 ### Escalation Replanner — `gpt-5.6-sol`, high
 
 Use when implementation/review/test/integration loops stop converging or new
-evidence changes the task boundary. Give it the original task plus the useful
-failure evidence. It produces a revised bounded task/dependency plan for fresh
-execution.
+evidence changes the task boundary, dependency graph, or implementation direction.
+
+Give it the current bounded task/plan, useful failure evidence, and the lineage's
+current `attempt_count`, `attempt_limit`, and `replan_count`. It produces a
+materially revised bounded task/dependency plan for fresh execution and explains
+what changed so the next Coder does not simply repeat the failed direction.
+
+Replanning **extends** the cumulative Coder budget; it never resets it. The normal
+lineage starts with `attempt_limit=10`. A materially revised replan extends that
+limit by 10, capped at **30 total Coder attempts**. Keep `attempt_count` cumulative
+across fresh Coders, branches, worktrees, and revised plans.
+
+A lineage may use at most **3 Replanner turns**. Track `replan_count` explicitly.
+The third Replanner turn may still restructure/split/defer the work, but the hard
+Coder ceiling remains 30 and it does not create attempts 31–40. Use the
+`attempt-budget` skill for the exact routing rules.
 
 ### No-Mistakes Runner — `gpt-5.6-luna`, high
 
@@ -149,11 +162,22 @@ demand rather than trying to preload a project's entire history.
 
 Within a workset, delegate integration/stacking/landing judgment to the Workset
 Merger. Delegate no-mistakes execution/listening to the No-Mistakes Runner.
-Watchtower routes their results, handles cross-workset priorities, and involves the
-operator when `/afk` or a genuine authority boundary requires it.
+Watchtower routes their results, handles cross-workset priorities, enforces the
+cumulative attempt/replan budget, and involves the operator when `/afk` or a
+genuine authority boundary requires it.
 
-## Experimental report fields
+## Repair-loop report fields
 
-Implementation-related crews may provide `attempt_count` and `caused_by` when
-useful for measuring repair loops. They remain ordinary report metadata rather
-than Rozoro lifecycle fields.
+Implementation and replanning crews should provide these when the lineage is in a
+repair loop:
+
+```text
+attempt_count: 17
+attempt_limit: 20
+replan_count: 1
+caused_by: tester finding on retry/idempotency behavior
+```
+
+These are ordinary report metadata derived from durable lineage history rather
+than Rozoro lifecycle fields. Watchtower remains responsible for reconciling the
+actual counts before dispatch.
