@@ -47,4 +47,5 @@ If an approved decision changes, prefer a new ADR that `supersedes` the old one 
 - [ADR-0004: Require first-class watchtower attention identity](0004-watchtower-mailbox.md)
 - [ADR-0005: Keep repository workflow policy above Rozoro core](0005-workflow-boundary.md)
 - [ADR-0006: Resolve cross-machine Watchtower policy differences](0006-cross-machine-watchtower-policy-resolution.md)
-- [ADR-0007: Select no-mistakes auto model through the invoking harness](0007-no-mistakes-auto-harness-selection.md)
+- [ADR-0007: Select no-mistakes auto model through the invoking harness](0007-no-mistakes-auto-harness-selection.md) — superseded by ADR-0008
+- [ADR-0008: Treat no-mistakes as an external gate](0008-no-mistakes-external-gate.md)
