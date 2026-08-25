@@ -1,19 +1,15 @@
 ---
 name: attempt-budget
 description: >-
-  Bound non-converging implementation lineages to ten coder attempts without
-  adding a new lifecycle entity. This is Watchtower-owned routing policy: derive
-  attempts from durable coder turns, allow attempt 10 to complete normal
-  assurance, never start coder attempt 11, and defer exhausted work while other
-  runnable work remains.
-metadata:
-  execution-owner: watchtower
-  watchtower-action: invoke-directly
-  derived-from: uploaded-watchtower-policy/05-attempt-budget-and-deferral.md
+  Enforce Watchtower's ten-coder-attempt lineage budget from durable task/session/
+  turn history. Use when routing a non-converging implementation lineage, deciding
+  whether another coder attempt is allowed, or deferring exhausted work while
+  other runnable tasks remain.
 ---
 
 # Attempt budget and deferral
 
+Use this in **Watchtower while routing implementation retries and deferred work**.
 Use the existing task/session/turn history as the source of attempt accounting.
 Do not add or assume a separate persisted attempt lifecycle merely to enforce the
 budget.
