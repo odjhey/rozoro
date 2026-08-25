@@ -50,6 +50,10 @@ When a clean committed candidate is ready for no-mistakes assurance:
 7. It reconciles the final exact head, PR, CI, branch sync, and custody state.
 8. It routes actionable repository findings back to the active coder or to the
    Escalation Replanner when the task boundary changed.
+9. If the gate result is acceptable and landing is authorized by current
+   repository/operator policy, Watchtower dispatches a **Merge Finisher** crew to
+   perform the actual merge and required post-merge activities. Watchtower does
+   not merge the repository itself.
 
 No-mistakes owns its own pipeline-agent/model/account/fallback configuration.
 Rozoro selects models for Rozoro crews only. If the desired no-mistakes internal
@@ -71,6 +75,9 @@ task, session, custody owner, or second control plane.
   Watchtower-owned no-mistakes gate and current structured recovery instructions.
 - Keep no-mistakes defects in the normal delivery loop: local repairs go back to
   the coder; contract/scope failures go to replanning.
+- Gate success transitions to a separate Merge Finisher crew for merge and
+  post-merge repository/provider work; Watchtower remains the judgment/routing
+  layer.
 - Keep the side Herdr panel, but attach it to the active no-mistakes run beside
   Watchtower.
 - Avoid outer-versus-inner model ambiguity and duplicate agent orchestration.
