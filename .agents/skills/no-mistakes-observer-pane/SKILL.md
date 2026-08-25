@@ -1,66 +1,63 @@
 ---
 name: no-mistakes-observer-pane
 description: >-
-  Open and manage the untracked sibling Herdr observer pane for a No-Mistakes
-  Runner. Use for every No-Mistakes Runner dispatch once an active no-mistakes
-  run exists, unless the local Herdr version cannot create the pane safely.
+  Open and manage the untracked sibling Herdr pane that displays an active
+  no-mistakes run beside Watchtower. Use for every active no-mistakes gate once a
+  run exists, unless the installed Herdr cannot create the pane safely.
 ---
 
 # No-mistakes observer pane
 
-Use this in **Watchtower for every active No-Mistakes Runner**. The observer is
-not another crew member and has no repository ownership or mutation authority.
+Use this in **Watchtower for every active no-mistakes gate**. The observer is UI
+only: it is not a Rozoro crew, task, session, custody owner, or control authority.
 
-This is the normal No-Mistakes observation path, not an optional convenience.
-When the runner starts an actual no-mistakes run, Watchtower should open the
-observer pane automatically when the supported Herdr pane operation is available.
-Failure to create an observer must not alter branch custody or block the run; note
-the observation failure and continue managing the real runner/task.
+This is the normal visibility path, not an optional convenience. Once Watchtower
+has submitted or reattached to an actual no-mistakes run, open the observer pane
+automatically when the supported Herdr pane operation is available.
 
-Current no-mistakes target/fallback and custody policy remain authoritative. This
-skill only describes the observation surface.
+Failure to create the observer must not alter branch custody or block the run.
+Record the observation failure and continue driving the real run through
+no-mistakes/AXI.
 
 ## Open
 
-When a No-Mistakes Runner has started an actual no-mistakes run:
+When an active no-mistakes run exists:
 
-1. Create a sibling Herdr pane to the right of the runner/harness pane using the
+1. Create a sibling Herdr pane to the right of the **Watchtower pane** using the
    supported local Herdr pane operation.
-2. Preserve focus on the runner/harness pane after creating the observer.
-3. In the observer pane, run `no-mistakes attach` once the active run exists.
-4. Treat the pane as untracked observation only. Do not register it as a Rozoro
+2. Preserve focus on the Watchtower pane after creating the observer.
+3. In the observer pane, run `no-mistakes attach` for the active run using the
+   supported invocation for the installed no-mistakes version.
+4. Treat the pane as untracked display only. Do not register it as a Rozoro
    crew/task/session.
 
-Do not wait for an operator request before opening it. If the local Herdr version
-does not provide a supported way to create the pane, skip the observer, record
-that reason, and continue the runner rather than inventing terminal-control
+Do not wait for an operator request before opening it. If the installed Herdr
+version does not provide a supported way to create the pane, skip it, record that
+reason, and continue the no-mistakes gate rather than inventing terminal-control
 commands.
 
 ## Observe only
 
-The observer may display the active run and its gate/progress output. It must not:
+The observer may display pipeline progress, findings, and gates. It must not:
 
 - edit repository files;
 - move refs or branches;
-- drive AXI/no-mistakes control actions that belong to the runner;
-- answer gates on behalf of the runner;
-- become a second No-Mistakes Runner; or
+- become a second AXI/no-mistakes controller;
+- answer gates by itself;
+- become a Rozoro crew; or
 - be treated as evidence that custody returned or checks passed.
 
-The dedicated No-Mistakes Runner remains the only crew role that invokes or
-controls the workflow.
+Watchtower drives decisions through the structured no-mistakes/AXI interface.
+The pane is only a human-readable projection of that run.
 
 ## Close
 
-Close the observer pane when the no-mistakes gate/run is accepted, abandoned, or
-otherwise reaches a state where live observation is no longer useful. Closing the
-observer has no task lifecycle meaning and must not reap or mutate the runner
-task.
+Close the observer pane when the no-mistakes run is terminal, abandoned, or no
+longer needs live display. Closing it has no task or pipeline lifecycle meaning.
 
 ## Reporting
 
-Watchtower does not create a separate durable task record for the observer. If
-pane creation failed, include the reason in the Watchtower decision/task notes so
-the absence of a side pane is explainable. If observation surfaces a meaningful
-state transition, reconcile it through the actual runner/task evidence rather
-than treating terminal display as a second source of truth.
+Do not create a separate durable task for the observer. If pane creation failed,
+record the reason in the Watchtower decision/task notes so the missing side pane
+is explainable. If the pane displays a meaningful state transition, reconcile it
+against authoritative no-mistakes/AXI state before acting.
