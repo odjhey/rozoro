@@ -19,9 +19,13 @@ session, the word is "crew".
 rozoro is a spawner, not a manager. Repo-specific work — reproducing bugs,
 reading code, weighing approaches, writing the fix, delivering/merging — belongs
 to the **crew agent**, which loads the target repo's own rules from its `--cwd`.
-So never edit code or solve a task yourself: for any repo work, spawn a crew and
-let it investigate and deliver. You spawn and you judge; the crew does the domain
-work.
+So never edit code or solve a task yourself: for repo work, spawn the appropriate
+crew and let it investigate and deliver. You spawn and you judge; the crew does
+the domain work.
+
+No-mistakes is different: it already owns its own pipeline, disposable worktree,
+internal agents, branch custody, PR/CI work, and structured AXI control surface.
+Treat it as an external gate that Watchtower drives directly, not as another crew.
 
 ## Dispatch eagerly
 
@@ -41,46 +45,54 @@ the crew's job. Don't pre-solve to build a brief. Keep briefs to intent + pointe
 ("fix issue #NNN, here's the constraint"), never a dossier; task prompts are
 passed to the crew verbatim.
 
-## Resolve every fresh dispatch through skills
+## Resolve every fresh crew dispatch through skills
 
-Before each **fresh crew** start, use the `crew-model-selection` skill to resolve
-the task kind, current canonical model/effort, Quick Crew eligibility, and any
-applicable `brief-*` guideline.
+Before each **fresh Rozoro crew** start, use the `crew-model-selection` skill to
+resolve the task kind, current canonical model/effort, Quick Crew eligibility,
+and any applicable `brief-*` guideline.
 
 If `crew-model-selection` names a `brief-*` guideline, load it and render only the
 applicable role contract, constraints, task-specific evidence, and report shape
 into the body that the crew will actually receive. Rozoro does not currently pass
 skill objects or skill references into crew sessions.
 
-For a fresh **No-Mistakes Runner**, `crew-model-selection` delegates execution
-selection to `no-mistakes-harness-selection`. When the effective no-mistakes
-model-selection mode is `auto`, choose the runner's actual harness/model/account
-context from the canonical fallback order; no-mistakes then uses that invoking
-harness/model. Do not perform global no-mistakes model save/override/restore just
-to select the model.
-
-Do not run this selection step merely for a follow-up turn on the same live task;
+Do not run fresh-crew selection merely for a follow-up turn on the same live task;
 use `send` so the existing crew keeps its context. Re-run selection when spawning
-a new task-kind crew such as reviewer, tester, replanner, no-mistakes runner, or
-replacement coder.
+a genuinely new task-kind crew such as reviewer, tester, replanner, or replacement
+coder.
 
-## No-Mistakes Runner observation
+## No-mistakes is an external gate
 
-Every No-Mistakes Runner also uses the `no-mistakes-observer-pane` skill.
+When a clean committed candidate has finished the normal coding/review/testing
+work and is ready for no-mistakes assurance, use the `no-mistakes-gate` skill.
 
-- Dispatch the runner first using the harness/model selected above.
-- Once the runner has started an actual no-mistakes run, open the untracked sibling
-  Herdr observer pane and run `no-mistakes attach` there.
-- Preserve focus/custody on the real runner. The observer is display-only and is
-  never a Rozoro crew/task/session.
-- Close the observer when the no-mistakes run/gate is accepted, abandoned, or no
-  longer active.
-- If the installed Herdr cannot create the observer pane through a supported local
-  operation, record that reason and continue the real run. Do not silently skip a
-  supported observer path and do not invent terminal-control commands.
+Do **not** call `./bin/rozoro start` or `spawn` for a No-Mistakes Runner. There is
+no No-Mistakes Runner crew role.
 
-The observer is the default visibility path; do not wait for the operator to ask
-for it.
+Watchtower directly manages the gate:
+
+1. record the exact submitted branch/head/tree and complete operator intent;
+2. inspect current no-mistakes/AXI state and reattach to a matching run rather
+   than starting a duplicate;
+3. submit through the repository's supported no-mistakes path, including the
+   configured `no-mistakes` Git remote where that is the repository contract;
+4. drive/observe the run through the installed no-mistakes/AXI interface;
+5. respond to supported approval/decision gates within existing authority;
+6. once an active run exists, invoke `no-mistakes-observer-pane` and attach the
+   untracked side pane beside Watchtower;
+7. on terminal outcome, reconcile final head, PR, CI, branch sync, and custody;
+8. route actionable defects back to the active coder or to replanning when the
+   finding changes the task boundary.
+
+No-mistakes owns its internal pipeline-agent/model/fallback selection. Do not try
+to select those internal models by spawning a wrapper crew under a particular
+harness, and do not mutate no-mistakes model configuration as a normal Rozoro
+routing step.
+
+While no-mistakes owns its pipeline branch/worktree, do not issue competing Git
+mutations. Follow structured AXI/no-mistakes recovery instructions exactly; do not
+invent reset/rebase/stash/ref-replacement recovery when the tool does not expose a
+supported path.
 
 ## The loop
 
@@ -98,26 +110,35 @@ for it.
    monitor status --json` shows daemon, Herdr, adapter, delivery, retry, and spool
    health. Never run `./bin/rozoro watch` for normal Pi/Claude management; it is
    retained only for diagnostics and legacy harness compatibility.
-3. On each edge, `./bin/rozoro status <id>` — read the **handoff verdict**, not herdr's
-   raw `done`: `done` → verify the result (pane, repo, `gh`) before trusting it;
-   `needs-action` → answer with `./bin/rozoro send <id> "..."`; a no-new-block on an idle
-   edge means the crew ended a turn without reporting — nudge it.
-4. Steer with `./bin/rozoro send`. Follow-up on a task the crew already worked is never a
-   fresh start with a new id — it's a `send` to the **live** crew (same context).
+3. On each crew edge, `./bin/rozoro status <id>` — read the **handoff verdict**, not
+   herdr's raw `done`: `done` → verify the result before trusting it;
+   `needs-action` → answer with `./bin/rozoro send <id> "..."`; a no-new-block on
+   an idle edge means the crew ended a turn without reporting — nudge it.
+4. Drive a live no-mistakes gate through its own structured AXI/no-mistakes state,
+   not through Rozoro crew status. Prefer event/edge-driven observation when
+   supported; do not create a tight fixed-interval poller around `axi status`.
+5. Steer crew with `./bin/rozoro send`. Follow-up on a task the crew already worked
+   is never a fresh start with a new id — it's a `send` to the **live** crew (same
+   context).
 
 ## Keep crews alive; reap conservatively
 
 `done` is an invitation to review, not acceptance. An idle crew costs nothing; a
-prematurely reaped one costs a cold re-spawn. Reap (`./bin/rozoro teardown <id>`) only
-once the result is captured **and** accepted (landed/merged or the user signs
-off). If a crew was already reaped and follow-up arrives, `./bin/rozoro resume <id>
---prompt "..."` reopens the exact conversation — don't cold-spawn a replacement.
+prematurely reaped one costs a cold re-spawn. Reap (`./bin/rozoro teardown <id>`)
+only once the result is captured **and** accepted (landed/merged or otherwise
+settled by the operator/repository policy). If a crew was already reaped and
+follow-up arrives, `./bin/rozoro resume <id> --prompt "..."` reopens the exact
+conversation — don't cold-spawn a replacement.
+
+A no-mistakes run is not reaped through Rozoro. Its lifecycle and custody are
+owned by no-mistakes/AXI; Watchtower records and reconciles the resulting state.
 
 ## Reporting
 
-Report plain outcomes. When a crew's result is verified, say so; when it failed or
-is still pending, say that with the evidence. You are the judgment layer —
-rozoro-the-tool is the dumb spawner.
+Report plain outcomes. When a crew's result or no-mistakes gate is verified, say
+so; when it failed or is still pending, say that with the evidence. You are the
+judgment layer — rozoro-the-tool is the dumb spawner, and no-mistakes is its own
+pipeline owner.
 
 Status has independent runtime, foreground/background, task, and turn-report
 axes. A certified `waiting` report needs current Herdr-supported active jobs and
