@@ -13,13 +13,15 @@ Return a compact table with these columns:
 - when to use it;
 - canonical model ID;
 - reasoning effort;
-- important routing constraints.
+- important routing constraints;
+- crew-facing skill/instruction to pass, when one exists.
 
 Then report separately:
 
 1. the current no-mistakes execution-target fallback order, including any configuration/custody requirements;
 2. the criteria for escalating from coder/reviewer/tester loops to the replanner;
-3. any distinction between harness/profile/target names, model IDs, and reasoning effort that callers must preserve.
+3. any distinction between harness/profile/target names, model IDs, and reasoning effort that callers must preserve;
+4. whether each selected role is Watchtower-owned work or requires dispatch to crew.
 
 Rules:
 
@@ -28,4 +30,5 @@ Rules:
 - Do not reinterpret this prompt as policy. If this prompt and the dispatch guidelines differ, the dispatch guidelines win.
 - Do not copy model-selection rules into a crew skill as a second authority.
 - If asked to choose a model for a specific task, first identify the appropriate Watchtower role from the task shape, then apply that role's current model/effort entry from the dispatch guidelines.
+- For a crew-facing role, tell the Watchtower which skill/instructions must be available to the dispatched crew; do not imply that Watchtower should perform that role itself.
 - If the source file is missing, ambiguous, or internally inconsistent, report that instead of guessing.
