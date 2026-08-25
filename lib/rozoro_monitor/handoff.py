@@ -24,7 +24,7 @@ def cursor(path: str | os.PathLike[str] | None) -> int | str | None:
         if value < 0:
             raise ValueError
         return value
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         return "invalid"
 
 

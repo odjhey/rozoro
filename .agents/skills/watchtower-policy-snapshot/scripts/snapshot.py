@@ -125,7 +125,7 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
             index += 1
         if block_depth == 0 and tokens == expected_invocation:
             invocation_results.append(
-                any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:]))
+                any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:], strict=False))
             )
         for token in tokens:
             if token in openers or token == "{":

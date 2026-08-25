@@ -84,7 +84,7 @@ evidence.json  # machine-readable task classifications and per-handoff digests
 metadata.json  # schema, UTC time, file hashes, privacy/retention boundary
 ```
 
-All three files use schema `rozoro.watchtower-progress-report/v2`. The source object records `default-rozoro-home` versus `explicit-override`, a non-path display token, and a stable hash of the opened filesystem identity:
+`evidence.json` and `metadata.json` declare schema `rozoro.watchtower-progress-report/v2`; `report.md` is their human-readable companion. The source object records `default-rozoro-home` versus `explicit-override`, a non-path display token, and a stable hash of the opened filesystem identity:
 
 ```json
 {
