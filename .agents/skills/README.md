@@ -62,30 +62,37 @@ The canonical role policy lives in
 
 The important ownership boundaries are:
 
-- **Planner/Task Decomposer** bounds work and dependencies.
+- **Planner/Task Decomposer** bounds the work and owns its execution strategy:
+  dependencies, parallel groups, stacks/sequences, fan-out/fan-in, and intended
+  integration order.
 - **Coder** implements a bounded task.
 - **Reviewer** and **Tester** provide independent assurance.
-- **Replanner** changes a non-converging task/dependency direction while preserving
-  cumulative lineage counters; use `attempt-budget` to decide whether another
-  Coder/Replanner turn is available.
+- **Replanner** changes a non-converging task/dependency/execution strategy while
+  preserving cumulative lineage counters; use `attempt-budget` to decide whether
+  another Coder/Replanner turn is available.
 - **No-Mistakes Runner** is a thin crew that submits/attaches to the configured
   no-mistakes pipeline, keeps the run alive/listened to, and returns structured
   run evidence. It does not replace no-mistakes' own pipeline agents.
-- **Workset Merger** owns integration reasoning for a workset: dependency/stack
-  order, merging crew outputs into the workset candidate, reading no-mistakes
-  results in workset context, routing repair/replan needs, and performing the final
-  merge/post-merge work when current authority permits.
+- **Workset Merger** executes and reconciles the Planner/Replanner strategy against
+  actual branches, reads no-mistakes results in workset context, routes evidence
+  that requires repair/replanning, and performs final merge/post-merge work when
+  current authority permits.
 - **Watchtower** owns cross-workset priority, dispatch, routing, and operator
   interaction.
 
 ## Worksets and merging
 
 When several tasks contribute to one deliverable, preserve their relationship as a
-workset. Give the Workset Merger the planner/decomposer output when one exists,
-plus the current task branches/heads and assurance results.
+workset. The Planner/Replanner plan should identify which tasks may run in parallel,
+which are stacked or sequential, and how they are expected to fan in and integrate.
+Watchtower dispatches according to that plan.
 
-The Workset Merger derives the correct dependency and stacking order from that
-evidence instead of treating completed crew as an unordered bag of branches.
+Give the Workset Merger the current execution strategy plus task branches/heads and
+assurance results. The merger validates and realizes the planned dependency/stack
+order against actual results instead of treating completed crew as an unordered bag
+or silently replacing the plan. If repository evidence invalidates the strategy,
+route that evidence to Replanner.
+
 No-mistakes findings are most useful when read by the same merger that understands
 the integrated workset shape.
 
