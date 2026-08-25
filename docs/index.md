@@ -12,6 +12,7 @@ The README remains the operator-facing description of the current CLI. Implement
 - [Ubiquitous language](ubiquitous-language.md) — canonical terms for code, prompts, issues, reviews, and docs.
 - [Decisions](decisions/README.md) — ADR-lite records for decisions that constrain future work.
 - [Implementation plans](plans/) — historical and active implementation sequencing.
+- [Watchtower runbooks](runbooks/README.md) — reusable operator procedures with provenance and exclusions.
 
 ## Product direction
 
