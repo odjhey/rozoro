@@ -27,14 +27,24 @@ Choose among the roles that fit the next bounded action:
 - Quick Scout / Quick Coder when `quick-crew-routing` qualifies
 
 For new implementation work, Planner is the normal bridge from raw intent to a
-bounded coder task when scope, dependencies, acceptance criteria, or stacking are
-not already clear. A normal repair turn stays with the existing coder while the
-task boundary still holds.
+bounded **workset execution strategy** when scope, dependencies, acceptance
+criteria, parallelism, stacking, fan-out/fan-in, or integration order are not
+already clear.
 
-Use a Workset Merger when completed or candidate tasks need dependency-aware
-integration, when stacked branches must be ordered, when no-mistakes results need
-to be interpreted against the integrated workset, or when an accepted workset is
-ready for landing/post-merge work.
+Planner decides which bounded tasks may run concurrently, which must be sequential
+or stacked, their dependency/base relationships, and intended integration order.
+Watchtower dispatches according to that strategy rather than independently grading
+tasks into parallel or serial execution.
+
+A normal repair turn stays with the existing Coder while the task boundary still
+holds. Use Replanner when evidence requires changing the task graph, parallel/
+stacking strategy, dependencies, or implementation direction.
+
+Use a Workset Merger when candidate tasks need the current Planner/Replanner
+strategy executed against actual branches, when no-mistakes results need to be
+interpreted against the integrated workset, or when an accepted workset is ready
+for landing/post-merge work. The merger validates and realizes the plan; it does
+not silently replace the Planner's execution strategy.
 
 Use a No-Mistakes Runner when an exact committed candidate is ready to enter or
 reattach to the configured no-mistakes pipeline.
@@ -71,15 +81,20 @@ Watchtower writes the brief in its own words. Prefer:
 
 Useful role-specific context includes:
 
-- Planner: source request and operator constraints.
-- Coder: bounded task/repair finding and acceptance source.
+- Planner: source request, operator constraints, and expected workset outcome. Ask
+  for bounded tasks plus dependencies, parallel groups, stacks/sequences, fan-in,
+  and intended integration order where applicable.
+- Coder: bounded task/repair finding and acceptance source, including the task's
+  position/base in the workset when the plan makes that relevant.
 - Reviewer/Tester: exact candidate head and task/acceptance pointer.
+- Replanner: current workset/task plan, failed evidence, current execution
+  strategy, and cumulative attempt/replan counters.
 - No-Mistakes Runner: repository/workset identity, exact candidate head/base,
   intended no-mistakes profile when one is known, and the requested submit/attach
   behavior.
-- Workset Merger: workset intent, planner/decomposer result when available,
-  participating task branches/heads, dependency clues, assurance/no-mistakes
-  results, target branch/PR policy, and current `/afk` state.
+- Workset Merger: current Planner/Replanner execution strategy, participating task
+  branches/heads, assurance/no-mistakes results, target branch/PR policy, and
+  current `/afk` state.
 - Quick Crew: the exact narrow action plus its stop/escalation boundary.
 
 The crew can read repository-local rules and inspect the repository from `--cwd`;
@@ -90,8 +105,8 @@ to disambiguate this turn.
 
 Use `./bin/rozoro send` when the next turn belongs to the same live task and role.
 Run fresh selection when Watchtower intentionally changes task kind or replaces the
-active crew, for example Planner -> Coder, Coder -> Reviewer, candidate ->
-No-Mistakes Runner, or several completed tasks -> Workset Merger.
+active crew, for example Planner -> parallel/stacked Coders, Coder -> Reviewer,
+candidate -> No-Mistakes Runner, or planned candidate set -> Workset Merger.
 
 If current policy or machine availability is ambiguous, report the ambiguity and
 choose the safest usable target that preserves the requested role boundary.
