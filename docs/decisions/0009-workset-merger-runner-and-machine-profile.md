@@ -17,10 +17,16 @@ availability is machine-specific, while implementation and delivery policy is
 repository-specific. Encoding one machine's accounts or launcher layout into the
 canonical Watchtower role policy makes that policy brittle.
 
-Parallel work introduces a second ownership problem. Completed crew branches are
-not necessarily independent or mergeable in completion order. The actor that
-integrates a workset needs the planner/decomposer dependency picture, actual crew
-results, exact-head assurance, and no-mistakes findings in one place.
+Parallel work introduces a second ownership problem. Work decomposition is not
+only a list of tasks: somebody must decide which tasks may execute concurrently,
+which are stacked or sequential, where dependencies and fan-in points exist, and
+what integration order the workset is expected to follow. That decision belongs
+with the Planner/Task Decomposer because it has the intent and decomposition view.
+
+Completed crew branches are still real evidence and may invalidate the planned
+shape. The actor that integrates a workset therefore needs the Planner/Replanner
+execution strategy, actual crew results, exact-head assurance, and no-mistakes
+findings in one place, but should not silently become a second planner.
 
 No-mistakes already owns its validation pipeline and supports global/repository
 configuration for agent selection. Rozoro still benefits from a dedicated crew
@@ -40,9 +46,10 @@ merge mutation without turning all orchestration into a confirmation queue.
 1. Keep Watchtower as the direct no-mistakes controller and use a simple final
    Merge Finisher after each candidate is judged ready.
 2. Let each Coder merge its own output and interpret its own no-mistakes result.
-3. Use a thin No-Mistakes Runner crew for pipeline operation and a Workset Merger
-   crew for dependency-aware integration/landing, with machine-local routing hints,
-   bounded cumulative replanning, and an explicit unattended merge toggle.
+3. Use Planner/Replanner to own workset execution strategy, a thin No-Mistakes
+   Runner crew for pipeline operation, and a Workset Merger crew to realize the
+   planned integration/landing against actual results, with machine-local routing
+   hints, bounded cumulative replanning, and an explicit unattended merge toggle.
 
 ## Choice
 
@@ -59,6 +66,26 @@ useful context from repository docs, Planner/Task Decomposer outputs, crew
 handoffs, review/test/no-mistakes evidence, Workset Merger decisions, delivery
 outcomes, and operator steering. Durable results are reused when relevant; there
 is no requirement to preload a project's full history before routing work.
+
+### Planner / Task Decomposer execution strategy
+
+Planner/Task Decomposer owns the intended **workset execution strategy**.
+Decomposition should decide, where applicable:
+
+- bounded work items;
+- dependency edges;
+- parallel groups or execution waves;
+- sequential/stacked tasks and their base relationships;
+- fan-out/fan-in points;
+- intended integration/merge order; and
+- assumptions whose failure should trigger replanning.
+
+Watchtower schedules work according to that plan. Independent work should be
+started concurrently when practical; dependent or stacked work should preserve
+its required order.
+
+Replanner owns revisions to this execution strategy when new evidence invalidates
+the current task graph, stack, parallel grouping, or integration order.
 
 ### Machine-local routing profile
 
@@ -93,9 +120,10 @@ A materially revised replan increments `replan_count`, preserves
 Coder attempts**.
 
 At most **3 Replanner turns** are allowed for a lineage. The third Replanner turn
-may still restructure/split/defer the work, but it cannot open Coder attempts
-31–40. A replan that fails to produce a useful new direction still consumes one
-of the three Replanner turns so replanning cannot become an unbounded retry loop.
+may still restructure/split/defer the work, including changing its parallel/stack
+strategy, but it cannot open Coder attempts 31–40. A replan that fails to produce
+a useful new direction still consumes one of the three Replanner turns so
+replanning cannot become an unbounded retry loop.
 
 This produces the normal progression:
 
@@ -107,8 +135,9 @@ replan #3:     attempt_limit=30  replan_count=3
 ```
 
 Replanning may happen before the current attempt ceiling is exhausted when current
-evidence shows the task boundary, dependency graph, or implementation direction is
-wrong. Watchtower must not waste remaining attempts merely to reach the ceiling.
+evidence shows the task boundary, dependency graph, execution strategy, or
+implementation direction is wrong. Watchtower must not waste remaining attempts
+merely to reach the ceiling.
 
 ### No-Mistakes Runner
 
@@ -139,18 +168,25 @@ profile that actually receives it.
 
 ### Workset Merger
 
-A Workset Merger owns integration reasoning for one workset. It receives the
-Planner/Task Decomposer output when available, the participating task branches and
-exact heads, dependency clues, assurance results, no-mistakes results, target
-merge policy, and current unattended state.
+A Workset Merger owns integration **execution and reconciliation** for one workset.
+It receives the current Planner/Replanner execution strategy, participating task
+branches and exact heads, assurance results, no-mistakes results, target merge
+policy, and current unattended state.
 
-It reconstructs the current dependency/stack graph, determines merge order,
-integrates branches, identifies assurance invalidated by integration, reads
-no-mistakes findings in workset context, and reports whether the next action is a
-local repair, replan, more assurance, provider retry, or landing.
+It reconstructs the planned dependency/stack graph against current results,
+validates that the plan is still executable, integrates branches in the planned
+order, identifies assurance invalidated by integration, reads no-mistakes findings
+in workset context, and reports whether the next action is a local repair, replan,
+more assurance, provider retry, or landing.
+
+The merger may make mechanical integration choices inside the current strategy. If
+actual evidence invalidates the dependency graph, stack/base assumption, parallel
+shape, or intended order, it preserves that evidence and routes the work back to
+Replanner. It does not silently redesign the workset.
 
 The same role performs the final supported merge and required post-merge actions
-when authorized. A single-task workset is the degenerate case with no stacking.
+when authorized. A single-task workset is the degenerate case with no stacking or
+parallelism.
 
 ### `/afk`
 
@@ -175,6 +211,9 @@ fresh Watchtower must understand before it can act.
 
 - One Watchtower can build context incrementally across several projects without
   mixing project facts.
+- Planner/Task Decomposer becomes the explicit owner of task graph, parallelism,
+  stacking, fan-in, and intended integration order; Watchtower schedules that
+  graph and Workset Merger realizes it against actual results.
 - Machine-specific harness/account availability stops leaking into canonical role
   definitions.
 - Implementation lineages can change direction through explicit replanning without
@@ -182,8 +221,8 @@ fresh Watchtower must understand before it can act.
   finite.
 - No-mistakes execution remains push-friendly through a dedicated crew while
   no-mistakes retains semantic ownership of its pipeline.
-- Workset integration gets an explicit owner that understands dependencies,
-  stacking, and gate results before mutating branches.
+- Workset integration gets an explicit owner without making integration difficulty
+  an excuse to silently rewrite the planned execution strategy.
 - Final merge authority is visible and operator-controlled through `/afk` without
   imposing confirmations on normal routing.
 - The simple Merge Finisher role is replaced by the broader Workset Merger role.
