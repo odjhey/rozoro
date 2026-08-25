@@ -36,6 +36,7 @@ Watchtower should perform that crew's repository work.
 | `brief-task-planner` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
 | `brief-reviewer` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
 | `brief-tester` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
+| `brief-merge-finisher` | Merge Finisher | Render the exact-head landing contract, merge policy, and required post-merge checks into a merge/post-merge crew brief, then dispatch. |
 | `brief-rozoro-coder` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
 | `brief-quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
 | `brief-quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
@@ -72,6 +73,12 @@ is ready, Watchtower invokes `no-mistakes-gate` directly. Once an active run
 exists, Watchtower invokes `no-mistakes-observer-pane` by default and attaches an
 untracked side pane beside the Watchtower pane.
 
+When the candidate has sufficient landing evidence, merge/post-merge work returns
+to the fresh-crew path: Watchtower dispatches a `Merge Finisher` with
+`brief-merge-finisher`. The finisher performs repository/provider mutations and
+post-merge verification; Watchtower reconciles its report and decides whether the
+overall task is complete.
+
 A follow-up turn on the same live crew task is different: use `./bin/rozoro send`
 and preserve the existing crew context unless Watchtower is intentionally
 dispatching a new task-kind crew.
@@ -84,6 +91,9 @@ Current standard Rozoro crew model selection remains authoritative in
 `quick-crew-routing` is a bounded fast-path exception: eligible Quick Scout and
 Quick Coder tasks use `gpt-5.3-codex-spark` at low effort. It does not redefine
 any standard role assignment and must not be retried when the quick path fails.
+
+The standard Merge Finisher uses `gpt-5.6-luna` at low reasoning effort. It is a
+mechanical delivery role, not another correctness-review role.
 
 No-mistakes owns its own internal pipeline-agent/model/fallback configuration.
 Rozoro does not select those internal models by wrapping the pipeline in a crew.
@@ -108,8 +118,9 @@ it.
 
 **Watchtower chooses task kinds, prepares crew briefs, dispatches crews, drives
 external gates, reconciles reports/evidence, and decides what runs next. Crew
-performs repository planning, implementation, review, and testing described by its
-brief. No-mistakes performs its own pipeline work under its own custody.**
+performs repository planning, implementation, review, testing, merge, and
+post-merge work described by its brief. No-mistakes performs its own pipeline work
+under its own custody.**
 
 When a crew report or no-mistakes run exposes a new routing decision, Watchtower
 records the decision and sends work to the appropriate existing or fresh crew. Do
