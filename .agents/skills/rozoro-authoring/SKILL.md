@@ -1,29 +1,26 @@
 ---
 name: rozoro-authoring
 description: >-
-  Apply Rozoro's repository-specific coding and validation practices while
-  modifying the Rozoro source tree. This is a crew-facing coder skill: the
-  Watchtower includes the applicable instructions in the coder brief rather than
-  implementing the repository change itself.
-metadata:
-  execution-owner: crew
-  crew-role: coder
-  watchtower-action: dispatch-and-brief
-  scope: odjhey/rozoro
-  derived-from: templates/crew-guidelines.md
+  Brief a Coder crew that will modify odjhey/rozoro. Use when Watchtower is
+  spawning a Rozoro implementation task and needs to put the repository-specific
+  Bash, Python, validation, documentation, and testing rules into that coder's
+  brief. Watchtower routes the work; the dispatched coder performs the change.
 ---
 
-# Rozoro authoring
+# Rozoro authoring briefing guideline
 
-This skill is executed by a **crew member** modifying Rozoro, not by the
-Watchtower. When the target repository is Rozoro, the Watchtower should include
-the applicable authoring instructions from this skill in the coder brief.
+Use this when **Watchtower is preparing the brief for a Coder crew working on
+Rozoro itself**. Include the applicable authoring constraints below together with
+the bounded implementation task and acceptance criteria.
 
-This skill is repository-specific. Explicit operator instructions and repository rules take precedence.
+Do not implement the repository change in Watchtower merely because this skill is
+loaded. These are instructions to render into the coder brief.
+
+This guideline is repository-specific. Explicit operator instructions and repository rules take precedence.
 
 ## Before committing
 
-Run the deterministic checks relevant to the change and fix known findings before handing work to a more expensive review pipeline:
+Require the coder to run the deterministic checks relevant to the change and fix known findings before handing work to a more expensive review pipeline:
 
 ```bash
 shellcheck -x <changed .sh files>
@@ -65,4 +62,4 @@ When behavior, flags, commands, or environment variables change, update every us
 - remember the suite runs in a network-disabled Linux container;
 - for a bug fix, prefer a regression test that fails before the fix and passes after it.
 
-Report which checks actually ran and any intentionally skipped validation. Do not claim a check passed if it was not executed.
+Require the coder to report which checks actually ran and any intentionally skipped validation. Do not claim a check passed if it was not executed.
