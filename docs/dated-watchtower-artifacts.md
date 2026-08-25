@@ -23,7 +23,7 @@ Directories are mode `0700` and files are mode `0600`. Every lexical path compon
 
 ## Policy snapshot schema
 
-The captured bytes come directly from `templates/watchtower.md`. Shell tokenization verifies that `bin/rzr-pi-watchtower.sh` assigns `--append-system-prompt` and `$ROOT/templates/watchtower.md` as an adjacent option/value pair in its launch `args` array; comments and unrelated string mentions do not count. The Claude launcher's `args` array currently has no such policy argument, so metadata records Claude as `no-policy-argument-for-captured-source`. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
+The captured bytes come directly from `templates/watchtower.md`. Shell tokenization tracks array assignment, append, and reassignment in source order, identifies the array expanded by the actual Pi invocation, and verifies that it contains `--append-system-prompt` and `$ROOT/templates/watchtower.md` as an adjacent option/value pair. Dead, overwritten, unused, commented, and unrelated assignments do not count. The Claude launcher's `args` array currently has no such policy argument, so metadata records Claude as `unverified-no-consumed-policy-args-array`. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
 
 A run contains:
 
@@ -36,7 +36,7 @@ Example metadata shape:
 
 ```json
 {
-  "schema": "rozoro.watchtower-policy-snapshot/v3",
+  "schema": "rozoro.watchtower-policy-snapshot/v4",
   "artifact_type": "watchtower-policy-snapshot",
   "created_at": "2026-08-24T03:25:36.123456Z",
   "run_id": "20260824T032536.123456Z-a1b2c3d4",
@@ -58,11 +58,11 @@ Example metadata shape:
     "reason": null
   },
   "harness_coverage": {
-    "validation": "tokenized-shell-args-array-option-value",
+    "validation": "tokenized-shell-consumed-args-array-option-value",
     "option": "--append-system-prompt",
     "value": "$ROOT/templates/watchtower.md",
     "pi": {"status": "captured", "launcher": "bin/rzr-pi-watchtower.sh", "launcher_sha256": "…"},
-    "claude": {"status": "no-policy-argument-for-captured-source", "launcher": "bin/rzr-claude-watchtower.sh", "launcher_sha256": "…"}
+    "claude": {"status": "unverified-no-consumed-policy-args-array", "launcher": "bin/rzr-claude-watchtower.sh", "launcher_sha256": "…"}
   },
   "files": {
     "watchtower-policy.md": {"sha256": "…", "bytes": 1234}
@@ -71,7 +71,7 @@ Example metadata shape:
 }
 ```
 
-`matches_git_commit: false` is valid only with `git_provenance.status: verified`: it means the captured working-tree policy bytes differ from `HEAD`. The validated repository directory remains open while Git reads run, and its lexical pathname is reopened without following links and matched by device/inode before and after every read. A mismatch or Git failure sets provenance to `indeterminate` and all Git-derived source fields to `null`. No absolute checkout path is stored.
+`matches_git_commit: false` is valid only with `git_provenance.status: verified`: it means the captured working-tree policy bytes differ from `HEAD`. The validated repository directory remains open while Git reads run, and its lexical pathname is reopened without following links and matched by device/inode before and after every read. A mismatch, command failure, empty output, or output other than a 40- or 64-hex Git object ID sets provenance to `indeterminate`, records an explicit `git-read-failed` reason where applicable, and sets all Git-derived source fields to `null`. No absolute checkout path is stored.
 
 ## Progress report schema
 

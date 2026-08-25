@@ -7,6 +7,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -18,12 +19,14 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v3"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v4"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
+ARRAY_EXPANSION = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}$")
+GIT_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 
 def utc_now(value: str | None) -> dt.datetime:
@@ -56,39 +59,76 @@ def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
             directory.close()
 
 
-def assigned_launcher_args(source: bytes) -> list[str]:
-    """Extract shell words assigned to the launcher's args array, excluding comments."""
+def shell_tokens(line: str) -> list[str]:
     try:
-        lexer = shlex.shlex(source.decode("utf-8"), posix=True, punctuation_chars="()=+")
+        lexer = shlex.shlex(line, posix=True, punctuation_chars="();=+")
         lexer.whitespace_split = True
         lexer.commenters = "#"
-        tokens = list(lexer)
-    except (UnicodeError, ValueError) as exc:
-        raise UnsafePath("launcher is not valid tokenizable UTF-8 shell source") from exc
-    assigned: list[str] = []
-    index = 0
-    while index + 1 < len(tokens):
-        if tokens[index] == "args" and tokens[index + 1] in {"=(", "+=("}:
-            index += 2
-            depth = 1
-            while index < len(tokens) and depth:
-                token = tokens[index]
-                if token == "(":
-                    depth += 1
-                elif token == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                if depth:
-                    assigned.append(token)
-                index += 1
-        index += 1
-    return assigned
+        return list(lexer)
+    except ValueError as exc:
+        raise UnsafePath("launcher is not valid tokenizable shell source") from exc
 
 
-def has_policy_argument(source: bytes) -> bool:
-    args = assigned_launcher_args(source)
-    return any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:]))
+def launcher_invocation_has_policy(source: bytes, command: str) -> bool:
+    """Track array reassignment and validate arrays expanded by actual command lines."""
+    try:
+        lines = source.decode("utf-8").splitlines()
+    except UnicodeError as exc:
+        raise UnsafePath("launcher is not valid UTF-8 shell source") from exc
+    arrays: dict[str, list[str]] = {}
+    invocations: list[bool] = []
+    continuation = ""
+    logical_lines: list[str] = []
+    for raw in lines:
+        current = continuation + raw
+        if current.endswith("\\"):
+            continuation = current[:-1] + " "
+        else:
+            logical_lines.append(current)
+            continuation = ""
+    if continuation:
+        logical_lines.append(continuation)
+
+    for line in logical_lines:
+        tokens = shell_tokens(line)
+        index = 0
+        while index < len(tokens):
+            if index + 1 < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[index]) and tokens[index + 1] in {"=(", "+=("}:
+                name, operation = tokens[index], tokens[index + 1]
+                index += 2
+                values: list[str] = []
+                depth = 1
+                while index < len(tokens) and depth:
+                    token = tokens[index]
+                    if token == "(":
+                        depth += 1
+                    elif token == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    if depth:
+                        values.append(token)
+                    index += 1
+                if operation == "=(":
+                    arrays[name] = values
+                else:
+                    arrays.setdefault(name, []).extend(values)
+            elif tokens[index] == command:
+                expanded: list[str] = []
+                cursor = index + 1
+                while cursor < len(tokens) and tokens[cursor] != ";":
+                    match = ARRAY_EXPANSION.fullmatch(tokens[cursor])
+                    if match:
+                        expanded.append(match.group(1))
+                    cursor += 1
+                invocations.append(
+                    any(
+                        any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(arrays.get(name, []), arrays.get(name, [])[1:]))
+                        for name in expanded
+                    )
+                )
+            index += 1
+    return bool(invocations) and all(invocations)
 
 
 def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:
@@ -139,7 +179,9 @@ def bound_git_value(
         return None, "git-read-failed"
     if not path_matches_identity(repo_path, expected):
         return None, "repository-path-identity-mismatch-after-read"
-    return value, "verified"
+    if value is None or not GIT_OBJECT_ID.fullmatch(value):
+        return None, "git-read-failed-empty-or-invalid-object-id"
+    return value.lower(), "verified"
 
 
 def main() -> int:
@@ -156,10 +198,10 @@ def main() -> int:
             source_bytes = read_repo_file(repo, SOURCE)
             pi_launcher = read_repo_file(repo, PI_LAUNCHER)
             claude_launcher = read_repo_file(repo, CLAUDE_LAUNCHER)
-            pi_captured = has_policy_argument(pi_launcher)
-            claude_captured = has_policy_argument(claude_launcher)
+            pi_captured = launcher_invocation_has_policy(pi_launcher, "pi")
+            claude_captured = launcher_invocation_has_policy(claude_launcher, "$CLAUDE_BIN")
             if not pi_captured:
-                raise UnsafePath(f"cannot verify {SOURCE} as an args-array {POLICY_OPTION} value for Pi")
+                raise UnsafePath(f"cannot verify {SOURCE} in an args array consumed by the Pi invocation")
             commit_read = bound_git_value(repo_path, identity, "rev-parse", "HEAD")
             tracked_read = bound_git_value(repo_path, identity, "rev-parse", f"HEAD:{SOURCE}")
             current_read = bound_git_value(repo_path, identity, "hash-object", "--stdin", input_bytes=source_bytes)
@@ -200,16 +242,16 @@ def main() -> int:
             "reason": git_reason,
         },
         "harness_coverage": {
-            "validation": "tokenized-shell-args-array-option-value",
+            "validation": "tokenized-shell-consumed-args-array-option-value",
             "option": POLICY_OPTION,
             "value": POLICY_VALUE,
             "pi": {
-                "status": "captured" if pi_captured else "not-captured",
+                "status": "captured" if pi_captured else "unverified-no-consumed-policy-args-array",
                 "launcher": PI_LAUNCHER,
                 "launcher_sha256": digest(pi_launcher),
             },
             "claude": {
-                "status": "captured" if claude_captured else "no-policy-argument-for-captured-source",
+                "status": "captured" if claude_captured else "unverified-no-consumed-policy-args-array",
                 "launcher": CLAUDE_LAUNCHER,
                 "launcher_sha256": digest(claude_launcher),
             },

@@ -60,7 +60,9 @@ class DatedArtifactSkillTests(unittest.TestCase):
             source = checkout / "templates/watchtower.md"
             current = b"current working-tree policy\n"
             source.write_bytes(current)
-            (checkout / "bin/rzr-pi-watchtower.sh").write_text('args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n', encoding="utf-8")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
+            )
             (checkout / "bin/rzr-claude-watchtower.sh").write_text("claude --settings overlay.json\n", encoding="utf-8")
             artifact_root = root / "artifacts"
             fake_bin = root / "bin"
@@ -69,9 +71,9 @@ class DatedArtifactSkillTests(unittest.TestCase):
             fake_git.write_text(
                 "#!/bin/sh\n"
                 "case \"$*\" in\n"
-                "  *'HEAD:templates/watchtower.md'*) echo committedblob ;;\n"
-                "  *'rev-parse HEAD'*) echo commitsha ;;\n"
-                "  *'hash-object'*) echo currentblob ;;\n"
+                "  *'HEAD:templates/watchtower.md'*) printf '%040d\\n' 2 ;;\n"
+                "  *'rev-parse HEAD'*) printf '%040d\\n' 1 ;;\n"
+                "  *'hash-object'*) printf '%040d\\n' 3 ;;\n"
                 "  *) exit 1 ;;\n"
                 "esac\n",
                 encoding="utf-8",
@@ -106,19 +108,19 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v3")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v4")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
-            self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "no-policy-argument-for-captured-source")
-            self.assertEqual(metadata["harness_coverage"]["validation"], "tokenized-shell-args-array-option-value")
+            self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "tokenized-shell-consumed-args-array-option-value")
             self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
             self.assert_private_tree(first)
 
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                "args=(--approve)\n# --append-system-prompt $ROOT/templates/watchtower.md\n",
+                "args=(--approve)\n# --append-system-prompt $ROOT/templates/watchtower.md\nexec pi \"${args[@]}\"\n",
                 encoding="utf-8",
             )
             substring_only = subprocess.run(
@@ -136,7 +138,50 @@ class DatedArtifactSkillTests(unittest.TestCase):
                 env=env,
             )
             self.assertNotEqual(substring_only.returncode, 0)
-            self.assertIn("args-array", substring_only.stderr)
+            self.assertIn("consumed by the Pi invocation", substring_only.stderr)
+
+    def test_policy_coverage_requires_policy_on_array_consumed_by_pi(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "checkout"
+            (checkout / "templates").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "bin/rzr-claude-watchtower.sh").write_text(
+                'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
+            )
+            launchers = {
+                "reassigned": (
+                    'if false; then args=(--append-system-prompt "$ROOT/templates/watchtower.md"); fi\n'
+                    "args=(--approve)\n"
+                    'exec pi "${args[@]}"\n'
+                ),
+                "unused-array": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "other=(--approve)\n"
+                    'exec pi "${other[@]}"\n'
+                ),
+            }
+            for name, launcher in launchers.items():
+                with self.subTest(name=name):
+                    (checkout / "bin/rzr-pi-watchtower.sh").write_text(launcher, encoding="utf-8")
+                    artifact_root = root / f"artifacts-{name}"
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            str(POLICY_SCRIPT),
+                            "--repo-root",
+                            str(checkout),
+                            "--artifact-root",
+                            str(artifact_root),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("consumed by the Pi invocation", result.stderr)
+                    self.assertFalse(artifact_root.exists())
 
     def test_policy_git_provenance_becomes_indeterminate_on_repo_path_swap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -148,7 +193,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             policy = b"held policy bytes\n"
             (checkout / "templates/watchtower.md").write_bytes(policy)
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n', encoding="utf-8"
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
             )
             (checkout / "bin/rzr-claude-watchtower.sh").write_text("args=(--settings overlay.json)\n", encoding="utf-8")
             fake_bin = root / "bin"
@@ -186,6 +231,42 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertIsNone(metadata["source"]["git_blob_at_commit"])
             self.assertIsNone(metadata["source"]["git_blob_current"])
             self.assertIsNone(metadata["source"]["matches_git_commit"])
+
+    def test_policy_git_provenance_rejects_successful_empty_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "checkout"
+            (checkout / "templates").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
+            )
+            (checkout / "bin/rzr-claude-watchtower.sh").write_text(
+                'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
+            )
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_git = fake_bin / "git"
+            fake_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_git.chmod(0o755)
+            env = dict(os.environ, PATH=f"{fake_bin}:{os.environ.get('PATH', '')}")
+            run = self.run_script(
+                POLICY_SCRIPT,
+                "--repo-root",
+                str(checkout),
+                "--artifact-root",
+                str(root / "artifacts"),
+                "--now",
+                NOW,
+                env=env,
+            )
+            metadata = json.loads((run / "metadata.json").read_text())
+            self.assertEqual(metadata["git_provenance"]["status"], "indeterminate")
+            self.assertIn("git-read-failed", metadata["git_provenance"]["reason"])
+            self.assertIn("empty-or-invalid-object-id", metadata["git_provenance"]["reason"])
+            for field in ("git_commit", "git_blob_at_commit", "git_blob_current", "matches_git_commit"):
+                self.assertIsNone(metadata["source"][field], field)
 
     def test_report_repo_override_cannot_execute_another_checkout_parser(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

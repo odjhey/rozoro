@@ -3,7 +3,7 @@ name: watchtower-policy-snapshot
 description: Persist an immutable, dated snapshot of the explicit Pi Watchtower policy source in this Rozoro checkout, with accurate per-harness coverage. Use when an operator asks to archive, capture, or compare current Watchtower rules or policy.
 compatibility: Requires Python 3.11+, a Rozoro checkout, and local filesystem access.
 metadata:
-  artifact-schema: rozoro.watchtower-policy-snapshot/v3
+  artifact-schema: rozoro.watchtower-policy-snapshot/v4
 ---
 
 # Watchtower policy snapshot
@@ -18,7 +18,7 @@ From this skill directory:
 python3 scripts/snapshot.py
 ```
 
-The script resolves the checkout containing this skill, tokenizes launcher `args` array assignments to verify that Pi passes `templates/watchtower.md` as the value of `--append-system-prompt`, and copies those current bytes. Comments and unrelated string mentions do not count as coverage. It records that the current Claude launcher does not pass the captured source instead of claiming false Claude coverage. It prints the new run directory.
+The script resolves the checkout containing this skill, tracks shell array reassignment in source order, and verifies that the array actually expanded by the Pi invocation contains `templates/watchtower.md` as the value of `--append-system-prompt`. Dead, overwritten, unused, commented, and unrelated assignments do not count as coverage. It records that the current Claude launcher does not pass the captured source instead of claiming false Claude coverage. It prints the new run directory.
 
 Default destination:
 
@@ -36,7 +36,7 @@ Report:
 - `metadata.json` schema and source SHA-256;
 - the copied `watchtower-policy.md` path.
 
-Do not paste the full policy unless asked. Git provenance is accepted only when the repository pathname matches the held validated directory identity before and after every Git read; otherwise metadata marks it indeterminate. The script includes only the checked-out policy source and non-secret repository provenance; it excludes task/session data, environment, credentials, and absolute repository paths.
+Do not paste the full policy unless asked. Git provenance is accepted only when the repository pathname matches the held validated directory identity before and after every Git read and every required Git command returns a nonempty 40- or 64-hex object ID; otherwise metadata marks it indeterminate, explains the failure, and nulls all Git-derived fields. The script includes only the checked-out policy source and non-secret repository provenance; it excludes task/session data, environment, credentials, and absolute repository paths.
 
 ## Retention and safety
 
