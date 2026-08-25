@@ -45,15 +45,28 @@ Read each structured result:
 Independent work may continue on a different isolated branch/worktree, but it
 must not move or publish the no-mistakes-owned branch.
 
-## Observation
+## Observatory
 
-Once a real run exists, Watchtower should invoke `no-mistakes-observer-pane` and
-open the untracked Herdr side pane beside Watchtower when the supported pane
-operation is available. Run `no-mistakes attach` there using the supported syntax
-for the installed version.
+No agent pane owns the no-mistakes graph.
 
-The pane is a display projection only. Structured no-mistakes/AXI state remains
-the source of truth, and pane failure must not change custody or block the run.
+Use `no-mistakes-observatory` to maintain one persistent, untracked Herdr
+Observatory tab for the Watchtower workspace. Prefer one pane per active
+no-mistakes run, labeled with enough task/run identity to distinguish concurrent
+gates. Run `no-mistakes attach` there using the supported invocation for the
+installed version.
+
+The Observatory is a display projection only. Structured no-mistakes/AXI state
+remains the source of truth, and Observatory failure must not change custody or
+block the run.
+
+Keep a terminal graph/scrollback available through the associated landing and
+post-merge episode when practical so the operator can inspect the whole delivery
+path. Observatory cleanup has no pipeline lifecycle meaning.
+
+For optimization work, retain the run ID and prefer structured timing, retry,
+fix, finding, agent/model, and outcome data exposed by no-mistakes. Treat missing
+telemetry as an instrumentation gap rather than scraping terminal pixels or
+assuming TUI text is a stable machine contract.
 
 ## Returning custody
 
