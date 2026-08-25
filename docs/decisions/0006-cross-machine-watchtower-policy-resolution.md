@@ -57,9 +57,11 @@ Import these distinct practices:
 Discard the uploaded blanket **Pi harness for Watchtower crews** rule as
 machine-specific rather than global Rozoro policy.
 
-Crew-facing skills are briefing sources only in the current implementation.
-Watchtower must render their applicable instructions into the crew brief;
-Rozoro does not currently deliver skill objects/references to crew sessions.
+Crew-oriented skills are Watchtower briefing guidelines only in the current
+implementation. They use the `brief-*` naming convention: Watchtower loads the
+applicable guideline, renders its role contract/constraints/report shape into the
+crew brief, then dispatches the corresponding task-kind crew. Rozoro does not
+currently deliver skill objects/references to crew sessions.
 
 ## Consequences
 
@@ -74,5 +76,6 @@ Rozoro does not currently deliver skill objects/references to crew sessions.
 - Budget exhaustion does not stall an unattended Watchtower while independent
   work remains.
 - Observer panes improve visibility without polluting Rozoro task/session state.
+- `brief-*` makes crew-brief construction discoverable from the skill name itself.
 - Future cross-machine snapshots should be treated as evidence to reconcile, not
   automatically as a new policy authority.
