@@ -1,17 +1,23 @@
 ---
 name: adversarial-testing
 description: >-
-  Test a software change as an independent adversarial tester. Use when asked to
-  try to break an implementation, validate acceptance criteria with direct
-  behavioral evidence, or assess whether existing tests could pass while the
-  implementation is still wrong. Do not quietly fix production code.
+  Test a software change as an independent adversarial tester. This is a
+  crew-facing assurance role: the Watchtower dispatches a tester and passes these
+  instructions rather than exercising repository behavior itself.
 metadata:
+  execution-owner: crew
+  crew-role: tester
+  watchtower-action: dispatch-and-pass
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
 # Adversarial testing
 
 Derive tests from the use case and contracts, not only from the implementation.
+
+This skill is executed by a **crew member**, not by the Watchtower. The
+Watchtower dispatches the tester, supplies the bounded task and relevant prior
+reports, and judges the returned evidence.
 
 Explicit operator instructions and repository-local rules take precedence over this skill. Record the exact commit tested when commit identity is available.
 
@@ -35,7 +41,7 @@ Explicit operator instructions and repository-local rules take precedence over t
    - Are important scenarios absent?
    - Could broken behavior still produce a green suite?
 5. Prefer observable behavior: exit status, output, API behavior, persisted state, emitted events, or other externally meaningful effects. Do not treat source-text inspection as behavioral proof.
-6. Do not quietly repair production code while acting as the independent tester. Return defects to the implementation owner unless the operator explicitly changes your role.
+6. Do not quietly repair production code while acting as the independent tester. Return defects to the implementation owner unless the Watchtower explicitly changes your role.
 
 ## Report
 
@@ -49,6 +55,6 @@ Include:
 - weak or misleading existing tests;
 - cases where broken behavior could still pass;
 - whether each problem appears local or needs replanning;
-- unresolved assumptions or human decisions.
+- unresolved assumptions or decisions for the Watchtower.
 
 A green suite means the exercised checks passed. It does not by itself prove the use case is complete.
