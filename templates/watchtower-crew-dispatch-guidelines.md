@@ -34,8 +34,9 @@ the `no-mistakes-gate` skill after normal coding/review/testing assurance.
   * The coder should implement that task, not reopen the whole plan.
   * The coder should follow the supplied contracts, ports, repo conventions,
     boundaries, and acceptance criteria.
-  * If you send the coder a reviewer, tester, or no-mistakes finding, the coder
-    should treat that report as the reason for the new turn and address it.
+  * If you send the coder a reviewer, tester, no-mistakes, or post-merge finding,
+    the coder should treat that report as the reason for the new turn and address
+    it.
   * If the task no longer makes sense, conflicts with an existing contract, or
     needs a broader design change, the coder should stop and report that instead
     of inventing a new plan.
@@ -130,12 +131,41 @@ Use `.agents/skills/no-mistakes-gate/SKILL.md`.
   expressed by the installed no-mistakes version, treat that as an integration or
   no-mistakes configuration gap. Do not add a wrapper LLM crew to simulate it.
 
+* **Merge Finisher, `gpt-5.6-luna`, low reasoning effort**
+
+  * Use this after Watchtower has decided that the candidate has sufficient
+    pre-merge evidence and is eligible to land.
+  * Read `.agents/skills/brief-merge-finisher/SKILL.md` and include its landing
+    contract, exact candidate/evidence identities, merge policy, and required
+    post-merge checks in the crew brief.
+  * Before merging, verify the current PR head still matches the expected
+    candidate and that required review/test/no-mistakes/CI evidence still applies
+    to that exact head.
+  * Use only the repository/provider-supported merge path and allowed merge
+    method. Do not bypass branch protection, disable checks, force refs, or widen
+    permissions merely to land the change.
+  * Capture the actual merge commit or equivalent landed identity returned by the
+    provider. Do not infer it from the PR head.
+  * Perform the required post-merge checks/actions from the task or repository
+    policy against the actual landed identity.
+  * Do not quietly fix production code, regenerate stale assurance, or improvise
+    rollback. Report blockers or post-merge failures back to Watchtower.
+  * Ask for a report that includes:
+    * expected and actual pre-merge PR head;
+    * evidence/checks verified before merge;
+    * merge method/path and provider result;
+    * actual merge/landed commit;
+    * post-merge checks/actions and exact evidence;
+    * cleanup performed, if any;
+    * any race, blocker, stale evidence, or post-merge failure; and
+    * whether the change is fully landed/healthy or needs another routed task.
+
 * **Escalation Replanner, `gpt-5.6-sol`, high reasoning effort**
 
-  * Use this when repeated coder, review, test, or no-mistakes repair loops are
-    not converging, or when evidence exposes a contract/scope problem.
+  * Use this when repeated coder, review, test, no-mistakes, or delivery-repair
+    loops are not converging, or when evidence exposes a contract/scope problem.
   * Before you dispatch it, harvest the useful reports from the current crew and
-    gate history.
+    gate/delivery history.
   * Give the replanner the original decomposed task plus useful evidence from the
     failed attempts.
   * Do not dump the full conversation history unless something in that history is
@@ -159,21 +189,26 @@ Use `.agents/skills/no-mistakes-gate/SKILL.md`.
 * **Watchtower, `gpt-5.6-sol`, high reasoning effort**
 
   * You own dispatch and routing for Rozoro crew.
-  * Keep the global view across all tasks, reports, and external-gate state.
+  * Keep the global view across all tasks, reports, external-gate state, and
+    delivery state.
   * Decide what should run next, which crew gets the next report, when to retry,
-    when to abandon a crew, when to re-plan, and when a candidate is ready for
-    no-mistakes.
-  * For ordinary review, test, or local no-mistakes failures, send the report back
-    to the active coder as the next assignment.
+    when to abandon a crew, when to re-plan, when a candidate is ready for
+    no-mistakes, and when it is eligible to hand to Merge Finisher.
+  * For ordinary review, test, local no-mistakes, or local post-merge failures,
+    send the report back to the active coder as the next assignment when that is
+    still the correct task boundary.
   * If repeated attempts stop converging:
-    1. harvest the useful reports and gate evidence;
+    1. harvest the useful reports and gate/delivery evidence;
     2. abandon the current implementation crew as active owner;
     3. dispatch the Escalation Replanner;
     4. take the revised task;
     5. dispatch a fresh Coder.
   * Drive no-mistakes directly through `no-mistakes-gate`; do not create a runner
     crew for it.
-  * Decide when the task has enough exact-head evidence to be considered done.
+  * Do not perform repository merge/post-merge mutations yourself. Once landing is
+    authorized by current evidence/policy, dispatch Merge Finisher.
+  * Reconcile the Merge Finisher's exact landed identity and post-merge evidence
+    before deciding the task is complete.
 
 ## Experimental report fields
 
