@@ -10,7 +10,8 @@ Use role separation when a change needs independent assurance or controlled publ
 - **Tester:** independently exercises behavior, failure modes, weak-test risks, and acceptance criteria at an exact commit. It does not quietly fix findings.
 - **Replanner:** resolves non-converging scope or contract conflicts and supplies a revised bounded task. It does not implement.
 - **No-mistakes gate:** external pipeline owned by no-mistakes. Watchtower submits/reattaches the run, drives supported gates, reconciles exact-head/custody evidence, and routes findings. It is not a Rozoro crew role.
-- **Authorized merger/operator:** owns merge/product/exception decisions that repository or operator policy reserves outside unattended Watchtower authority.
+- **Merge Finisher:** lands an already-authorized candidate through the repository/provider-supported merge path, captures the actual merge commit, performs required post-merge checks/actions, and reports exact delivery evidence. It does not quietly fix implementation defects or regenerate stale assurance.
+- **Watchtower/operator policy:** decides whether current evidence is sufficient to enter the no-mistakes gate, whether a candidate is eligible to land, and what to route when a gate/merge/post-merge step fails.
 
 A small task may omit roles when the operator and repository policy permit it. Never imply independence where the same actor performed both sides.
 
@@ -25,7 +26,9 @@ A small task may omit roles when the operator and repository policy permit it. N
 7. no-mistakes owns its pipeline worktree, internal agents, branch custody, fixes, PR/CI work, and structured recovery state. Watchtower owns submission/reattachment, bounded gate decisions, and final evidence reconciliation.
 8. If no-mistakes changes the head, repeat any exact-head assurance required by repository policy.
 9. Route local no-mistakes findings back to the coder; route contract/scope failures to replanning.
-10. Leave merge and product approval to their authorized owner when policy requires it.
+10. When Watchtower decides the candidate has the required landing evidence, dispatch a fresh **Merge Finisher** with `brief-merge-finisher` instead of merging in Watchtower.
+11. The Merge Finisher revalidates the exact PR head/evidence, performs the supported merge, records the actual landed commit, and completes required post-merge verification/cleanup.
+12. Route merge blockers or post-merge implementation failures back to the appropriate coder/replanner task kind. Watchtower reconciles the final landed identity and decides whether delivery is complete.
 
 ## Reports
 
@@ -34,3 +37,5 @@ Keep the lifecycle handoff fields unchanged. Roles may additionally report `atte
 Crew reports should name: scope, checks, findings, blockers, assumptions, exact commit, whether a correction is local or needs replanning, and unresolved decisions.
 
 The no-mistakes gate record should name the submitted and final exact heads, run ID/outcome, PR/CI evidence, custody state, supported recovery action, and the routing consequence of any findings.
+
+The Merge Finisher report should name the expected/current PR head, pre-merge evidence checked, merge method/path, provider result, actual merge/landed commit, required post-merge checks/actions, cleanup performed, and any delivery failure that needs another routed task.
