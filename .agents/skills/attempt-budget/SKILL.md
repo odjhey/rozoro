@@ -20,24 +20,26 @@ Each implementation lineage has a budget of **10 coder attempts**.
 
 Count a coder attempt when a coder implementation turn changes the candidate
 head or deliberately validates that head as its implementation attempt.
-Reviewer, tester, replanner, Watchtower, and no-mistakes turns do not themselves
-consume coder attempts.
+Reviewer, tester, replanner, Merge Finisher, Watchtower, and no-mistakes turns do
+not themselves consume coder attempts.
 
-A replan, fresh coder, new branch, resumed task, or later revisit does not reset
-the lineage count. Preserve attribution through the durable task history and use
-`attempt_count` / `caused_by` as report metadata where available; they are not
-Rozoro lifecycle fields.
+A replan, fresh coder, new branch, resumed task, later revisit, merge attempt, or
+post-merge verification does not reset or increment the coder-attempt count unless
+it results in a new Coder implementation turn. Preserve attribution through the
+durable task history and use `attempt_count` / `caused_by` as report metadata where
+available; they are not Rozoro lifecycle fields.
 
 ## Attempt 10
 
-Attempt 10 is allowed to complete its normal assurance sequence. Review, testing,
-CI, and applicable no-mistakes work may still run to determine whether that
-candidate is acceptable.
+Attempt 10 is allowed to complete its normal assurance and delivery sequence.
+Review, testing, CI, applicable no-mistakes work, Merge Finisher landing, and
+post-merge verification may still run to determine whether that candidate is
+acceptable and fully delivered.
 
-If that assurance accepts the candidate, continue normal delivery.
+If that sequence accepts and lands the candidate, continue normal completion.
 
-If review/testing/gating instead requires another coder repair, **do not start
-coder attempt 11**. The implementation budget is exhausted.
+If review/testing/gating/merge/post-merge evidence instead requires another coder
+repair, **do not start coder attempt 11**. The implementation budget is exhausted.
 
 ## Deferral
 
@@ -47,7 +49,7 @@ Record a durable deferral summary containing at least:
 
 - task/lineage identity;
 - current PR/branch and exact candidate head;
-- current check/review/test/gate state;
+- current check/review/test/gate/delivery state;
 - blocking findings;
 - approaches already attempted;
 - relevant dependencies or external blockers;
@@ -70,6 +72,11 @@ must justify a new bounded decision recorded by the Watchtower.
 - Quick Coder is never used for repeated repair attempts.
 - Replanning can happen before budget exhaustion when loops expose a scope or
   contract problem, but replanning does not reset the coder-attempt count.
+- Merge Finisher may retry a purely provider/transient landing operation only when
+  repository/operator policy permits it and the exact candidate/evidence remains
+  unchanged; that is still not a coder attempt.
+- If merge/post-merge evidence requires code changes, route to Coder/Replanner and
+  apply the existing coder-attempt budget.
 - No-mistakes custody, branch protection, exact-head evidence, and standard
   assurance requirements remain unchanged.
 - If an exhausted lineage needs a decision or unsupported mutation, file or
