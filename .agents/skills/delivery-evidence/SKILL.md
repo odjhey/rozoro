@@ -1,109 +1,74 @@
 ---
 name: delivery-evidence
 description: >-
-  Reconcile exact-head review, test, CI, publication, and delivery evidence in
-  Watchtower. Use when deciding whether work can continue, publish, close, or
-  needs a recorded exception while operating unattended.
+  Reconcile exact-head review, test, no-mistakes, CI, integration, publication,
+  and delivery evidence. Use when Watchtower or a Workset Merger must decide what
+  evidence is current and what action should run next.
 ---
 
 # Delivery evidence
 
-Use this in **Watchtower while judging crew evidence and deciding what should run
-next**. Crew produces implementation/review/test/no-mistakes evidence; Watchtower
-reconciles it here. Do not put this skill into a coder brief as a substitute for
-independent assurance.
+Use exact identities. A verdict is useful only for the candidate it actually
+examined.
 
-Use exact-head evidence to support unattended Watchtower decisions. Do not turn
-ordinary delivery into a human-approval queue.
+## Build the evidence set
 
-Explicit operator instructions and repository-local rules take precedence over
-this skill. Existing branch protection, provider authorization, and destructive
-operation limits still apply.
+For a workset, retain:
 
-## Build the decision record
+1. **Intent and prerequisites** — target outcome, dependency/stacking constraints,
+   repository policy, and required checks.
+2. **Candidate identities** — task branches/heads, integrated workset head, PR
+   head, and actual landed identity.
+3. **Assurance** — reviewer/tester attestations, no-mistakes run IDs/outcomes,
+   exact-head CI, and relevant artifacts.
+4. **Decision** — what evidence is current, what became stale, and what action is
+   now justified.
 
-For each meaningful delivery decision, record three things:
+Green CI or an agent verdict is one piece of evidence, not a substitute for
+matching the exact head and required scope.
 
-1. **Prerequisites** — earlier merges, environments, permissions, policy choices,
-   or other conditions that must already hold.
-2. **Machine evidence** — exact commit/tree, tests, CI run and conclusion,
-   independent review/test attestations, and reproducible artifacts.
-3. **Decision** — what the Watchtower decided, why the evidence supports it, and
-   any residual risk or follow-up issue.
+## Integration changes evidence
 
-Green CI or an agent verdict is evidence, not proof by itself. The Watchtower
-should combine the available evidence and make the bounded decision it is
-already authorized to make.
+The Workset Merger owns dependency/stacking order and integration mutations.
+Whenever integration creates a new head, compare that head with every assurance
+artifact required by repository policy. Mark mismatched evidence stale and route
+the new head through the assurance that actually applies.
 
-## Exact-head audit
+No-mistakes findings whose meaning depends on the integrated workset should be
+read by the Workset Merger alongside the plan/dependency graph and other crew
+results.
 
-Before a publish, merge, release, or other delivery action, compare every
-identity required by repository policy. Common identities include:
+## Final merge authority
 
-- independently reviewed head;
-- independently tested head;
-- final pipeline or publication head;
-- pull-request or branch head;
-- required CI head.
+Evidence readiness and merge authority are separate questions.
 
-If a relevant head changes, mark stale attestations as stale and repeat the
-assurance required for the new head. After merge, bind post-merge checks to the
-actual merge commit when policy requires them.
+Use the `afk` skill for final merge permission:
 
-## Unattended decision policy
+- **`/afk on` (default):** an otherwise-ready Workset Merger may land within
+  existing repository/operator authority.
+- **`/afk off`:** the merger prepares the exact proposed landing and asks the
+  operator immediately before the final merge mutation.
 
-Default to continuing when the decision is reversible, within declared scope,
-and supported by current evidence and repository policy. Record the decision in
-the durable task handoff or other designated decision log.
+Neither state bypasses branch protection, expands scope, grants destructive
+recovery authority, or overrides repository-local policy.
 
-Do not stop merely because no human is present. When the Watchtower encounters a
-choice outside its authority or evidence is insufficient for a safe mutation:
+## Missing or conflicting evidence
 
-- preserve the current safe state;
-- file a GitHub issue describing the decision or missing authority;
-- include exact heads, evidence, options considered, recommendation, and the
-  smallest action needed later;
-- link that issue from the task handoff/decision record; and
-- continue with other independent work where possible.
+When evidence is insufficient or contradictory, preserve the safe current state
+and route the smallest action that can resolve it: another review/test/gate,
+Coder repair, Replanner turn, provider retry, or operator decision when authority
+is genuinely required.
 
-Do not silently broaden scope, bypass branch protection, expose secrets, or make
-destructive/irreversible changes that repository policy does not already permit.
-
-## Sensitive or sequential work
-
-For secret-bearing, live-provider, deployment, or irreversible work, require the
-explicit prerequisites and authorization already defined by repository/operator
-policy. If those prerequisites are absent, create an actionable issue instead of
-inventing a new approval mechanism.
-
-For dependent changes, preserve declared order and revalidate each current head.
-Documentation is never permission to bypass branch protection.
-
-## Exception record
-
-When normal policy cannot resolve a case, record an exception as a bounded
-engineering decision rather than a generic human gate. Capture:
-
-- one target and one proposed action;
-- exact immutable preconditions;
-- read-only checks available before mutation;
-- why normal supported paths are insufficient;
-- the safest recommended next action;
-- stop conditions if identities change; and
-- assurance that must be rerun afterward.
-
-If the action is not currently authorized, file this record as a GitHub issue and
-leave the state safe.
+Independent worksets may continue while one workset waits.
 
 ## Report
 
-Return:
+Return enough for the next role to act without reconstructing the whole history:
 
-- decision/status;
-- exact identities compared;
-- prerequisites satisfied or missing;
-- machine evidence and where it came from;
-- stale or mismatched evidence;
-- decision taken and rationale;
-- follow-up issue, if one was filed;
-- blockers that prevent safe autonomous progress.
+- project/workset identity;
+- exact heads compared;
+- current and stale assurance;
+- dependency/integration state when relevant;
+- decision and next route;
+- current `/afk` state when landing is involved; and
+- unresolved authority or provider blockers.

@@ -1,91 +1,112 @@
 ---
 name: crew-model-selection
 description: >-
-  Choose the task kind, model, reasoning effort, and dispatch path for a fresh
-  Rozoro crew. Use immediately before Watchtower spawns a planning, coding,
-  review, testing, merge/post-merge, or Quick Crew session. This skill selects
-  the crew; it does not generate that crew's prompt.
+  Choose the task kind, harness, model, reasoning effort, and dispatch path for a
+  fresh Rozoro crew. Use immediately before Watchtower spawns planning, coding,
+  review, testing, no-mistakes, workset-merging, or Quick Crew work.
 ---
 
 # Crew model selection
 
-Use this in **Watchtower immediately before every fresh Rozoro crew dispatch**.
-Read current policy instead of answering from remembered defaults.
+Use this immediately before every **fresh** Rozoro crew dispatch.
 
-No-mistakes validation is **not** a crew dispatch. Use `no-mistakes-gate` for that
-pipeline instead of this skill.
+## 1. Choose the task kind
 
-## Choose the task kind first
+Read `templates/watchtower-crew-dispatch-guidelines.md` for current role intent and
+preferred model/effort defaults.
 
-Read `templates/watchtower-crew-dispatch-guidelines.md` as the source of truth for
-standard roles, canonical model IDs, reasoning effort, and role boundaries.
+Choose among the roles that fit the next bounded action:
 
-For new implementation work, treat the Task Decomposer as the normal bridge from
-raw operator intent to a bounded coder task. Prefer Planner -> Coder unless one of
-these is already true:
+- Task Decomposer / Planner
+- Coder
+- Reviewer
+- Tester
+- Escalation Replanner
+- No-Mistakes Runner
+- Workset Merger
+- Quick Scout / Quick Coder when `quick-crew-routing` qualifies
 
-- the work qualifies for Quick Coder;
-- the operator or an earlier Planner/Replanner already supplied a genuinely
-  bounded implementation task with usable scope, constraints, and acceptance
-  criteria;
-- this is an ordinary repair turn being sent back to the existing coder; or
-- the requested change is already narrow, mechanical, and sufficiently specified
-  that another planning turn would add no useful information.
+For new implementation work, Planner is the normal bridge from raw intent to a
+bounded **workset execution strategy** when scope, dependencies, acceptance
+criteria, parallelism, stacking, fan-out/fan-in, or integration order are not
+already clear.
 
-Do not skip planning merely because Watchtower can personally infer a plausible
-implementation. Repository investigation and decomposition belong to the Planner,
-not Watchtower.
+Planner decides which bounded tasks may run concurrently, which must be sequential
+or stacked, their dependency/base relationships, and intended integration order.
+Watchtower dispatches according to that strategy rather than independently grading
+tasks into parallel or serial execution.
 
-Read `quick-crew-routing` when the work might qualify for the bounded Quick Crew
-fast path. Quick Crew does not replace the standard role pipeline.
+A normal repair turn stays with the existing Coder while the task boundary still
+holds. Use Replanner when evidence requires changing the task graph, parallel/
+stacking strategy, dependencies, or implementation direction.
 
-Then choose the role, model, and reasoning effort. Keep harness/profile identity
-separate from model ID and reasoning effort.
+Use a Workset Merger when candidate tasks need the current Planner/Replanner
+strategy executed against actual branches, when no-mistakes results need to be
+interpreted against the integrated workset, or when an accepted workset is ready
+for landing/post-merge work. The merger validates and realizes the plan; it does
+not silently replace the Planner's execution strategy.
 
-## Compose the brief; do not template it
+Use a No-Mistakes Runner when an exact committed candidate is ready to enter or
+reattach to the configured no-mistakes pipeline.
 
-Watchtower writes the crew brief itself.
+## 2. Resolve this machine's execution target
 
-Return to the older concise style: **intent + pointer + only the context,
-constraints, and evidence this crew needs for this task**. The canonical role
-policy should influence Watchtower's judgment, but it is not a block of text to
-copy into the prompt and not a required report schema.
+If `$ROZORO_HOME/config/machine.md` exists, read the relevant availability and
+preference notes. The default location is `~/.rozoro/config/machine.md`.
 
-A useful brief may be only a few lines. Examples of task-specific additions that
-matter:
+Treat that file as machine-local routing input, not semantic truth. Verify the
+selected harness/profile can actually run. Keep these identities separate:
 
-- Planner: source issue/request and any operator constraints or exclusions.
-- Reviewer/Tester: exact candidate head, task/acceptance pointer, and relevant
-  prior finding when one caused the dispatch.
-- Merge Finisher: PR, expected head, applicable landing evidence, merge policy,
-  and required post-merge work.
-- Quick Scout/Coder: exact narrow question or mechanical change plus the quick
-  path's stop/escalation condition.
+- task kind / role;
+- harness or launcher;
+- account/profile;
+- model ID;
+- reasoning effort; and
+- optional fast/priority tier.
 
-Do not paste the whole role policy, repeat repository rules the crew will load
-from its `--cwd`, or turn every brief into a checklist. Preserve enough context
-for the crew to exercise judgment.
+Preferred role defaults from the dispatch guide are the starting point. When the
+preferred target is unavailable, select a compatible available target described by
+the machine profile or current Rozoro crew presets. Explicit operator requirements
+and repository-local constraints take precedence.
 
-## Rules
+For no-mistakes, the selected Rozoro crew model is the model used by the thin
+No-Mistakes Runner itself. The no-mistakes pipeline's own agent/model/fallback is
+resolved by its repository/global configuration and selected `NM_HOME` profile.
 
-- Current standard role/model/effort selection wins over older snapshots or
-  machine-local policy copies.
-- Use canonical model IDs exactly as written. Do not invent shorthand model
-  names.
-- Standard crew is the default. Quick Crew is an explicit bounded fast path only.
-- The uploaded cross-machine blanket Pi-harness rule was discarded and must not
-  be inferred as a global default.
-- Do **not** create a No-Mistakes Runner role. A clean committed candidate is
-  submitted and driven through the Watchtower-owned `no-mistakes-gate`; the
-  no-mistakes pipeline owns its internal agents and model selection.
-- Merge and post-merge repository/provider mutations are a **Merge Finisher crew**
-  task. Watchtower decides that landing may proceed; the finisher performs the
-  mutation and returns exact landed evidence.
-- If a canonical source is missing, ambiguous, or internally inconsistent, report
-  that condition instead of guessing.
+## 3. Write the task-specific brief
 
-Follow-up on an existing live task normally uses the same crew/context via
-`./bin/rozoro send`; do not re-run fresh-crew selection merely because another
-turn is needed. Re-run selection when Watchtower intentionally dispatches a new
-task-kind crew such as reviewer, tester, replanner, merge finisher, or replacement
-coder.
+Watchtower writes the brief in its own words. Prefer:
+
+**intent + pointer + only the context, constraints, and evidence this crew needs**
+
+Useful role-specific context includes:
+
+- Planner: source request, operator constraints, and expected workset outcome. Ask
+  for bounded tasks plus dependencies, parallel groups, stacks/sequences, fan-in,
+  and intended integration order where applicable.
+- Coder: bounded task/repair finding and acceptance source, including the task's
+  position/base in the workset when the plan makes that relevant.
+- Reviewer/Tester: exact candidate head and task/acceptance pointer.
+- Replanner: current workset/task plan, failed evidence, current execution
+  strategy, and cumulative attempt/replan counters.
+- No-Mistakes Runner: repository/workset identity, exact candidate head/base,
+  intended no-mistakes profile when one is known, and the requested submit/attach
+  behavior.
+- Workset Merger: current Planner/Replanner execution strategy, participating task
+  branches/heads, assurance/no-mistakes results, target branch/PR policy, and
+  current `/afk` state.
+- Quick Crew: the exact narrow action plus its stop/escalation boundary.
+
+The crew can read repository-local rules and inspect the repository from `--cwd`;
+do not duplicate material that is already discoverable there unless it is needed
+to disambiguate this turn.
+
+## 4. Follow-up versus fresh crew
+
+Use `./bin/rozoro send` when the next turn belongs to the same live task and role.
+Run fresh selection when Watchtower intentionally changes task kind or replaces the
+active crew, for example Planner -> parallel/stacked Coders, Coder -> Reviewer,
+candidate -> No-Mistakes Runner, or planned candidate set -> Workset Merger.
+
+If current policy or machine availability is ambiguous, report the ambiguity and
+choose the safest usable target that preserves the requested role boundary.

@@ -1,101 +1,124 @@
 # Skill ownership and routing
 
-Project skills under `.agents/skills/` are **Watchtower tools**. Rozoro does not
-currently transmit a skill object or skill reference into a crew session.
+Project skills under `.agents/skills/` are **Watchtower tools**. They help the
+Watchtower make routing and operator-policy decisions; the Watchtower still writes
+the task-specific brief for each crew.
 
-Do not use skills as a prompt-template layer. Watchtower remains responsible for
-understanding the current task, choosing the next task kind, and writing the
-smallest useful brief for that crew.
+A useful brief is usually **intent + pointer + only the context, constraints, and
+evidence this crew needs**. Repository-local rules come from the crew's `--cwd`.
 
 ## Watchtower action skills
 
 | Skill | When Watchtower uses it |
 | --- | --- |
-| `crew-model-selection` | Before every fresh Rozoro crew dispatch: choose task kind and current canonical model/effort. |
+| `crew-model-selection` | Before a fresh Rozoro crew dispatch: choose task kind and resolve an available harness/model/effort. |
 | `quick-crew-routing` | Decide whether a bounded task qualifies for Quick Scout/Quick Coder. |
-| `no-mistakes-gate` | Submit/reattach and drive the external no-mistakes run, reconcile exact-head/custody evidence, and route findings. |
-| `no-mistakes-observatory` | Maintain the dedicated untracked Herdr visualization surface for active no-mistakes run graphs. |
-| `delivery-evidence` | Reconcile exact-head review/test/CI/delivery evidence and make bounded Watchtower decisions. |
-| `attempt-budget` | Enforce the coder-attempt budget and defer exhausted implementation lineages. |
+| `delivery-evidence` | Reconcile exact-head assurance and delivery evidence when deciding what runs next. |
+| `attempt-budget` | Track cumulative Coder attempts and Replanner turns, extend bounded lineages through replanning, and defer exhausted work. |
+| `afk` | Read or change unattended merge authority. `/afk` is ON by default. |
+| `no-mistakes-observatory` | Maintain the optional human visualization surface for active no-mistakes runs. |
 
-These skills guide Watchtower's own routing/coordination actions. They are not
-blocks of text to paste into a crew prompt.
+Skills are orchestration guidance, not prompt blocks to paste into crew sessions.
 
-## Crew briefs are authored by Watchtower
+## Context grows from work
 
-The old `brief-*` skill layer was removed because it made Watchtower behave like a
-prompt forwarder. Standing role/model policy lives in
-`templates/watchtower-crew-dispatch-guidelines.md`; the actual brief is composed
-for the task at hand.
+A Watchtower is expected to start with incomplete project context. It learns the
+working shape of a project from operator instructions, repository-local docs, task
+plans, crew handoffs, gate results, and delivery outcomes.
 
-Default style:
+Reuse relevant durable task results when they answer a question or constrain a new
+turn. Load deeper repository context when a task requires it. The Watchtower does
+not need a reconstructed history of superseded conventions before it can work.
 
-> **intent + pointer + only the context, constraints, and evidence this crew needs**
+## One Watchtower may cover multiple projects
 
-A brief may be only a few lines. Do not paste the role policy, repeat the target
-repository's own rules, or force every task into the same report/checklist shape.
-The crew should have enough context to exercise judgment.
+Every fresh crew has an explicit `--cwd`. A single Watchtower may therefore route
+work across unrelated repositories at the same time.
 
-Examples of task-specific information worth adding:
+Keep project facts scoped to the repository/workset they came from. Cross-project
+priority belongs to the Watchtower/operator; repository implementation and policy
+belong to the target project and its crew.
 
-- Planner: raw operator request/issue plus exclusions or decisions already made.
-- Coder: bounded task or repair finding plus acceptance criteria that are not
-  obvious from the source pointer.
-- Reviewer/Tester: exact candidate head and the task/acceptance source.
-- Merge Finisher: PR, expected exact head, landing evidence, allowed merge path,
-  and post-merge work that actually applies.
-- Quick Crew: the exact narrow question/change and its stop/escalation boundary.
+## Optional machine profile
 
-## Planner is the normal bounding step
+A Watchtower may read `$ROZORO_HOME/config/machine.md` (default
+`~/.rozoro/config/machine.md`) for machine-local facts such as:
 
-For new implementation work, raw operator intent normally goes through the Task
-Decomposer before Coder. Skip that planning turn only when the implementation task
-is already genuinely bounded, this is a normal repair turn for the same coder, or
-Quick Coder clearly qualifies.
+- installed/usable harnesses;
+- available model families or preferred defaults;
+- named harness/account profiles and required environment;
+- no-mistakes profiles (`NM_HOME`, agent preference, or launcher notes); and
+- local capacity/cost preferences useful for routing.
 
-Watchtower should not inspect the repository deeply enough to replace the Planner.
-Dispatch the specialist instead.
+The file is deliberately text-based policy for now, not a versioned machine
+protocol. Treat it as an availability/preference hint and verify the selected
+harness/profile when dispatching. Explicit operator instructions and
+repository-local requirements still win.
 
-## No-mistakes is not crew
+## Crew roles
 
-No-mistakes is a Watchtower-managed external gate. It owns its pipeline worktree,
-internal agents/model selection, branch custody, PR/CI work, and supported recovery
-surface. Watchtower uses `no-mistakes-gate` to submit/reattach, drive supported
-gates, and reconcile the result.
+The canonical role policy lives in
+`templates/watchtower-crew-dispatch-guidelines.md`.
 
-There is no No-Mistakes Runner crew and no no-mistakes briefing skill.
+The important ownership boundaries are:
 
-## No-mistakes Observatory
+- **Planner/Task Decomposer** bounds the work and owns its execution strategy:
+  dependencies, parallel groups, stacks/sequences, fan-out/fan-in, and intended
+  integration order.
+- **Coder** implements a bounded task.
+- **Reviewer** and **Tester** provide independent assurance.
+- **Replanner** changes a non-converging task/dependency/execution strategy while
+  preserving cumulative lineage counters; use `attempt-budget` to decide whether
+  another Coder/Replanner turn is available.
+- **No-Mistakes Runner** is a thin crew that submits/attaches to the configured
+  no-mistakes pipeline, keeps the run alive/listened to, and returns structured
+  run evidence. It does not replace no-mistakes' own pipeline agents.
+- **Workset Merger** executes and reconciles the Planner/Replanner strategy against
+  actual branches, reads no-mistakes results in workset context, routes evidence
+  that requires repair/replanning, and performs final merge/post-merge work when
+  current authority permits.
+- **Watchtower** owns cross-workset priority, dispatch, routing, and operator
+  interaction.
 
-No agent pane owns the no-mistakes graph.
+## Worksets and merging
 
-Use one persistent, untracked **no-mistakes Observatory** Herdr tab per Watchtower
-workspace. Put one `no-mistakes attach` pane in that tab for each active gate/run,
-using enough task/run identity to distinguish concurrent pipelines.
+When several tasks contribute to one deliverable, preserve their relationship as a
+workset. The Planner/Replanner plan should identify which tasks may run in parallel,
+which are stacked or sequential, and how they are expected to fan in and integrate.
+Watchtower dispatches according to that plan.
 
-The Observatory is deliberately separate from Planner/Coder/Reviewer/Tester/Merge
-Finisher panes and from the Watchtower pane. It does not consume crew capacity and
-must not become a second no-mistakes controller.
+Give the Workset Merger the current execution strategy plus task branches/heads and
+assurance results. The merger validates and realizes the planned dependency/stack
+order against actual results instead of treating completed crew as an unordered bag
+or silently replacing the plan. If repository evidence invalidates the strategy,
+route that evidence to Replanner.
 
-Keep terminal graph/scrollback visible through the associated landing/post-merge
-episode when practical so the operator can compare stage behavior and identify
-optimization opportunities. For durable analysis, retain run IDs and prefer
-structured timing/retry/fix/model evidence from no-mistakes rather than scraping
-the TUI.
+No-mistakes findings are most useful when read by the same merger that understands
+the integrated workset shape.
 
-## Merge/post-merge is crew
+## No-mistakes
 
-Once Watchtower judges that the candidate is eligible to land, it dispatches a
-**Merge Finisher** (`gpt-5.6-luna`, low). The finisher performs repository/provider
-merge and required post-merge activities and returns exact landed evidence.
-Watchtower does not perform the repository mutation itself.
+No-mistakes remains authoritative for its own disposable worktree, internal
+pipeline agents, fixes, PR/CI work, and structured AXI state. The No-Mistakes
+Runner is the Rozoro-side operator for that external pipeline: it chooses the
+configured machine/repository profile, starts or reattaches the run through the
+supported Git/CLI/AXI path, listens, and reports evidence back.
 
-Merge Finisher activity does not consume coder attempts unless a later failure is
-routed to a Coder for a new implementation turn.
+Configuration comes from the repository's trusted `.no-mistakes.yaml` plus the
+selected no-mistakes global profile (`~/.no-mistakes/config.yaml` or another
+`NM_HOME`). Prefer no-mistakes' native `agent`/fallback and `agent_config`
+mechanisms over per-run config mutation.
 
-## Boundary
+## Merge authority
 
-**Watchtower chooses, briefs, dispatches, drives external gates, reconciles
-evidence, and decides what runs next. Crew performs repository planning,
-implementation, review, testing, merge, and post-merge work. No-mistakes performs
-its own pipeline work under its own custody. The Observatory is presentation only.**
+`/afk` controls whether an otherwise-ready Workset Merger may perform the final
+merge without a fresh operator confirmation:
+
+- **ON (default):** the merger may land when repository policy, exact-head
+  evidence, and existing operator authority all permit it.
+- **OFF:** the merger may prepare and validate the landing, but waits for operator
+  confirmation before the final merge mutation.
+
+The toggle changes merge authority only. It never authorizes branch-protection
+bypass, destructive recovery, scope expansion, or decisions the operator has not
+delegated.
