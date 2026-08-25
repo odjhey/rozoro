@@ -77,7 +77,9 @@ Treat the current structured no-mistakes/AXI output as authoritative.
   policy already authorizes them; otherwise preserve state and surface an issue
   with exact evidence while continuing unrelated work.
 - **checks-passed / passed / terminal success** — reconcile the final exact head,
-  PR, required CI, and returned custody before accepting the result.
+  PR, required CI, and returned custody. If the candidate is now eligible to land,
+  dispatch a Merge Finisher using `brief-merge-finisher`; Watchtower does not
+  perform the merge itself.
 - **failed / cancelled / rejected** — preserve the run evidence and route actionable
   findings to the active coder or to replanning when the problem changes the task
   boundary.
@@ -129,4 +131,5 @@ Record:
 - PR URL/state and required exact-head CI;
 - final custody state and supported recovery action, if any;
 - stale assurance invalidated by head movement; and
-- the next Rozoro routing decision.
+- the next Rozoro routing decision, including `Merge Finisher` when the candidate
+  is ready to land.
