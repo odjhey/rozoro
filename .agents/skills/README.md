@@ -17,16 +17,16 @@ reconciliation, routing, and durable decision making.
 ## Crew-facing skills
 
 The Watchtower does **not** execute these as repository work. It recognizes the
-need for the role, dispatches the appropriate crew, and makes the relevant skill
-instructions available in that crew's context.
+need for the role, reads the relevant skill, includes the applicable instructions
+in the crew brief, and dispatches the appropriate crew.
 
 | Skill | Crew role | Watchtower action |
 | --- | --- | --- |
-| `task-decomposer` | Task Decomposer / Replanner | Dispatch a planning crew; pass or expose the skill. Do not plan the repository task in Watchtower. |
-| `independent-review` | Reviewer | Dispatch a fresh reviewer; pass or expose the skill and bounded task/evidence. |
-| `adversarial-testing` | Tester | Dispatch a tester; pass or expose the skill and bounded task/evidence. |
-| `no-mistakes-branch-recovery` | No-Mistakes Runner | Dispatch/resume the dedicated runner; pass or expose the recovery skill. Watchtower judges the returned custody report. |
-| `rozoro-authoring` | Coder working on Rozoro | Make the repository-specific authoring rules available to the coder. |
+| `task-decomposer` | Task Decomposer / Replanner | Dispatch a planning crew with the skill instructions included in its brief. Do not plan the repository task in Watchtower. |
+| `independent-review` | Reviewer | Dispatch a fresh reviewer with the review instructions and bounded task/evidence in its brief. |
+| `adversarial-testing` | Tester | Dispatch a tester with the testing instructions and bounded task/evidence in its brief. |
+| `no-mistakes-branch-recovery` | No-Mistakes Runner | Dispatch/resume the dedicated runner with the recovery instructions in its brief. Watchtower judges the returned custody report. |
+| `rozoro-authoring` | Coder working on Rozoro | Include the repository-specific authoring instructions in the coder brief. |
 
 ## Routing rule
 
@@ -35,29 +35,28 @@ machine-readable distinction:
 
 - `execution-owner: watchtower` + `watchtower-action: invoke-directly` means the
   Watchtower performs that skill itself.
-- `execution-owner: crew` + `watchtower-action: dispatch-and-pass` means the
-  Watchtower must dispatch the named crew role and make the skill instructions
-  available to that crew.
+- `execution-owner: crew` + `watchtower-action: dispatch-and-brief` means the
+  Watchtower must dispatch the named crew role and include the relevant skill
+  instructions in that crew's brief.
 
 The `crew-role` metadata names the intended role for crew-facing skills.
 
-## Passing crew-facing skills
+## Briefing crew-facing skills
+
+Rozoro does not currently pass a skill object or skill reference into a crew
+session. Crew-facing skills are therefore **Watchtower briefing sources**.
 
 A crew-facing skill is not considered applied merely because the Watchtower read
-it. The dispatched crew must actually receive or be able to discover the
-instructions.
+it. Before dispatch, the Watchtower must incorporate the applicable instructions
+into the task brief that the crew actually receives.
 
-Use the least-duplicative supported mechanism available:
+Keep the brief focused: include the role contract, important constraints,
+required report shape, and task-specific inputs. Do not paste unrelated policy or
+turn the brief into a second copy of the whole skill library.
 
-1. repo-local skill discovery when the target checkout already contains the skill;
-2. crew preset/system rules when the role is a standing crew configuration; or
-3. an explicit prompt/reference that makes the relevant skill instructions
-   available to the crew.
-
-A skill name alone is not sufficient when the target crew cannot resolve that
-skill from its own context. In that case the Watchtower must pass the instructions
-or a resolvable source reference, not assume the crew inherited the Watchtower's
-skill context.
+A future mechanism may support first-class skill delivery to crews. Until that
+exists, do not claim repo-local skill discovery, presets, system rules, or a skill
+name/reference alone as a supported way to transmit these instructions.
 
 Do not copy model-selection policy into crew-facing skills. Model and reasoning
 effort are Watchtower routing choices; the crew skill describes how that role
