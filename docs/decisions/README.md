@@ -46,4 +46,4 @@ If an approved decision changes, prefer a new ADR that `supersedes` the old one 
 - [ADR-0003: Events, projections, and delivery acknowledgements stay separate](0003-events-projections-delivery.md)
 - [ADR-0004: Require first-class watchtower attention identity](0004-watchtower-mailbox.md)
 - [ADR-0005: Keep repository workflow policy above Rozoro core](0005-workflow-boundary.md)
-- [ADR-0006: Resolve cross-machine Watchtower policy differences](0006-cross-machine-watchtower-policy-resolution.md) — approved; current model/fallback policies win, Quick Crew/attempt-budget/observer behavior imported.
+- [ADR-0006: Resolve cross-machine Watchtower policy differences](0006-cross-machine-watchtower-policy-resolution.md)
