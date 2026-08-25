@@ -19,13 +19,12 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v4"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v5"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
-ARRAY_EXPANSION = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}$")
 GIT_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 
@@ -69,66 +68,37 @@ def shell_tokens(line: str) -> list[str]:
         raise UnsafePath("launcher is not valid tokenizable shell source") from exc
 
 
-def launcher_invocation_has_policy(source: bytes, command: str) -> bool:
-    """Track array reassignment and validate arrays expanded by actual command lines."""
+def pi_launcher_contract_has_policy(source: bytes) -> bool:
+    """Validate the one shipped top-level args + exec-env-pi contract, or fail closed."""
     try:
         lines = source.decode("utf-8").splitlines()
     except UnicodeError as exc:
         raise UnsafePath("launcher is not valid UTF-8 shell source") from exc
-    arrays: dict[str, list[str]] = {}
-    invocations: list[bool] = []
-    continuation = ""
-    logical_lines: list[str] = []
-    for raw in lines:
-        current = continuation + raw
-        if current.endswith("\\"):
-            continuation = current[:-1] + " "
-        else:
-            logical_lines.append(current)
-            continuation = ""
-    if continuation:
-        logical_lines.append(continuation)
+    block_depth = 0
+    args: list[str] = []
+    invocation_results: list[bool] = []
+    expected_invocation = ["exec", "env", "ROZORO_WATCHTOWER", "=", "1", "pi", "${args[@]}", "$@"]
+    openers = {"if", "case", "for", "while", "until", "select"}
+    closers = {"fi", "esac", "done"}
 
-    for line in logical_lines:
+    for line in lines:
         tokens = shell_tokens(line)
-        index = 0
-        while index < len(tokens):
-            if index + 1 < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[index]) and tokens[index + 1] in {"=(", "+=("}:
-                name, operation = tokens[index], tokens[index + 1]
-                index += 2
-                values: list[str] = []
-                depth = 1
-                while index < len(tokens) and depth:
-                    token = tokens[index]
-                    if token == "(":
-                        depth += 1
-                    elif token == ")":
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    if depth:
-                        values.append(token)
-                    index += 1
-                if operation == "=(":
-                    arrays[name] = values
-                else:
-                    arrays.setdefault(name, []).extend(values)
-            elif tokens[index] == command:
-                expanded: list[str] = []
-                cursor = index + 1
-                while cursor < len(tokens) and tokens[cursor] != ";":
-                    match = ARRAY_EXPANSION.fullmatch(tokens[cursor])
-                    if match:
-                        expanded.append(match.group(1))
-                    cursor += 1
-                invocations.append(
-                    any(
-                        any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(arrays.get(name, []), arrays.get(name, [])[1:]))
-                        for name in expanded
-                    )
-                )
-            index += 1
-    return bool(invocations) and all(invocations)
+        if block_depth == 0 and len(tokens) >= 3 and tokens[0] == "args" and tokens[1] in {"=(", "+=("} and tokens[-1] == ")":
+            values = tokens[2:-1]
+            if tokens[1] == "=(":
+                args = values
+            else:
+                args.extend(values)
+        if block_depth == 0 and tokens == expected_invocation:
+            invocation_results.append(
+                any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:]))
+            )
+        for token in tokens:
+            if token in openers or token == "{":
+                block_depth += 1
+            elif token in closers or token == "}":
+                block_depth = max(0, block_depth - 1)
+    return len(invocation_results) == 1 and invocation_results[0]
 
 
 def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:
@@ -198,8 +168,8 @@ def main() -> int:
             source_bytes = read_repo_file(repo, SOURCE)
             pi_launcher = read_repo_file(repo, PI_LAUNCHER)
             claude_launcher = read_repo_file(repo, CLAUDE_LAUNCHER)
-            pi_captured = launcher_invocation_has_policy(pi_launcher, "pi")
-            claude_captured = launcher_invocation_has_policy(claude_launcher, "$CLAUDE_BIN")
+            pi_captured = pi_launcher_contract_has_policy(pi_launcher)
+            claude_captured = False
             if not pi_captured:
                 raise UnsafePath(f"cannot verify {SOURCE} in an args array consumed by the Pi invocation")
             commit_read = bound_git_value(repo_path, identity, "rev-parse", "HEAD")
@@ -242,7 +212,7 @@ def main() -> int:
             "reason": git_reason,
         },
         "harness_coverage": {
-            "validation": "tokenized-shell-consumed-args-array-option-value",
+            "validation": "narrow-top-level-args-exec-env-pi-contract-v1",
             "option": POLICY_OPTION,
             "value": POLICY_VALUE,
             "pi": {

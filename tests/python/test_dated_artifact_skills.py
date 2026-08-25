@@ -61,7 +61,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             current = b"current working-tree policy\n"
             source.write_bytes(current)
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
             )
             (checkout / "bin/rzr-claude-watchtower.sh").write_text("claude --settings overlay.json\n", encoding="utf-8")
             artifact_root = root / "artifacts"
@@ -108,19 +108,19 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v4")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v5")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
             self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
-            self.assertEqual(metadata["harness_coverage"]["validation"], "tokenized-shell-consumed-args-array-option-value")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "narrow-top-level-args-exec-env-pi-contract-v1")
             self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
             self.assert_private_tree(first)
 
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                "args=(--approve)\n# --append-system-prompt $ROOT/templates/watchtower.md\nexec pi \"${args[@]}\"\n",
+                "args=(--approve)\n# --append-system-prompt $ROOT/templates/watchtower.md\nexec env ROZORO_WATCHTOWER=1 pi \"${args[@]}\" \"$@\"\n",
                 encoding="utf-8",
             )
             substring_only = subprocess.run(
@@ -151,15 +151,37 @@ class DatedArtifactSkillTests(unittest.TestCase):
                 'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
             )
             launchers = {
+                "false-only-assignment": (
+                    "if false; then\n"
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "fi\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "uncalled-function": (
+                    "configure_args() {\n"
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "}\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "echo-pi-decoy": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    'echo pi "${args[@]}"\n'
+                ),
+                "dead-invocation": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "if false; then\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                    "fi\n"
+                ),
                 "reassigned": (
                     'if false; then args=(--append-system-prompt "$ROOT/templates/watchtower.md"); fi\n'
                     "args=(--approve)\n"
-                    'exec pi "${args[@]}"\n'
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
                 ),
                 "unused-array": (
                     'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
                     "other=(--approve)\n"
-                    'exec pi "${other[@]}"\n'
+                    'exec env ROZORO_WATCHTOWER=1 pi "${other[@]}" "$@"\n'
                 ),
             }
             for name, launcher in launchers.items():
@@ -193,7 +215,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             policy = b"held policy bytes\n"
             (checkout / "templates/watchtower.md").write_bytes(policy)
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
             )
             (checkout / "bin/rzr-claude-watchtower.sh").write_text("args=(--settings overlay.json)\n", encoding="utf-8")
             fake_bin = root / "bin"
@@ -240,7 +262,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
             (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec pi "${args[@]}"\n', encoding="utf-8"
+                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
             )
             (checkout / "bin/rzr-claude-watchtower.sh").write_text(
                 'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
