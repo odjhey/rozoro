@@ -1,19 +1,16 @@
 ---
 name: quick-crew-routing
 description: >-
-  Decide whether a bounded task can use Quick Crew instead of the standard crew.
-  This is Watchtower-owned routing policy. Standard crew remains the default;
-  Quick Crew is only for narrow, mechanical, low-risk work where latency matters.
-metadata:
-  execution-owner: watchtower
-  watchtower-action: invoke-directly
-  derived-from: uploaded-watchtower-policy/06-quick-crew-dispatch.md
+  Decide whether Watchtower should dispatch a Quick Scout or Quick Coder instead
+  of the standard crew for a bounded task. Use during Watchtower routing when the
+  work may be narrow, mechanical, low-risk, and latency-sensitive. Standard crew
+  remains the default.
 ---
 
 # Quick Crew routing
 
-Use Quick Crew as an optimization, never as a replacement for the standard role
-pipeline.
+Use this in **Watchtower while choosing the task kind and dispatch path**. Quick
+Crew is an optimization, never a replacement for the standard role pipeline.
 
 Current standard model selection remains authoritative in
 `templates/watchtower-crew-dispatch-guidelines.md`. This skill does not redefine
@@ -44,8 +41,8 @@ Do not use Quick Scout for broad analysis, architecture or product decisions,
 indefinite exploration, or authoritative conclusions under meaningful
 uncertainty.
 
-When selected, read `.agents/skills/quick-scout/SKILL.md` and incorporate the
-applicable role instructions into the crew brief.
+When selected, read `.agents/skills/quick-scout/SKILL.md` and render the
+applicable instructions into the Quick Scout crew brief.
 
 ### Quick Coder
 
@@ -55,8 +52,8 @@ acceptance criteria and no meaningful design ambiguity.
 Do not use Quick Coder for API/subsystem redesign, cross-cutting changes, scope
 expansion, consequential behavior interpretation, or repeated repair attempts.
 
-When selected, read `.agents/skills/quick-coder/SKILL.md` and incorporate the
-applicable role instructions into the crew brief.
+When selected, read `.agents/skills/quick-coder/SKILL.md` and render the
+applicable instructions into the Quick Coder crew brief.
 
 Consequential Quick Coder output still goes through the standard independent
 review and testing required by repository policy. A quick completion is not a
@@ -77,8 +74,8 @@ Findings:
 Suggested next step:
 ```
 
-The Watchtower consumes that report and dispatches the appropriate standard
-crew. Do not silently turn the same Quick Crew session into a standard role.
+Watchtower consumes that report and dispatches the appropriate standard crew. Do
+not silently turn the same Quick Crew session into a standard role.
 
 ## Precedence
 
