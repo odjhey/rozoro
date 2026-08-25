@@ -194,6 +194,7 @@ List known tasks:
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
 | `./bin/rozoro crew list\|show` | inspect launch presets |
 | `./bin/rozoro teardown` | close live hosting while keeping the task folder |
+| `./bin/rozoro report` | generate static HTML fleet reports (durations, timeline, outcomes) |
 | `./bin/rozoro doctor` | check dependencies and harness support |
 
 `watch` is for diagnostics and legacy compatibility. Managed Pi and supported Claude sessions use the resident event bus.
