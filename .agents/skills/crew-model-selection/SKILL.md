@@ -3,9 +3,9 @@ name: crew-model-selection
 description: >-
   Choose the task kind, model, reasoning effort, and dispatch path for a fresh
   Rozoro crew. Use immediately before Watchtower spawns a new planning, coding,
-  review, testing, or Quick Crew session so current model policy, Quick Crew
-  eligibility, and the applicable brief-* guideline are resolved from canonical
-  sources.
+  review, testing, merge/post-merge, or Quick Crew session so current model
+  policy, Quick Crew eligibility, and the applicable brief-* guideline are
+  resolved from canonical sources.
 ---
 
 # Crew model selection
@@ -36,6 +36,7 @@ pipeline instead of this skill.
 - Task Decomposer / Escalation Replanner -> `brief-task-planner`
 - Reviewer -> `brief-reviewer`
 - Tester -> `brief-tester`
+- Merge Finisher -> `brief-merge-finisher`
 - Coder modifying Rozoro -> `brief-rozoro-coder`
 - Quick Scout -> `brief-quick-scout`
 - Quick Coder -> `brief-quick-coder`
@@ -57,10 +58,15 @@ repository's own rules unless another applicable briefing guideline exists.
 - Do **not** create a No-Mistakes Runner role. A clean committed candidate is
   submitted and driven through the Watchtower-owned `no-mistakes-gate`; the
   no-mistakes pipeline owns its internal agents and model selection.
+- Merge and post-merge repository/provider mutations are a **Merge Finisher crew**
+  task. Watchtower decides that the candidate is eligible to land, then dispatches
+  the finisher with the exact candidate/evidence packet. Watchtower does not merge
+  the repository itself.
 - If a canonical source is missing, ambiguous, or internally inconsistent, report
   that condition instead of guessing.
 
 Follow-up on an existing live task normally uses the same crew/context via
 `./bin/rozoro send`; do not re-run fresh-crew selection merely because another
 turn is needed. Re-run selection when Watchtower is intentionally dispatching a
-new task-kind crew, such as reviewer, tester, replanner, or replacement coder.
+new task-kind crew, such as reviewer, tester, replanner, merge finisher, or
+replacement coder.
