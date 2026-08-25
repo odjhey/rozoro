@@ -180,11 +180,19 @@ scope of decisions delegated by the operator.
 1. Start or steer crew with `./bin/rozoro start` and `send`.
 2. Stay available for operator input while `rozorod` delivers crew notifications.
 3. On a notification, run `./bin/rozoro reconcile` and inspect the affected task
-   with `./bin/rozoro status <id>`.
+   with `./bin/rozoro status <id>`. Using the `watchtower-attention-ledger` skill,
+   record or supersede one attention item per surfaced edge that needs your
+   attention, and record a handling note as you route each one.
 4. Read the crew handoff and current exact identities, then route the next action.
 5. Keep unrelated work moving while other crew or no-mistakes runs are active.
 6. ACK/reconcile handled notifications and return to idle when there is no
    immediate routing action.
+
+On a fresh, compacted, or resumed session, run the `watchtower-attention-ledger`
+`prime` before routing to re-orient from disk rather than conversational memory.
+The ledger records your own decisions and observations, not verified system
+state; ledger `handled` never implies generation ACK, task open-item ACK, a
+handoff verdict, or operator acceptance.
 
 The No-Mistakes Runner is itself a crew, so its actionable handoff reaches
 Watchtower through the normal crew lifecycle rather than requiring Watchtower to
