@@ -2,16 +2,23 @@
 name: independent-review
 description: >-
   Perform an independent correctness review of a software change at an exact
-  commit. Use when asked to review implementation against its task, contracts,
-  surrounding code, compatibility requirements, and acceptance criteria without
-  quietly editing production code.
+  commit. This is a crew-facing assurance role: the Watchtower dispatches a fresh
+  reviewer and passes these instructions rather than reviewing repository code
+  itself.
 metadata:
+  execution-owner: crew
+  crew-role: reviewer
+  watchtower-action: dispatch-and-pass
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
 # Independent review
 
 Review the implementation as a separate assurance role.
+
+This skill is executed by a **crew member**, not by the Watchtower. The
+Watchtower selects the reviewer role, gives it the task/evidence needed to judge
+the change, and later judges the returned report.
 
 Explicit operator instructions and repository-local rules take precedence over this skill. Do not claim independence if you authored the implementation being reviewed.
 
@@ -22,7 +29,7 @@ Explicit operator instructions and repository-local rules take precedence over t
 3. Inspect outside the diff when surrounding behavior is needed to determine correctness.
 4. Evaluate behavior, compatibility, state transitions, failure handling, regressions, and scope. A green test suite is evidence, not proof.
 5. Separate concrete defects from optional cleanup, style preferences, and speculative redesign.
-6. Do not quietly fix production code while acting as the independent reviewer. Return findings to the implementation owner unless the operator explicitly changes your role.
+6. Do not quietly fix production code while acting as the independent reviewer. Return findings to the implementation owner unless the Watchtower explicitly changes your role.
 
 ## Report
 
@@ -36,6 +43,6 @@ Include:
 - correction required;
 - whether each problem appears local or needs replanning;
 - checks or evidence inspected;
-- unresolved assumptions or human decisions.
+- unresolved assumptions or decisions for the Watchtower.
 
 If no blocking defect is found, say what was actually inspected. Do not turn absence of findings into a claim that unreviewed surfaces are correct.
