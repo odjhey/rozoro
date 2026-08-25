@@ -24,26 +24,26 @@ or observing work.
 These are Watchtower actions. They are not instructions to paste wholesale into a
 crew brief.
 
-## Crew-briefing guidelines
+## `brief-*` crew-briefing guidelines
 
-These skills tell Watchtower **what to put in the brief when spawning a specific
-task-kind crew**. Loading one does not mean Watchtower should perform that crew's
-repository work.
+Every skill whose name starts with `brief-` tells Watchtower **what to put in the
+brief when spawning a specific task-kind crew**. Loading one does not mean
+Watchtower should perform that crew's repository work.
 
 | Briefing guideline | Task-kind crew | Watchtower action |
 | --- | --- | --- |
-| `task-decomposer` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
-| `independent-review` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
-| `adversarial-testing` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
-| `no-mistakes-branch-recovery` | No-Mistakes Runner | Render the supported recovery/custody contract and exact branch/run evidence into the runner brief, then dispatch/resume. |
-| `rozoro-authoring` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
-| `quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
-| `quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
+| `brief-task-planner` | Task Decomposer / Escalation Replanner | Render the applicable decomposition/replanning contract and report shape into the planning crew brief, then dispatch. |
+| `brief-reviewer` | Reviewer | Render the review contract, exact-head inputs, and report shape into a fresh reviewer brief, then dispatch. |
+| `brief-tester` | Tester | Render the behavioral/failure-mode test contract and report shape into the tester brief, then dispatch. |
+| `brief-no-mistakes-recovery` | No-Mistakes Runner | Render the supported recovery/custody contract and exact branch/run evidence into the runner brief, then dispatch/resume. |
+| `brief-rozoro-coder` | Coder working on Rozoro | Render the applicable Rozoro-specific authoring/validation rules into the coder brief, then dispatch. |
+| `brief-quick-scout` | Quick Scout | Render the narrow read-only Spark/low contract and escalation marker into the scout brief, then dispatch. |
+| `brief-quick-coder` | Quick Coder | Render the one-attempt mechanical Spark/low contract and escalation marker into the coder brief, then dispatch. |
 
 ### Briefing rule
 
-A crew-briefing guideline is applied only when its relevant instructions are
-included in the task brief that the crew actually receives.
+A `brief-*` guideline is applied only when its relevant instructions are included
+in the task brief that the crew actually receives.
 
 Keep the brief focused. Include:
 
