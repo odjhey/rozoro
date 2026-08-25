@@ -1,5 +1,8 @@
 # Retrieve Watchtower model-selection policy
 
+**Execution owner: Watchtower.** This prompt is for orchestration/routing. Do not
+pass it to a crew member as that crew's operating instructions.
+
 Use this prompt when you need the current Watchtower role/model-selection criteria without relying on memory or copying policy into another skill.
 
 Read `templates/watchtower-crew-dispatch-guidelines.md` from the current checkout. Treat that file as the source of truth for role assignment, model IDs, reasoning effort, and no-mistakes execution-target fallback policy.
