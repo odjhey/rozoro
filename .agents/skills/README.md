@@ -14,7 +14,7 @@ smallest useful brief for that crew.
 | `crew-model-selection` | Before every fresh Rozoro crew dispatch: choose task kind and current canonical model/effort. |
 | `quick-crew-routing` | Decide whether a bounded task qualifies for Quick Scout/Quick Coder. |
 | `no-mistakes-gate` | Submit/reattach and drive the external no-mistakes run, reconcile exact-head/custody evidence, and route findings. |
-| `no-mistakes-observer-pane` | Attach the untracked side pane to every active no-mistakes gate when supported. |
+| `no-mistakes-observatory` | Maintain the dedicated untracked Herdr visualization surface for active no-mistakes run graphs. |
 | `delivery-evidence` | Reconcile exact-head review/test/CI/delivery evidence and make bounded Watchtower decisions. |
 | `attempt-budget` | Enforce the coder-attempt budget and defer exhausted implementation lineages. |
 
@@ -65,6 +65,24 @@ gates, and reconcile the result.
 
 There is no No-Mistakes Runner crew and no no-mistakes briefing skill.
 
+## No-mistakes Observatory
+
+No agent pane owns the no-mistakes graph.
+
+Use one persistent, untracked **no-mistakes Observatory** Herdr tab per Watchtower
+workspace. Put one `no-mistakes attach` pane in that tab for each active gate/run,
+using enough task/run identity to distinguish concurrent pipelines.
+
+The Observatory is deliberately separate from Planner/Coder/Reviewer/Tester/Merge
+Finisher panes and from the Watchtower pane. It does not consume crew capacity and
+must not become a second no-mistakes controller.
+
+Keep terminal graph/scrollback visible through the associated landing/post-merge
+episode when practical so the operator can compare stage behavior and identify
+optimization opportunities. For durable analysis, retain run IDs and prefer
+structured timing/retry/fix/model evidence from no-mistakes rather than scraping
+the TUI.
+
 ## Merge/post-merge is crew
 
 Once Watchtower judges that the candidate is eligible to land, it dispatches a
@@ -80,4 +98,4 @@ routed to a Coder for a new implementation turn.
 **Watchtower chooses, briefs, dispatches, drives external gates, reconciles
 evidence, and decides what runs next. Crew performs repository planning,
 implementation, review, testing, merge, and post-merge work. No-mistakes performs
-its own pipeline work under its own custody.**
+its own pipeline work under its own custody. The Observatory is presentation only.**
