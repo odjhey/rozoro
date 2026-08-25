@@ -3,15 +3,24 @@ name: task-decomposer
 description: >-
   Turn a broad, ambiguous, or repeatedly failing software task into one or more
   bounded implementation tasks with explicit contracts, dependencies, acceptance
-  criteria, and unresolved decisions. Use for planning or escalation replanning;
-  do not implement the change while using this skill.
+  criteria, and unresolved decisions. This is a crew-facing planning role: the
+  Watchtower dispatches a decomposer and passes these instructions rather than
+  performing repository planning itself.
 metadata:
+  execution-owner: crew
+  crew-role: task-decomposer
+  watchtower-action: dispatch-and-pass
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
 # Task decomposer
 
 Produce work a coder can execute without reopening the whole plan.
+
+This skill is executed by a **crew member**, not by the Watchtower. The
+Watchtower decides that decomposition or replanning is needed, dispatches the
+appropriate crew role, and makes these instructions available to that crew.
+Repository investigation and planning remain crew work.
 
 Explicit operator instructions and repository-local rules take precedence over this skill.
 
@@ -46,6 +55,6 @@ Report:
 - revised acceptance criteria;
 - recommended implementation direction;
 - evidence the next coder should inspect;
-- human decisions still unresolved.
+- unresolved decisions that must be surfaced to the Watchtower.
 
 A replanned task replaces only the parts it explicitly changes. Preserve unaffected operator and repository constraints.
