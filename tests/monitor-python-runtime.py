@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from lib.rozoro_monitor.herdr import MembershipMonitor
 from lib.rozoro_monitor.store import _MIGRATIONS, SCHEMA_VERSION
+from tests.test_helper import process_cleanup
 
 if os.environ.get("ROZORO_REQUIRE_PYTHON_311") == "1":
     assert sys.version_info[:2] == (3, 11), sys.version
@@ -71,6 +72,11 @@ with tempfile.TemporaryDirectory() as temporary:
     os.environ["FAKE_HERDR_ROOT"] = str(Path(temporary) / "fake-herdr")
     os.environ["PATH"] = f"{python_bin}{os.pathsep}{os.environ['PATH']}"
     home = Path(temporary) / "rozoro"
+    registry = Path(temporary) / "owned-processes.jsonl"
+    registry.write_text("")
+    os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(registry)
+    helper_path = str(ROOT / "tests/test_helper")
+    os.environ["PYTHONPATH"] = helper_path + os.pathsep + os.environ.get("PYTHONPATH", "")
     home.mkdir(mode=0o700)
     database = sqlite3.connect(home / "monitor.db")
     database.executescript(_MIGRATIONS[1])
@@ -81,6 +87,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     started = run(ROOT / "bin/rzr-monitor.py", "start", home=home)
     assert "monitor started" in started.stdout, started
+    process_cleanup.register_spawn_file(registry)
     status = run(ROOT / "bin/rzr-monitor.py", "status", "--json", home=home)
     assert f'"schema_version":{SCHEMA_VERSION}' in status.stdout, status
 

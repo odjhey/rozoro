@@ -11,6 +11,7 @@ setup() {
   export FAKE_HERDR_SOCKET="$TEST_ROOT/herdr.sock"
   export FAKE_CODEX_LOG="$TEST_ROOT/codex.log"
   export PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache"
+  export PYTHONPATH="$REPO_ROOT/tests/test_helper:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
   export PATH="$REPO_ROOT/tests/fakes:$REPO_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   mkdir -p "$HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks" "$FAKE_HERDR_ROOT" "$PYTHONPYCACHEPREFIX"
   chmod 700 "$ROZORO_HOME"
@@ -19,10 +20,15 @@ setup() {
   printf 'untouched\n' > "$SENTINEL"
   export SENTINEL
   TEST_PIDS=""
+  registry_root="${ROZORO_TEST_PROCESS_REGISTRY_ROOT:-$TEST_ROOT}"
+  mkdir -p "$registry_root"
+  export ROZORO_TEST_PROCESS_REGISTRY="$registry_root/owned-processes-$BATS_TEST_NUMBER-$$.jsonl"
+  : > "$ROZORO_TEST_PROCESS_REGISTRY"
+  chmod 600 "$ROZORO_TEST_PROCESS_REGISTRY"
 }
 
 teardown() {
-  if [ -S "${ROZORO_HOME:-}/monitor.sock" ]; then "$REPO_ROOT/bin/rzr-monitor.sh" stop >/dev/null 2>&1 || true; fi
+  PYTHONPATH="$REPO_ROOT" python3 -c 'from tests.test_helper.process_cleanup import cleanup; cleanup()' || true
   for pid in $TEST_PIDS; do
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -32,6 +38,15 @@ teardown() {
 }
 
 register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
+
+register_daemon_from_spawn() {
+  ROZORO_PROCESS_CLEANUP_NO_ATEXIT=1 PYTHONPATH="$REPO_ROOT" python3 - "$ROZORO_TEST_PROCESS_REGISTRY" <<'PY'
+import sys
+from pathlib import Path
+from tests.test_helper.process_cleanup import register_spawn_file
+register_spawn_file(Path(sys.argv[1]))
+PY
+}
 
 # Octal permission bits of a file, portable across GNU and macOS. Try GNU
 # `stat -c` first: on BSD/macOS `-c` is rejected (clean non-zero) so we fall back

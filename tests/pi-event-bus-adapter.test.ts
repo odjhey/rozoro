@@ -9,6 +9,22 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import test from "node:test";
 import { herdrDriverId, MAX_FRAME_BYTES, RozoroEventBusClient, WAKE_CONTENT } from "../.pi/lib/rozoro-event-bus-client.ts";
 
+const ownedDaemons = new Map<ChildProcess, string>();
+let cleaning = false;
+const cleanupDaemons = async () => {
+	if (cleaning) return; cleaning = true;
+	for (const child of ownedDaemons.keys()) {
+		try { process.kill(-(child.pid!), "SIGTERM"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
+	}
+	await Promise.all([...ownedDaemons.keys()].map((child) => child.exitCode !== null || child.signalCode !== null
+		? Promise.resolve() : new Promise<void>((resolve) => child.once("exit", () => resolve()))));
+	for (const home of ownedDaemons.values()) await rm(home, {recursive:true, force:true});
+	ownedDaemons.clear();
+};
+for (const name of ["SIGINT", "SIGTERM"] as const) process.once(name, () => { void cleanupDaemons().finally(() => process.kill(process.pid, name)); });
+process.once("uncaughtException", (error) => { void cleanupDaemons().finally(() => { throw error; }); });
+process.once("unhandledRejection", (error) => { void cleanupDaemons().finally(() => { throw error; }); });
+
 const waitFor = async (predicate: () => boolean, timeout = 2000) => {
 	const end = Date.now() + timeout;
 	while (!predicate()) {
@@ -40,7 +56,8 @@ async function fakeServer(path: string, frames: Record<string, unknown>[]): Prom
 }
 
 const startDaemon = async (home: string): Promise<ChildProcess> => {
-	const child = spawn("python3", [join(process.cwd(), "bin/rzr-monitor.py"), "run"], {env:{...process.env,ROZORO_HOME:home},stdio:"ignore"});
+	const child = spawn("python3", [join(process.cwd(), "bin/rzr-monitor.py"), "run"], {env:{...process.env,ROZORO_HOME:home},stdio:"ignore",detached:true});
+	ownedDaemons.set(child, home);
 	const end = Date.now() + 5000;
 	for (;;) {
 		try { if ((await lstat(join(home, "monitor.sock"))).isSocket()) break; } catch { /* starting */ }
@@ -50,7 +67,9 @@ const startDaemon = async (home: string): Promise<ChildProcess> => {
 	return child;
 };
 const stopDaemon = async (child: ChildProcess) => {
-	child.kill("SIGTERM"); await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+	try { process.kill(-(child.pid!), "SIGTERM"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
+	if (child.exitCode === null && child.signalCode === null) await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+	ownedDaemons.delete(child);
 };
 const registerProductionTarget = async (home: string, pane: string): Promise<string> => {
 	const fakeRoot = join(home, "fake-herdr"); await mkdir(fakeRoot, {recursive:true});

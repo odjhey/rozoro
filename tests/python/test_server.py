@@ -2,7 +2,6 @@ import concurrent.futures
 import errno
 import json
 import os
-import resource
 import signal
 import socket
 import sqlite3
@@ -15,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from lib.rozoro_monitor import protocol
+from tests.test_helper import process_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 DAEMON = ROOT / "bin" / "rozorod.py"
@@ -49,15 +49,22 @@ class ServerProcessTests(unittest.TestCase):
         return self.home / "monitor.sock"
 
     def start(self, wait=True, env=None, nofile=None):
-        def limit_files():
-            if nofile is not None:
-                resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
+        daemon_argv = [sys.executable, str(DAEMON), "--home", str(self.home)]
+        argv = daemon_argv
+        if nofile is not None:
+            # preexec_fn is unsafe when the test process uses threads (PLW1509);
+            # apply the fd limit via a shell ulimit before exec instead of a fork callback.
+            # The wrapper's own argv never appears in ps/cmdline: bash execs into
+            # daemon_argv, replacing its process image under the same pid.
+            argv = ["bash", "-c", 'ulimit -n "$1"; shift; exec "$@"', "bash", str(nofile), *daemon_argv]
         process = subprocess.Popen(
-            [sys.executable, str(DAEMON), "--home", str(self.home)],
+            argv,
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={**os.environ, **(env or {})}, preexec_fn=limit_files if nofile else None,
+            env={**os.environ, **(env or {})},
+            start_new_session=True,
         )
         self.processes.append(process)
+        process_cleanup.register(process, self.home, argv=daemon_argv)
         if wait:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -286,9 +293,10 @@ class ServerProcessTests(unittest.TestCase):
                 (case_home / entry).symlink_to(external)
                 process = subprocess.Popen(
                     [sys.executable, str(DAEMON), "--home", str(case_home)], cwd=ROOT,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                 )
                 self.processes.append(process)
+                process_cleanup.register(process, case_home)
                 self.assertNotEqual(process.wait(timeout=5), 0)
                 self.assertEqual(external.read_text(), "sentinel")
                 self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
@@ -299,8 +307,10 @@ class ServerProcessTests(unittest.TestCase):
         regular = case_home / "monitor.sock"
         regular.write_text("do-not-unlink")
         process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(case_home)],
-                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
         self.processes.append(process)
+        process_cleanup.register(process, case_home)
         self.assertNotEqual(process.wait(timeout=5), 0)
         self.assertEqual(regular.read_text(), "do-not-unlink")
 

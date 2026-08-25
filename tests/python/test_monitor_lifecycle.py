@@ -14,6 +14,7 @@ from pathlib import Path
 from lib.rozoro_monitor import protocol
 from lib.rozoro_monitor.server import MonitorServer
 from lib.rozoro_monitor.store import EventStore
+from tests.test_helper import process_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 DAEMON = ROOT / "bin" / "rozorod.py"
@@ -33,9 +34,14 @@ class MonitorLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="rzr6-")
         self.home = Path(self.temp.name) / "h"
+        self.registry = Path(self.temp.name) / "owned-processes.jsonl"
+        self.registry.write_text("")
         self.processes = []
 
     def tearDown(self):
+        os.environ["ROZORO_TEST_PROCESS_REGISTRY"] = str(self.registry)
+        process_cleanup.cleanup()
+        os.environ.pop("ROZORO_TEST_PROCESS_REGISTRY", None)
         for process in self.processes:
             if process.poll() is None: process.kill()
             process.wait(timeout=5)
@@ -44,7 +50,10 @@ class MonitorLifecycleTests(unittest.TestCase):
         self.temp.cleanup()
 
     def env(self, **extra):
-        return {**os.environ, "ROZORO_HOME": str(self.home), **extra}
+        helper_path = str(ROOT / "tests/test_helper")
+        return {**os.environ, "ROZORO_HOME": str(self.home),
+                "ROZORO_TEST_PROCESS_REGISTRY": str(self.registry),
+                "PYTHONPATH": helper_path + os.pathsep + os.environ.get("PYTHONPATH", ""), **extra}
 
     def cli(self, *args, check=False, **extra):
         return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=self.env(**extra),
@@ -54,8 +63,10 @@ class MonitorLifecycleTests(unittest.TestCase):
     def start_daemon(self, interval="0.05"):
         process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(self.home)],
                                    cwd=ROOT, env=self.env(ROZORO_MONITOR_SPOOL_INTERVAL=interval),
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
         self.processes.append(process)
+        process_cleanup.register(process, self.home)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             result = self.cli("status", "--json")
@@ -133,7 +144,7 @@ class MonitorLifecycleTests(unittest.TestCase):
         linked_home.symlink_to(external_home, target_is_directory=True)
         result = subprocess.run([str(CLI), "monitor", "start"], cwd=ROOT,
                                 env={**os.environ, "ROZORO_HOME": str(linked_home)},
-                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((external_home / "monitor.log").exists())
 
@@ -199,7 +210,7 @@ class MonitorLifecycleTests(unittest.TestCase):
         def other_cli(*args):
             return subprocess.run([str(CLI), "monitor", *args], cwd=ROOT, env=env,
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  timeout=12)
+                                  timeout=12, check=False)
         status_result = other_cli("status", "--json")
         self.assertNotEqual(status_result.returncode, 0)
         self.assertFalse(json.loads(status_result.stdout)["running"])
