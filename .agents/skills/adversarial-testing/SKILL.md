@@ -1,29 +1,25 @@
 ---
 name: adversarial-testing
 description: >-
-  Test a software change as an independent adversarial tester. This is a
-  crew-facing assurance role: the Watchtower dispatches a tester with these
-  instructions included in the crew brief rather than exercising repository
-  behavior itself.
-metadata:
-  execution-owner: crew
-  crew-role: tester
-  watchtower-action: dispatch-and-brief
-  derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
+  Brief an adversarial Tester crew. Use when Watchtower is spawning a tester and
+  needs to put the behavioral test contract, failure-mode coverage, exact-head
+  expectations, and report shape into that crew's brief. Watchtower routes and
+  judges the evidence; the dispatched crew performs the testing.
 ---
 
-# Adversarial testing
+# Adversarial testing briefing guideline
 
-Derive tests from the use case and contracts, not only from the implementation.
+Use this when **Watchtower is preparing the brief for an adversarial Tester
+crew**. Include the applicable testing contract below together with the bounded
+task, exact candidate head, acceptance criteria, and relevant prior reports.
 
-This skill is executed by a **crew member**, not by the Watchtower. The
-Watchtower dispatches the tester with the applicable testing instructions,
-bounded task, and relevant prior reports included in the crew brief, then judges
+Do not exercise repository behavior in Watchtower merely because this skill is
+loaded. The dispatched tester performs the work; Watchtower consumes and routes
 the returned evidence.
 
-Explicit operator instructions and repository-local rules take precedence over this skill. Record the exact commit tested when commit identity is available.
+Explicit operator instructions and repository-local rules take precedence over this guideline.
 
-## Test procedure
+## Test contract to brief
 
 1. Read the task, acceptance criteria, contracts, and relevant repository rules.
 2. Build scenarios from intended behavior and plausible failure modes before relying on implementation details.
@@ -43,11 +39,12 @@ Explicit operator instructions and repository-local rules take precedence over t
    - Are important scenarios absent?
    - Could broken behavior still produce a green suite?
 5. Prefer observable behavior: exit status, output, API behavior, persisted state, emitted events, or other externally meaningful effects. Do not treat source-text inspection as behavioral proof.
-6. Do not quietly repair production code while acting as the independent tester. Return defects to the implementation owner unless the Watchtower explicitly changes your role.
+6. Do not quietly repair production code while acting as the independent tester. Return defects to the implementation owner unless Watchtower dispatches a different role later.
+7. Do not run no-mistakes.
 
-## Report
+## Report shape to brief
 
-Include:
+Require:
 
 - exact commit tested, when available;
 - tests added or run;
