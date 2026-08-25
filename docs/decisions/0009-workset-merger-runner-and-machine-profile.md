@@ -1,0 +1,154 @@
+# ADR-0009: Use workset mergers, runner crews, and machine-local routing profiles
+
+review: approved
+date: 2026-08-25
+supersedes: ADR-0006, ADR-0008
+
+## Context
+
+A Watchtower is useful before it has complete project context and becomes more
+useful as plans, task results, review findings, gate results, and landed outcomes
+accumulate. Policy therefore needs to describe what a Watchtower should do now,
+not require it to reconstruct which conventions were replaced on another machine
+or in an earlier iteration.
+
+A Watchtower may also manage unrelated repositories concurrently. Harness/model
+availability is machine-specific, while implementation and delivery policy is
+repository-specific. Encoding one machine's accounts or launcher layout into the
+canonical Watchtower role policy makes that policy brittle.
+
+Parallel work introduces a second ownership problem. Completed crew branches are
+not necessarily independent or mergeable in completion order. The actor that
+integrates a workset needs the planner/decomposer dependency picture, actual crew
+results, exact-head assurance, and no-mistakes findings in one place.
+
+No-mistakes already owns its validation pipeline and supports global/repository
+configuration for agent selection. Rozoro still benefits from a dedicated crew
+that performs the operational submit/reattach/listen work so Watchtower stays
+push-driven and the integration decision can remain with the workset owner.
+
+Finally, unattended operation needs an explicit operator control over the final
+merge mutation without turning all orchestration into a confirmation queue.
+
+## Options
+
+1. Keep Watchtower as the direct no-mistakes controller and use a simple final
+   Merge Finisher after each candidate is judged ready.
+2. Let each Coder merge its own output and interpret its own no-mistakes result.
+3. Use a thin No-Mistakes Runner crew for pipeline operation and a Workset Merger
+   crew for dependency-aware integration/landing, with machine-local routing hints
+   and an explicit unattended merge toggle.
+
+## Choice
+
+Choose option 3.
+
+### Watchtower context and project scope
+
+A Watchtower may manage multiple projects. Every crew dispatch names its target
+repository with `--cwd` and project-specific facts stay scoped to the project or
+workset they came from.
+
+A Watchtower is allowed to start with incomplete project context. It accumulates
+useful context from repository docs, Planner/Task Decomposer outputs, crew
+handoffs, review/test/no-mistakes evidence, Workset Merger decisions, delivery
+outcomes, and operator steering. Durable results are reused when relevant; there
+is no requirement to preload a project's full history before routing work.
+
+### Machine-local routing profile
+
+Add an optional human/agent-readable machine profile at:
+
+```text
+$ROZORO_HOME/config/machine.md
+```
+
+with default path `~/.rozoro/config/machine.md`.
+
+The file may describe harness/model availability, named account/config profiles,
+no-mistakes `NM_HOME` profiles, and local preference/capacity notes. It is text
+policy, not a versioned machine protocol. Runtime availability must still be
+verified.
+
+Repository policy and explicit operator requirements remain authoritative. The
+machine profile describes what this machine can or prefers to run; it does not
+change repository semantics or grant authority.
+
+### No-Mistakes Runner
+
+No-Mistakes Runner is a Rozoro crew role. It is deliberately thin:
+
+- receive an exact committed candidate and intended no-mistakes profile;
+- inspect current no-mistakes state and submit or reattach through the supported
+  Git/CLI/AXI path;
+- keep the run available for listening/attachment;
+- report structured run ID/head/findings/gates/PR/CI/custody evidence back to
+  Watchtower; and
+- avoid duplicating the review/fix/test logic already owned by no-mistakes.
+
+The no-mistakes pipeline keeps ownership of its disposable worktree, internal
+pipeline agents, fixes, PR/CI work, structured gates, and recovery state.
+
+No-mistakes model/account routing should use native tool configuration where
+possible. The current upstream global config supports an `agent` value or ordered
+fallback list and `agent_config` for per-agent model/effort. `NM_HOME` can select
+separate repeatable global profiles.
+
+`CLAUDE_CONFIG_DIR` is treated as a Claude harness environment setting, not a
+no-mistakes YAML field. Because normal no-mistakes gates execute through a
+background daemon, Rozoro must not assume that prefixing one client invocation
+with `CLAUDE_CONFIG_DIR` changes an already-running daemon's Claude environment.
+Machine profiles that depend on that setting must describe and verify the daemon
+profile that actually receives it.
+
+### Workset Merger
+
+A Workset Merger owns integration reasoning for one workset. It receives the
+Planner/Task Decomposer output when available, the participating task branches and
+exact heads, dependency clues, assurance results, no-mistakes results, target
+merge policy, and current unattended state.
+
+It reconstructs the current dependency/stack graph, determines merge order,
+integrates branches, identifies assurance invalidated by integration, reads
+no-mistakes findings in workset context, and reports whether the next action is a
+local repair, replan, more assurance, provider retry, or landing.
+
+The same role performs the final supported merge and required post-merge actions
+when authorized. A single-task workset is the degenerate case with no stacking.
+
+### `/afk`
+
+Add an `afk` Watchtower skill. `/afk` is **ON by default**.
+
+- ON permits an otherwise-ready Workset Merger to perform the final merge within
+  existing repository policy and operator authority.
+- OFF permits preparation and validation but requires operator confirmation
+  immediately before the final merge mutation.
+
+The toggle affects final merge permission only. It does not bypass protection,
+grant destructive recovery authority, broaden scope, or replace product/design
+judgment that still belongs to the operator.
+
+### Policy wording
+
+Canonical Watchtower/skill guidance is written as current behavior. Historical
+policy transitions stay in ADR history rather than being expressed as warnings a
+fresh Watchtower must understand before it can act.
+
+## Consequences
+
+- One Watchtower can build context incrementally across several projects without
+  mixing project facts.
+- Machine-specific harness/account availability stops leaking into canonical role
+  definitions.
+- No-mistakes execution remains push-friendly through a dedicated crew while
+  no-mistakes retains semantic ownership of its pipeline.
+- Workset integration gets an explicit owner that understands dependencies,
+  stacking, and gate results before mutating branches.
+- Final merge authority is visible and operator-controlled through `/afk` without
+  imposing confirmations on normal routing.
+- The simple Merge Finisher role is replaced by the broader Workset Merger role.
+- `no-mistakes-gate` is no longer a Watchtower action skill; no-mistakes work is
+  dispatched to the No-Mistakes Runner crew.
+- A future machine-readable routing schema can be introduced explicitly without
+  pretending the initial Markdown profile is already a stable protocol.
