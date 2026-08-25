@@ -1,41 +1,42 @@
 ---
 name: quick-scout
 description: >-
-  Gather narrow, read-only repository facts quickly with gpt-5.3-codex-spark low.
-  This is a crew-facing briefing source: Watchtower includes the applicable
-  instructions in a Quick Scout brief rather than performing the repository work.
-metadata:
-  execution-owner: crew
-  crew-role: quick-scout
-  watchtower-action: dispatch-and-brief
-  preferred-model: gpt-5.3-codex-spark
-  preferred-effort: low
-  derived-from: uploaded-watchtower-policy/06-quick-crew-dispatch.md
+  Brief a Quick Scout crew for one narrow, read-only fact-gathering task. Use when
+  Watchtower has selected the Quick Scout task kind and needs to put the bounded
+  Spark/low work contract and escalation marker into that crew's brief. Watchtower
+  routes the task; the dispatched Quick Scout gathers the facts.
 ---
 
-# Quick Scout
+# Quick Scout briefing guideline
 
-Perform one narrow, read-only fact-gathering job and report exact evidence.
+Use this when **Watchtower is preparing the brief for a Quick Scout crew** after
+`quick-crew-routing` has determined that the task qualifies for the fast path.
+Include the applicable contract below together with the exact question and source
+pointer the scout should inspect.
 
-This role is for speed, not judgment. Do not edit files, design solutions, or
-expand the task into a broad investigation.
+Do not perform the repository fact gathering in Watchtower merely because this
+skill is loaded. Render these instructions into the Quick Scout brief.
 
-## Work contract
+Use `gpt-5.3-codex-spark` at low effort for this task kind.
+
+## Work contract to brief
+
+The Quick Scout performs one narrow, read-only fact-gathering job and reports
+exact evidence. This role is for speed, not judgment.
 
 - Stay within the explicit question in the brief.
-- Prefer direct repository evidence: exact files, symbols, commands, commit/PR
-  identity, or other concrete facts.
+- Prefer direct repository evidence: exact files, symbols, commands, commit/PR identity, or other concrete facts.
 - Keep exploration bounded. Do not start indefinite background work.
 - Separate observed facts from inference.
-- If the answer requires architecture/product judgment, broad context, or
-  consequential uncertainty, stop and escalate instead of guessing.
-- Do not perform edits.
+- If the answer requires architecture/product judgment, broad context, or consequential uncertainty, stop and escalate instead of guessing.
+- Do not edit files.
+- Do not design solutions.
 - Do not run no-mistakes.
 
-## Escalation
+## Escalation contract to brief
 
 Do not retry the quick path. If the task is no longer narrow, read-only,
-mechanical, and low-risk, return exactly:
+mechanical, and low-risk, require exactly:
 
 ```text
 NEEDS_STANDARD_CREW
@@ -44,15 +45,15 @@ Findings:
 Suggested next step:
 ```
 
-Put useful evidence already gathered under `Findings` so the standard crew does
-not need to repeat cheap discovery.
+Useful evidence already gathered belongs under `Findings` so the standard crew
+does not repeat cheap discovery.
 
-## Report
+## Report shape to brief
 
-When the quick scout can answer safely, report:
+When the Quick Scout can answer safely, require:
 
 - the exact question answered;
 - concrete findings;
 - source paths/commands/identities supporting them;
 - remaining uncertainty, if any;
-- recommended routing consequence, if the Watchtower needs one.
+- recommended routing consequence, if Watchtower needs one.
