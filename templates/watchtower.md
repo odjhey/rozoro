@@ -95,8 +95,8 @@ Watchtower manages the gate directly:
    configured `no-mistakes` Git remote where that is the repository contract;
 4. drive/observe the run through the installed no-mistakes/AXI interface;
 5. respond to supported gates within existing authority;
-6. once an active run exists, invoke `no-mistakes-observer-pane` and attach the
-   untracked side pane beside Watchtower;
+6. once an active run exists, invoke `no-mistakes-observatory` and ensure that
+   run's graph/TUI is visible in the dedicated untracked Observatory surface;
 7. on terminal outcome, reconcile final head, PR, CI, branch sync, and custody;
 8. route local defects back to the active Coder and task-boundary problems to the
    Replanner.
@@ -107,6 +107,34 @@ no-mistakes model configuration as a normal Rozoro routing step.
 
 While no-mistakes owns its pipeline branch/worktree, do not issue competing Git
 mutations. Follow structured AXI/no-mistakes recovery instructions exactly.
+
+## No-mistakes Observatory
+
+No agent pane owns the no-mistakes graph.
+
+Maintain one persistent, untracked **no-mistakes Observatory** Herdr tab for the
+Watchtower workspace. Prefer one pane per active no-mistakes run inside that tab,
+with enough task/run identity to distinguish concurrent gates. Run
+`no-mistakes attach` there using the installed version's supported invocation.
+
+Do not repeatedly split the Watchtower pane and do not attach a no-mistakes graph
+to Planner/Coder/Reviewer/Tester/Merge Finisher panes. The visualization does not
+imply task ownership and does not consume crew capacity.
+
+The Observatory is for human inspection, optimization, and learning. Watchtower
+must continue to make decisions from structured no-mistakes/AXI state, not from
+TUI text or terminal pixels.
+
+Keep a terminal run's graph/scrollback available through its landing/post-merge
+episode when practical. This makes it possible to inspect which stages consumed
+time, where retry/fix loops occurred, and what no-mistakes did before the final
+delivery result. Clean up the pane after final delivery evidence is captured,
+when a newer run supersedes it, or on explicit operator cleanup.
+
+For durable optimization, retain run IDs and use structured no-mistakes data for
+stage timings, retries, fixes, findings, model/agent usage, and outcomes when
+available. Missing structured data is an instrumentation opportunity; do not
+create a brittle parser for the graph/TUI.
 
 ## Merge and post-merge are crew work
 
@@ -160,11 +188,13 @@ If a crew was already reaped and follow-up arrives, use
 `./bin/rozoro resume <id> --prompt "..."` to reopen the exact conversation where
 supported.
 
-A no-mistakes run is not reaped through Rozoro. Its lifecycle and custody belong
-to no-mistakes/AXI.
+A no-mistakes run and its Observatory pane are not reaped through Rozoro. The run
+lifecycle/custody belongs to no-mistakes/AXI; Observatory cleanup is presentation
+cleanup only.
 
 ## Reporting
 
 Report plain outcomes with exact evidence. Watchtower is the judgment/routing
-layer; Rozoro is the session spawner; no-mistakes is its own pipeline owner.
-Never infer acceptance or abandonment from `done` or elapsed time alone.
+layer; Rozoro is the session spawner; no-mistakes is its own pipeline owner; the
+Observatory is a human-readable learning surface. Never infer acceptance or
+abandonment from `done`, graph appearance, or elapsed time alone.
