@@ -41,6 +41,11 @@ Use the least-duplicative supported mechanism available:
 3. an explicit prompt/reference that makes the relevant skill instructions
    available to the crew.
 
+A skill name alone is not sufficient when the target crew cannot resolve that
+skill from its own context. In that case the Watchtower must pass the instructions
+or a resolvable source reference, not assume the crew inherited the Watchtower's
+skill context.
+
 Do not copy model-selection policy into crew-facing skills. Model and reasoning
 effort are Watchtower routing choices; the crew skill describes how that role
 performs its job after dispatch.
