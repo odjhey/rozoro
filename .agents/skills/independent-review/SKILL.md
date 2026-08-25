@@ -3,12 +3,12 @@ name: independent-review
 description: >-
   Perform an independent correctness review of a software change at an exact
   commit. This is a crew-facing assurance role: the Watchtower dispatches a fresh
-  reviewer and passes these instructions rather than reviewing repository code
-  itself.
+  reviewer with these instructions included in the crew brief rather than
+  reviewing repository code itself.
 metadata:
   execution-owner: crew
   crew-role: reviewer
-  watchtower-action: dispatch-and-pass
+  watchtower-action: dispatch-and-brief
   derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
 ---
 
@@ -17,8 +17,8 @@ metadata:
 Review the implementation as a separate assurance role.
 
 This skill is executed by a **crew member**, not by the Watchtower. The
-Watchtower selects the reviewer role, gives it the task/evidence needed to judge
-the change, and later judges the returned report.
+Watchtower selects the reviewer role, includes the applicable review instructions
+and task/evidence in the crew brief, and later judges the returned report.
 
 Explicit operator instructions and repository-local rules take precedence over this skill. Do not claim independence if you authored the implementation being reviewed.
 
