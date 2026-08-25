@@ -98,9 +98,9 @@ Only the **No-Mistakes Runner** runs no-mistakes. Do not ask the coder, reviewer
   * Invoke no-mistakes through this fixed fallback order:
 
     1. Claude Sonnet.
-    2. If that account is under its usage limit, fall back to `CLAUDE_CONFIG_DIR=~/.claude-asdverse claude sonnet`.
-    3. If that account is also under its usage limit, fall back to Pi `gpt-5.6-luna` and keep using it until the Claude accounts' limits are lifted.
-  * no-mistakes has no per-run model-selection flag today. Apply each fallback step by temporarily overriding the global no-mistakes configuration for that target's invocation, then restore the prior global configuration immediately afterward — whether that attempt succeeds, fails, or you move on to the next target in the order. Never leave an overridden configuration in place once the invocation using it has finished.
+    2. If that account has reached or exceeded its usage limit, fall back to `CLAUDE_CONFIG_DIR=~/.claude-asdverse claude sonnet`.
+    3. If that account has also reached or exceeded its usage limit, fall back to Pi `gpt-5.6-luna` and keep using it until the Claude accounts' limits are lifted.
+  * no-mistakes has no per-run model-selection flag today. Apply each fallback step by temporarily overriding the global no-mistakes configuration for that target's invocation, then restore the prior global configuration immediately afterward — whether that attempt succeeds, fails, or you move on to the next target in the order. Serialize the complete save, override, invocation, and restore sequence through a shared lock used by all consumers of that global configuration, so overlapping invocations cannot select the wrong target or leave the wrong configuration in place. Never leave an overridden configuration in place once the invocation using it has finished.
   * Do not hold the task waiting on a higher-priority target's cooldown when a later target in the order is ready.
   * If every target in the order is unavailable, report that condition. Do not silently choose an undeclared target.
   * Explicit target or model overrides are for debugging or controlled experiments, not normal crew dispatch.
