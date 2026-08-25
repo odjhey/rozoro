@@ -13,13 +13,13 @@ our own ownership keys.
 Watchtower uses these directly while orchestrating, reconciling evidence, routing,
 or observing work.
 
-| Skill or prompt | When Watchtower uses it |
+| Skill | When Watchtower uses it |
 | --- | --- |
+| `crew-model-selection` | Immediately before every fresh crew dispatch: choose task kind, current canonical model/effort, Quick Crew eligibility, and applicable `brief-*` guideline. |
 | `delivery-evidence` | Reconcile exact-head evidence, decide what runs next, and record bounded unattended decisions. |
 | `attempt-budget` | Decide whether another coder attempt is allowed and when exhausted work should be deferred/revisited. |
 | `quick-crew-routing` | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
 | `no-mistakes-observer-pane` | Open/close an untracked observer pane around an active no-mistakes run. |
-| `prompts/watchtower-model-selection.md` | Retrieve current standard role/model/effort and no-mistakes fallback policy before dispatch. |
 
 These are Watchtower actions. They are not instructions to paste wholesale into a
 crew brief.
@@ -56,6 +56,17 @@ Keep the brief focused. Include:
 Do not paste unrelated policy or the entire skill library. Do not assume a skill
 name, repo-local skill discovery, preset, system rule, or custom frontmatter field
 is transmitted to a crew by Rozoro today.
+
+## Fresh-dispatch bootstrap
+
+`templates/watchtower.md` requires `crew-model-selection` before every fresh crew
+start. That skill reads the canonical standard dispatch policy and, when relevant,
+Quick Crew routing, then names the applicable `brief-*` guideline to render into
+the task body.
+
+A follow-up turn on the same live task is different: use `./bin/rozoro send` and
+preserve the existing crew context unless Watchtower is intentionally dispatching
+a new task-kind crew.
 
 ## Model routing
 
