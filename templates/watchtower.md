@@ -58,8 +58,8 @@ skill objects or skill references into crew sessions.
 
 Do not run fresh-crew selection merely for a follow-up turn on the same live task;
 use `send` so the existing crew keeps its context. Re-run selection when spawning
-a genuinely new task-kind crew such as reviewer, tester, replanner, or replacement
-coder.
+a genuinely new task-kind crew such as reviewer, tester, replanner, merge
+finisher, or replacement coder.
 
 ## No-mistakes is an external gate
 
@@ -93,6 +93,30 @@ While no-mistakes owns its pipeline branch/worktree, do not issue competing Git
 mutations. Follow structured AXI/no-mistakes recovery instructions exactly; do not
 invent reset/rebase/stash/ref-replacement recovery when the tool does not expose a
 supported path.
+
+## Merge and post-merge are crew work
+
+Watchtower decides when the current exact-head evidence and repository/operator
+policy permit landing. Watchtower does **not** perform the merge or post-merge
+repository/provider mutations itself.
+
+When a candidate is eligible to land:
+
+1. run `crew-model-selection` for a fresh **Merge Finisher**;
+2. load `brief-merge-finisher` and include the expected PR/candidate head,
+   pre-merge evidence identities, allowed merge method/policy, required
+   post-merge checks/actions, and stop conditions in the brief;
+3. dispatch the Merge Finisher through `./bin/rozoro start`;
+4. let the finisher revalidate the current head/evidence, use the supported merge
+   path, capture the actual landed commit, and perform required post-merge
+   verification/cleanup;
+5. reconcile the finisher report against the actual provider/repository state;
+6. route merge blockers or post-merge implementation failures back to the coder
+   or replanner instead of fixing them in Watchtower.
+
+A successful merge command is not the completion signal. Final delivery is bound
+to the actual landed identity and whatever post-merge evidence repository policy
+requires.
 
 ## The loop
 
