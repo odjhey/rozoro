@@ -1,39 +1,37 @@
 ---
 name: independent-review
 description: >-
-  Perform an independent correctness review of a software change at an exact
-  commit. This is a crew-facing assurance role: the Watchtower dispatches a fresh
-  reviewer with these instructions included in the crew brief rather than
-  reviewing repository code itself.
-metadata:
-  execution-owner: crew
-  crew-role: reviewer
-  watchtower-action: dispatch-and-brief
-  derived-from: docs/runbooks/role-separated-delivery.md,templates/watchtower-crew-dispatch-guidelines.md
+  Brief an independent Reviewer crew for an exact software head. Use when
+  Watchtower is spawning a fresh reviewer and needs to put the correctness-review
+  contract, exact-head requirements, and report shape into that crew's brief.
+  Watchtower routes and judges the report; the dispatched crew performs review.
 ---
 
-# Independent review
+# Independent review briefing guideline
 
-Review the implementation as a separate assurance role.
+Use this when **Watchtower is preparing the brief for an independent Reviewer
+crew**. Include the applicable review contract below together with the bounded
+task, exact candidate head, acceptance criteria, and relevant prior evidence.
 
-This skill is executed by a **crew member**, not by the Watchtower. The
-Watchtower selects the reviewer role, includes the applicable review instructions
-and task/evidence in the crew brief, and later judges the returned report.
+Do not review repository code in Watchtower merely because this skill is loaded.
+The dispatched reviewer performs the independent review; Watchtower consumes and
+routes its report.
 
-Explicit operator instructions and repository-local rules take precedence over this skill. Do not claim independence if you authored the implementation being reviewed.
+Explicit operator instructions and repository-local rules take precedence over this guideline.
 
-## Review procedure
+## Review contract to brief
 
 1. Record the exact commit being reviewed. If the head changes, the previous review does not automatically apply to the new head.
 2. Read the task, acceptance criteria, relevant contracts, and repository rules before judging the change.
 3. Inspect outside the diff when surrounding behavior is needed to determine correctness.
 4. Evaluate behavior, compatibility, state transitions, failure handling, regressions, and scope. A green test suite is evidence, not proof.
 5. Separate concrete defects from optional cleanup, style preferences, and speculative redesign.
-6. Do not quietly fix production code while acting as the independent reviewer. Return findings to the implementation owner unless the Watchtower explicitly changes your role.
+6. Do not quietly fix production code while acting as the independent reviewer. Return findings to the implementation owner unless Watchtower explicitly dispatches a different role later.
+7. Do not run no-mistakes.
 
-## Report
+## Report shape to brief
 
-Include:
+Require:
 
 - verdict;
 - exact commit reviewed;
@@ -45,4 +43,4 @@ Include:
 - checks or evidence inspected;
 - unresolved assumptions or decisions for the Watchtower.
 
-If no blocking defect is found, say what was actually inspected. Do not turn absence of findings into a claim that unreviewed surfaces are correct.
+If no blocking defect is found, require the reviewer to say what was actually inspected. Absence of findings is not proof for unreviewed surfaces.
