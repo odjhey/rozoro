@@ -2,11 +2,13 @@
 name: no-mistakes-branch-recovery
 description: >-
   Recover a branch that is stuck, divergent, or left in ambiguous custody during
-  or after a no-mistakes/AXI run. Prefer the current structured recovery path,
-  preserve exact-head evidence, make bounded unattended decisions when policy
-  permits, and file a GitHub issue instead of improvising unsafe ref surgery when
-  no supported recovery exists.
+  or after a no-mistakes/AXI run. This is a crew-facing No-Mistakes Runner skill:
+  the Watchtower dispatches the dedicated runner with these instructions and
+  judges the returned custody/evidence report.
 metadata:
+  execution-owner: crew
+  crew-role: no-mistakes-runner
+  watchtower-action: dispatch-and-pass
   derived-from:
     - docs/runbooks/no-mistakes-custody.md
     - docs/runbooks/human-gates-and-evidence.md
@@ -19,6 +21,12 @@ current no-mistakes/AXI structured output is authoritative. This skill packages
 the recovery decision process; it does not replace or override the tool's own
 instructions.
 
+This skill is executed by the dedicated **No-Mistakes Runner crew**, not by the
+Watchtower. The Watchtower decides that recovery work is needed, dispatches or
+resumes that runner with these instructions, then uses the runner's exact-head
+report to decide what happens next. The Watchtower must not take over branch
+mutation merely because recovery is awkward.
+
 Explicit operator instructions and repository-local rules take precedence.
 
 ## Goal
@@ -27,7 +35,8 @@ Return the affected branch to an unambiguous, clean custody state without losing
 work, moving the wrong ref, or carrying stale review/test/CI evidence forward.
 
 The normal path is unattended: diagnose, use the supported recovery action,
-verify the resulting exact head, document the decision, and continue.
+verify the resulting exact head, report the evidence, and return control to the
+Watchtower.
 
 ## 1. Freeze competing mutations and identify custody
 
@@ -80,18 +89,18 @@ as proof that custody is safe.
 ## 4. Invalidate stale assurance after head movement
 
 Any recovery that changes the branch head creates a new assurance boundary.
-Invalidate stale attestations as required by repository policy and repeat the
-applicable checks against the new exact head, including independent review,
-testing, no-mistakes validation, and exact-head CI.
+Report which attestations are stale and which checks must be repeated against the
+new exact head, including independent review, testing, no-mistakes validation,
+and exact-head CI when applicable.
 
 Never claim that review/test/CI from the old head proves the recovered head.
 
-## 5. Unattended decisions
+## 5. Bounded unattended recovery
 
-The Watchtower should make the recovery decision itself when all of these hold:
+Execute the recovery without waiting for operator input when all of these hold:
 
-- the action is supported by no-mistakes/AXI or an existing repository recovery
-  policy;
+- the action is explicitly supported by no-mistakes/AXI or an existing repository
+  recovery policy;
 - the action is bounded to the affected task/branch;
 - the expected before/after heads are known;
 - the action is reversible or already authorized by repository/operator policy;
@@ -99,15 +108,16 @@ The Watchtower should make the recovery decision itself when all of these hold:
   is being bypassed.
 
 Record the chosen action, evidence, resulting heads, and why it was safe in the
-durable task handoff or designated decision log.
+crew handoff/report. The Watchtower owns the subsequent routing decision.
 
 ## 6. Unsupported or ambiguous recovery
 
 If the structured tool does not offer a supported path and repository policy does
-not already define one, leave the branch untouched and file a GitHub issue. Do
-not block the entire Watchtower; continue other independent work where possible.
+not already define one, leave the branch untouched and report `needs-action` or
+the equivalent unresolved state to the Watchtower with enough evidence for it to
+file a GitHub issue. Do not invent a manual settlement recipe.
 
-The issue should contain:
+The report should contain:
 
 - affected repository, task, branch, and PR;
 - run ID and custody state;
@@ -134,6 +144,5 @@ Return:
 - structured `branch_sync.next_action`;
 - recovery action taken, if any;
 - custody state and exact head after recovery;
-- stale assurance invalidated and checks rerun;
-- decision record location;
-- follow-up GitHub issue, if unsupported recovery remains.
+- stale assurance invalidated and checks to rerun;
+- unsupported-recovery issue brief for the Watchtower, if needed.
