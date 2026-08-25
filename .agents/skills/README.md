@@ -12,7 +12,10 @@ reconciliation, routing, and durable decision making.
 | Skill or prompt | Owner | Watchtower action |
 | --- | --- | --- |
 | `delivery-evidence` | Watchtower | Invoke directly to reconcile exact-head evidence, decide what runs next, and record bounded decisions. |
-| `prompts/watchtower-model-selection.md` | Watchtower | Read before selecting the crew role/model/effort. It is a retrieval prompt, not crew instructions. |
+| `attempt-budget` | Watchtower | Derive coder-attempt count from durable turns, enforce no attempt 11, and defer exhausted lineages while other runnable work exists. |
+| `quick-crew-routing` | Watchtower | Decide whether a task qualifies for Quick Scout/Quick Coder; standard crew remains the default. |
+| `no-mistakes-observer-pane` | Watchtower | Create/close an untracked observer pane around an active no-mistakes run without creating another crew or taking custody. |
+| `prompts/watchtower-model-selection.md` | Watchtower | Read before selecting the standard crew role/model/effort. It is a retrieval prompt, not crew instructions. |
 
 ## Crew-facing skills
 
@@ -27,6 +30,8 @@ in the crew brief, and dispatches the appropriate crew.
 | `adversarial-testing` | Tester | Dispatch a tester with the testing instructions and bounded task/evidence in its brief. |
 | `no-mistakes-branch-recovery` | No-Mistakes Runner | Dispatch/resume the dedicated runner with the recovery instructions in its brief. Watchtower judges the returned custody report. |
 | `rozoro-authoring` | Coder working on Rozoro | Include the repository-specific authoring instructions in the coder brief. |
+| `quick-scout` | Quick Scout | Include the narrow read-only contract and escalation marker in a Spark/low scout brief. |
+| `quick-coder` | Quick Coder | Include the one-attempt mechanical implementation contract and escalation marker in a Spark/low coder brief. |
 
 ## Routing rule
 
@@ -58,9 +63,28 @@ A future mechanism may support first-class skill delivery to crews. Until that
 exists, do not claim repo-local skill discovery, presets, system rules, or a skill
 name/reference alone as a supported way to transmit these instructions.
 
-Do not copy model-selection policy into crew-facing skills. Model and reasoning
-effort are Watchtower routing choices; the crew skill describes how that role
-performs its job after dispatch.
+## Model routing
+
+Current standard model selection remains authoritative in
+`templates/watchtower-crew-dispatch-guidelines.md`. Current no-mistakes target
+fallback also remains authoritative there/current no-mistakes policy.
+
+`quick-crew-routing` is a bounded fast-path exception: eligible Quick Scout and
+Quick Coder tasks use `gpt-5.3-codex-spark` at low effort. It does not redefine
+any standard role assignment and must not be retried when the quick path fails.
+
+Do not import machine-specific harness defaults into global role policy.
+
+## Attempt budget
+
+Implementation lineages have ten coder attempts derived from durable coder turns.
+Attempt 10 may complete normal review/test/gate assurance. If that evidence asks
+for another coder repair, do not start attempt 11.
+
+An exhausted lineage is deferred while other runnable work exists. Reconsider
+deferred work when the runnable queue is empty, or earlier only when materially
+new evidence/tooling changes the premise or the operator explicitly reprioritizes
+it.
 
 ## Boundary rule
 
