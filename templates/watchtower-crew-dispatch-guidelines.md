@@ -1,146 +1,159 @@
 # Watchtower crew dispatch guidelines
 
-Use these defaults when you dispatch **Rozoro crew**. Keep each crew member focused
-on one job. Watchtower chooses the task kind and writes the task-specific brief;
-this file is policy, not prompt text to copy.
+Use these defaults when dispatching **Rozoro crew**. Watchtower selects a task
+kind, resolves an available execution target for this machine, and writes the
+smallest useful task-specific brief.
 
-Use the canonical model IDs below. Reasoning effort is separate. Do not invent
-model names from shorthand such as `luna-high` or `gpt-5.6-luna-high`.
-
-No-mistakes is **not** a Rozoro crew role. Watchtower drives it directly through
-`no-mistakes-gate` after normal coding/review/testing assurance.
+Canonical model IDs and reasoning effort below are **preferred role defaults**.
+`crew-model-selection` may choose a compatible available target using the optional
+`$ROZORO_HOME/config/machine.md`, current crew presets, repository constraints, or
+explicit operator instructions.
 
 ## Briefing style
 
-Prefer concise, natural briefs: **intent + pointer + only the context, constraints,
-and evidence that matter to this crew**.
+Prefer concise, natural briefs:
 
-Do not mechanically paste the role policy below, duplicate repository rules the
-crew will load from `--cwd`, or force every task into the same report schema.
-Role policy tells Watchtower what the specialist is for and which boundaries must
-not blur; the crew still needs room to investigate and exercise judgment.
+**intent + pointer + only the context, constraints, and evidence that matter to
+this crew**
+
+The target repository is discoverable from `--cwd`. Plans, handoffs, findings, and
+workset state are added when they materially constrain the current turn.
 
 ## Standard crew roles
 
-### Task Decomposer — `gpt-5.6-sol`, high
+### Task Decomposer / Planner — `gpt-5.6-sol`, high
 
-Use the Planner as the normal bridge from raw operator intent to an executable
-implementation task.
+Turn raw intent into bounded executable work when scope, dependencies, acceptance
+criteria, integration order, or repository boundaries are not already clear.
 
-Prefer Planner -> Coder for new implementation work unless the task is already
-genuinely bounded, this is a normal repair turn for an existing coder, or Quick
-Coder clearly qualifies.
-
-The Planner should inspect the relevant repository contracts, ports, docs,
-dependencies, and boundaries; produce useful scope and acceptance criteria; and
-surface real ambiguity. It does **not** implement or run no-mistakes.
-
-Do not skip Planner merely because Watchtower can infer a plausible approach.
+For work that will fan out, identify which tasks are independent, which depend on
+other tasks, and any intended stacking/integration order the Workset Merger should
+preserve. Produce enough structure for coders to work independently without
+pretending unknown repository facts are settled.
 
 ### Coder — `gpt-5.6-sol`, low
 
-Implement the bounded task. Follow repository-local rules and acceptance criteria.
-Treat reviewer/tester/no-mistakes/post-merge findings as the reason for a repair
-turn when Watchtower routes them back.
+Implement one bounded task. Follow repository-local rules and the supplied task
+boundary. Repair concrete reviewer/tester/no-mistakes/integration findings when
+Watchtower routes them back and the task boundary still holds.
 
-Do not ask the Coder to certify its own work or run no-mistakes. If the task now
-conflicts with a contract or requires broader design change, report that instead
-of silently reopening the whole plan.
+Report the candidate head and useful evidence so later roles can reason about the
+exact implementation that was produced.
 
 ### Reviewer — `gpt-5.6-luna`, high
 
-Use a fresh context. Review the exact candidate against the task, contracts,
-surrounding code, and acceptance criteria. Look outside the diff when needed.
-Separate concrete correctness defects from optional cleanup or taste.
-
-Do not quietly edit production code and do not run no-mistakes. The useful output
-is a verdict plus evidence precise enough for Watchtower to route the next step.
+Review an exact candidate in fresh context against the task, contracts,
+surrounding code, and acceptance criteria. Separate correctness defects from
+optional cleanup and provide evidence precise enough to route a repair or accept
+the candidate.
 
 ### Tester — `gpt-5.6-luna`, high
 
-Try to break the exact candidate from the use case and failure modes, not merely
-from implementation details. Exercise boundaries, invalid input, retries, partial
-failures, state transitions, integration behavior, regressions, and weak-test
-risks that matter to the task.
-
-Do not quietly repair production code and do not run no-mistakes. A green suite
-is evidence, not proof that the use case is complete.
+Exercise an exact candidate from its intended use case and meaningful failure
+modes. Cover boundaries, invalid inputs, retries, partial failures, state
+transitions, integrations, regressions, and weak-test risks that matter to the
+task. Bind the result to the tested head.
 
 ### Escalation Replanner — `gpt-5.6-sol`, high
 
-Use when coder/review/test/no-mistakes/delivery loops stop converging or when new
-evidence exposes a scope/contract problem. Give it the original bounded task and
-the useful failure evidence, not the entire conversation by default.
+Use when implementation/review/test/integration loops stop converging or new
+evidence changes the task boundary. Give it the original task plus the useful
+failure evidence. It produces a revised bounded task/dependency plan for fresh
+execution.
 
-The Replanner should explain what changed about the problem and produce a revised
-bounded task for a fresh Coder. It does not implement and does not run
-no-mistakes.
+### No-Mistakes Runner — `gpt-5.6-luna`, high
 
-### Merge Finisher — `gpt-5.6-luna`, low
+Operate the configured no-mistakes pipeline for an exact committed candidate.
+This is a thin execution/listening role, not another independent code reviewer.
 
-Use only after Watchtower has judged that the candidate is eligible to land.
-Merge/post-merge repository and provider mutations belong here, not in Watchtower.
+Give it:
 
-Give the finisher the PR, expected exact candidate head, the landing evidence that
-must still apply, allowed merge path/method, and post-merge work that actually
-applies.
+- repository and workset/task identity;
+- exact candidate branch/head/base;
+- operator intent/acceptance pointer that no-mistakes needs;
+- the selected no-mistakes profile when the machine profile names one; and
+- whether it should submit a new run or reattach to a known run.
 
-The finisher should re-fetch current provider/repository state before mutation,
-stop on stale/mismatched evidence, merge through the supported path, capture the
-actual landed identity, and perform required post-merge verification/actions.
+The runner uses the repository's trusted no-mistakes configuration plus the
+selected global profile (`~/.no-mistakes/config.yaml` or another `NM_HOME`). It may
+submit through the configured `no-mistakes` Git remote or use the supported
+CLI/AXI flow for the installed version.
 
-It does not fix production code, regenerate stale assurance, bypass protections,
-or improvise rollback. Blockers and post-merge failures return to Watchtower for
-normal routing.
+Once a run exists, keep the runner available to listen/attach and report actionable
+structured state. The runner reports run ID, submitted/final heads, findings/gate
+state, fixes performed by no-mistakes, PR/CI state, and custody/recovery state.
+Interpretation that depends on dependency order or integrated workset state goes
+to the Workset Merger.
 
-Merge Finisher work does **not** consume coder attempts unless a failure is later
-routed to a Coder for a new implementation turn.
+Use no-mistakes' native global/repository `agent`, ordered fallback, and
+`agent_config` mechanisms for pipeline-agent model/effort selection. A machine
+profile may name multiple no-mistakes profiles/accounts and the environment needed
+to start them. Verify the effective profile with the installed no-mistakes tools.
+
+`CLAUDE_CONFIG_DIR` is a Claude harness environment variable, not a documented
+no-mistakes config field. A one-shot environment prefix on the no-mistakes CLI is
+not assumed to reconfigure an already-running no-mistakes daemon. When separate
+Claude identities are required, prefer explicit machine-profile/no-mistakes
+profiles (for example separate `NM_HOME` instances) whose daemon environment is
+known and verified.
+
+### Workset Merger — `gpt-5.6-luna`, high
+
+Own integration and landing reasoning for one workset.
+
+Give it the workset intent, Planner/Task Decomposer output when available,
+participating task branches/heads, known dependencies, review/test/no-mistakes/CI
+evidence, repository merge policy, and current `/afk` state.
+
+The merger should:
+
+1. reconstruct the current workset graph from the plan plus actual crew results;
+2. determine dependency, stacking, and merge order;
+3. re-fetch exact branch/PR heads before mutation;
+4. integrate candidate branches in the order required by the workset;
+5. detect stale evidence or integration failures and route a bounded repair or
+   replan recommendation back to Watchtower;
+6. read no-mistakes results in workset context and decide whether findings are
+   local repair, integration fallout, or a plan/dependency problem;
+7. ensure the final integrated head has the assurance required by repository
+   policy; and
+8. when authorized, perform the final supported merge and required post-merge
+   checks/actions, reporting the actual landed identity.
+
+For a single-task workset with no stacking, the same role reduces to the simple
+landing/post-merge case.
+
+`/afk on` allows the final merge when evidence and repository/operator policy are
+sufficient. `/afk off` stops the merger immediately before the final merge
+mutation and asks the operator to confirm.
 
 ## Quick Crew
 
 `quick-crew-routing` owns eligibility for the bounded fast path. Eligible Quick
-Scout and Quick Coder use `gpt-5.3-codex-spark` at low effort.
+Scout and Quick Coder prefer `gpt-5.3-codex-spark` at low effort.
 
-Quick Crew is for narrow, mechanical, low-risk work where latency matters. It is
-not retried when the quick path stops being quick; escalate to the appropriate
-standard role instead.
+Use Quick Crew for narrow, mechanical, low-risk work where latency matters. When
+the work expands beyond that boundary, route it into the appropriate standard
+role.
 
-## No-mistakes gate — Watchtower action
+## Watchtower — `gpt-5.6-sol`, high preferred
 
-After coding/review/testing leave a clean committed candidate ready for additional
-assurance, Watchtower may use `no-mistakes-gate`.
+Watchtower owns cross-project/workset priority, dispatch, routing, operator
+interaction, and the global view. It may manage multiple repositories at once by
+choosing `--cwd` per crew.
 
-- Do not dispatch a No-Mistakes Runner crew.
-- Submit or reattach through the repository's supported no-mistakes/AXI path.
-- no-mistakes owns its pipeline worktree, internal agents/model selection, branch
-  custody, fixes, PR work, CI work, and supported recovery state.
-- Watchtower owns submission/reattachment, bounded gate decisions, exact-head and
-  custody reconciliation, and routing the resulting findings.
-- Once a real run exists, attach the untracked side pane with
-  `no-mistakes-observer-pane` when supported.
-- Local defects return to Coder; task-boundary failures go to Replanner.
-- If desired internal agent/account/fallback behavior cannot be expressed by the
-  installed no-mistakes version, treat that as an integration/configuration gap,
-  not a reason to add a wrapper LLM crew.
+Watchtower starts with the context it has. It accumulates useful project knowledge
+from repository docs, plans, crew handoffs, gate results, operator steering, and
+delivery outcomes. Reuse durable results when they matter; load deeper context on
+demand rather than trying to preload a project's entire history.
 
-Current upstream no-mistakes raises/updates the PR and watches CI/mergeability; it
-does not replace the final Merge Finisher role in this policy.
-
-## Watchtower — `gpt-5.6-sol`, high
-
-Watchtower owns dispatch, routing, global priority, external-gate decisions, and
-evidence reconciliation. It does not perform repository planning, implementation,
-review, testing, merge, or post-merge mutations itself.
-
-For ordinary local findings, send the evidence back to the active Coder when the
-task boundary still holds. When the task boundary no longer holds, dispatch the
-Replanner. When no-mistakes passes and landing evidence is sufficient, dispatch
-Merge Finisher. Reconcile the actual landed identity and post-merge evidence
-before considering the task complete.
+Within a workset, delegate integration/stacking/landing judgment to the Workset
+Merger. Delegate no-mistakes execution/listening to the No-Mistakes Runner.
+Watchtower routes their results, handles cross-workset priorities, and involves the
+operator when `/afk` or a genuine authority boundary requires it.
 
 ## Experimental report fields
 
-Continue asking implementation-related crews to provide `attempt_count` and
-`caused_by` when useful for repair-loop measurement. These remain ordinary report
-metadata, not Rozoro lifecycle fields and not a reason to turn every brief into a
-fixed report template.
+Implementation-related crews may provide `attempt_count` and `caused_by` when
+useful for measuring repair loops. They remain ordinary report metadata rather
+than Rozoro lifecycle fields.
