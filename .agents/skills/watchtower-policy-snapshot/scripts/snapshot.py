@@ -19,9 +19,10 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v6"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v7"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
+PI_LAUNCHER_SHA256 = "f7414264943923bf2aebb1714c6af17c6b4483613ac682b801071cb26013abfa"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
@@ -201,8 +202,11 @@ def main() -> int:
             source_bytes = read_repo_file(repo, SOURCE)
             pi_launcher = read_repo_file(repo, PI_LAUNCHER)
             claude_launcher = read_repo_file(repo, CLAUDE_LAUNCHER)
-            pi_captured = pi_launcher_contract_has_policy(pi_launcher)
+            exact_pi_launcher = digest(pi_launcher) == PI_LAUNCHER_SHA256
+            pi_captured = exact_pi_launcher and pi_launcher_contract_has_policy(pi_launcher)
             claude_captured = False
+            if not exact_pi_launcher:
+                raise UnsafePath("Pi launcher bytes do not match the strict shipped launcher contract")
             if not pi_captured:
                 raise UnsafePath(f"cannot verify {SOURCE} in an args array consumed by the Pi invocation")
             commit_read = bound_git_value(repo_path, identity, "rev-parse", "HEAD")
@@ -245,7 +249,8 @@ def main() -> int:
             "reason": git_reason,
         },
         "harness_coverage": {
-            "validation": "narrow-top-level-args-exec-env-pi-contract-v1",
+            "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v1",
+            "expected_pi_launcher_sha256": PI_LAUNCHER_SHA256,
             "option": POLICY_OPTION,
             "value": POLICY_VALUE,
             "pi": {

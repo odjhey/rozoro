@@ -23,7 +23,7 @@ Directories are mode `0700` and files are mode `0600`. Every lexical path compon
 
 ## Policy snapshot schema
 
-The captured bytes come directly from `templates/watchtower.md`. Shell tokenization enforces the shipped top-level contract: an `args=(...)` array followed by the executable command `exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"`. The consumed array must contain `--append-system-prompt` and `$ROOT/templates/watchtower.md` as an adjacent option/value pair. Conditional/dead assignments, uncalled functions, overwritten or unused arrays, scalar/indexed assignments, `unset`, any other unmodeled `args` write, echo/string decoys, and conditional/dead invocations do not count. Only syntactically complete top-level array assignment/append forms may establish or change the modeled policy array; recognized conditional appends may add runtime arguments but cannot establish policy coverage. The Claude launcher's `args` array currently has no such policy argument, so metadata records Claude as `unverified-no-consumed-policy-args-array`. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
+The captured bytes come directly from `templates/watchtower.md`. Validation first requires the Pi launcher bytes to match the schema-versioned shipped SHA-256 exactly, then shell tokenization enforces the top-level contract: an `args=(...)` array followed by the executable command `exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"`. The consumed array must contain `--append-system-prompt` and `$ROOT/templates/watchtower.md` as an adjacent option/value pair. Conditional/dead assignments, uncalled functions, overwritten or unused arrays, scalar/indexed assignments, `unset`, `eval`, source/dot, function and command-substitution mutation paths, any other byte-level launcher drift, echo/string decoys, and conditional/dead invocations do not count. Only syntactically complete top-level array assignment/append forms may establish or change the modeled policy array; recognized conditional appends may add runtime arguments but cannot establish policy coverage. The Claude launcher's `args` array currently has no such policy argument, so metadata records Claude as `unverified-no-consumed-policy-args-array`. Launcher paths and hashes make that scope reviewable without copying stale policy prose.
 
 A run contains:
 
@@ -36,7 +36,7 @@ Example metadata shape:
 
 ```json
 {
-  "schema": "rozoro.watchtower-policy-snapshot/v6",
+  "schema": "rozoro.watchtower-policy-snapshot/v7",
   "artifact_type": "watchtower-policy-snapshot",
   "created_at": "2026-08-24T03:25:36.123456Z",
   "run_id": "20260824T032536.123456Z-a1b2c3d4",
@@ -58,7 +58,8 @@ Example metadata shape:
     "reason": null
   },
   "harness_coverage": {
-    "validation": "narrow-top-level-args-exec-env-pi-contract-v1",
+    "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v1",
+    "expected_pi_launcher_sha256": "f7414264943923bf2aebb1714c6af17c6b4483613ac682b801071cb26013abfa",
     "option": "--append-system-prompt",
     "value": "$ROOT/templates/watchtower.md",
     "pi": {"status": "captured", "launcher": "bin/rzr-pi-watchtower.sh", "launcher_sha256": "…"},

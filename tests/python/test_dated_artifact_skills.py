@@ -13,6 +13,8 @@ from lib.rozoro_artifacts.safe_fs import SafeDirectory
 REPO = Path(__file__).resolve().parents[2]
 POLICY_SCRIPT = REPO / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
 REPORT_SCRIPT = REPO / ".agents/skills/watchtower-progress-report/scripts/report.py"
+PI_LAUNCHER_BYTES = (REPO / "bin/rzr-pi-watchtower.sh").read_bytes()
+CLAUDE_LAUNCHER_BYTES = (REPO / "bin/rzr-claude-watchtower.sh").read_bytes()
 NOW = "2026-08-24T03:25:36.123456Z"
 
 
@@ -60,10 +62,8 @@ class DatedArtifactSkillTests(unittest.TestCase):
             source = checkout / "templates/watchtower.md"
             current = b"current working-tree policy\n"
             source.write_bytes(current)
-            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
-            )
-            (checkout / "bin/rzr-claude-watchtower.sh").write_text("claude --settings overlay.json\n", encoding="utf-8")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             artifact_root = root / "artifacts"
             fake_bin = root / "bin"
             fake_bin.mkdir()
@@ -108,12 +108,12 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v6")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v7")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
             self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
-            self.assertEqual(metadata["harness_coverage"]["validation"], "narrow-top-level-args-exec-env-pi-contract-v1")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v1")
             self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
@@ -138,7 +138,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
                 env=env,
             )
             self.assertNotEqual(substring_only.returncode, 0)
-            self.assertIn("consumed by the Pi invocation", substring_only.stderr)
+            self.assertIn("strict shipped launcher contract", substring_only.stderr)
 
     def test_policy_coverage_requires_policy_on_array_consumed_by_pi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -188,6 +188,32 @@ class DatedArtifactSkillTests(unittest.TestCase):
                     "args[0]=--approve\n"
                     'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
                 ),
+                "eval-unset": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "eval 'unset args'\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "source-mutator": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "source ./mutate-args.sh\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "dot-mutator": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    ". ./mutate-args.sh\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "called-function-mutator": (
+                    "mutate_args() { unset args; }\n"
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "mutate_args\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
+                "command-substitution-eval": (
+                    'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\n'
+                    "eval \"$(printf 'unset args')\"\n"
+                    'exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'
+                ),
                 "reassigned": (
                     'if false; then args=(--append-system-prompt "$ROOT/templates/watchtower.md"); fi\n'
                     "args=(--approve)\n"
@@ -217,7 +243,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
                         text=True,
                     )
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("consumed by the Pi invocation", result.stderr)
+                    self.assertIn("strict shipped launcher contract", result.stderr)
                     self.assertFalse(artifact_root.exists())
 
     def test_policy_git_provenance_becomes_indeterminate_on_repo_path_swap(self) -> None:
@@ -229,10 +255,8 @@ class DatedArtifactSkillTests(unittest.TestCase):
             (checkout / "bin").mkdir()
             policy = b"held policy bytes\n"
             (checkout / "templates/watchtower.md").write_bytes(policy)
-            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
-            )
-            (checkout / "bin/rzr-claude-watchtower.sh").write_text("args=(--settings overlay.json)\n", encoding="utf-8")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
             fake_bin.mkdir()
             fake_git = fake_bin / "git"
@@ -276,12 +300,8 @@ class DatedArtifactSkillTests(unittest.TestCase):
             (checkout / "templates").mkdir(parents=True)
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
-            (checkout / "bin/rzr-pi-watchtower.sh").write_text(
-                'args=(--append-system-prompt "$ROOT/templates/watchtower.md")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n', encoding="utf-8"
-            )
-            (checkout / "bin/rzr-claude-watchtower.sh").write_text(
-                'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
-            )
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
             fake_bin.mkdir()
             fake_git = fake_bin / "git"
