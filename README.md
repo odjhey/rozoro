@@ -188,7 +188,7 @@ List known tasks:
 | `./bin/rozoro send` | send DATA text to the coding agent |
 | `./bin/rozoro control` | interrupt, cancel, send a key, stop, or restart the runtime |
 | `./bin/rozoro resume` | reopen the exact linked conversation where supported |
-| `./bin/rozoro reconcile` | report tasks changed since the previous generation ACK, then ACK the current wake generation |
+| `./bin/rozoro reconcile` | reconcile the current wake generation |
 | `./bin/rozoro ack` | advance task open-item acknowledgement |
 | `./bin/rozoro list` | list known tasks and live state |
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
@@ -240,6 +240,15 @@ Example:
 ```
 
 `crew` is the current command and file name. We may rename it later if the ACP and acpx work points to a simpler launch-profile model. There is no reason to break compatibility just to clean up the name.
+
+## Operator artifact skills
+
+Project skills under `.agents/skills/` can persist two owner-private, dated operator records under `$ROZORO_HOME/artifacts`:
+
+- `watchtower-policy-snapshot` copies the explicit Pi Watchtower launch-policy source with hashes, Git provenance, and accurate per-harness coverage;
+- `watchtower-progress-report` records a conservative fleet summary from durable task folders without treating `done` as verified or accepted.
+
+Invoke them with Pi's `/skill:<name>` commands or run their bundled Python scripts directly. Each run gets a new unambiguous UTC path and is retained until explicitly deleted. See [Dated Watchtower artifacts](docs/dated-watchtower-artifacts.md) for schemas, privacy boundaries, and examples.
 
 ## Testing
 
