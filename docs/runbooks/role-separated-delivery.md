@@ -5,35 +5,60 @@ controlled publication.
 
 ## Roles
 
-- **Planner / Task Decomposer:** turns raw intent into bounded tasks, dependencies,
-  acceptance criteria, and useful stacking/integration information.
+- **Planner / Task Decomposer:** turns raw intent into bounded tasks and owns the
+  workset execution strategy: dependencies, parallel groups, stacks/sequences,
+  fan-out/fan-in points, and intended integration order.
 - **Coder:** implements one bounded task and reports the exact candidate head.
 - **Reviewer:** independently evaluates correctness and scope at an exact head.
 - **Tester:** independently exercises behavior and failure modes at an exact head.
-- **Replanner:** revises scope/dependencies when evidence shows the current task
-  boundary is wrong or repair loops stop converging, while carrying the lineage's
-  cumulative attempt/replan counters forward.
+- **Replanner:** revises scope, dependencies, and the parallel/stacking execution
+  strategy when evidence shows the current plan is wrong or repair loops stop
+  converging, while carrying cumulative attempt/replan counters forward.
 - **No-Mistakes Runner:** thin Rozoro crew that submits/reattaches an exact
   candidate to the configured no-mistakes pipeline, listens through its supported
   Git/CLI/AXI surface, and reports structured run evidence.
-- **Workset Merger:** reconstructs dependency/stack order for one workset,
-  integrates participating branches, reads assurance/no-mistakes results in that
-  context, decides what needs repair or re-planning, and performs final
+- **Workset Merger:** executes and reconciles the Planner/Replanner integration
+  strategy against actual branches, reads assurance/no-mistakes results in that
+  context, reports when the strategy has become invalid, and performs final
   merge/post-merge work when authorized.
 - **Watchtower:** owns cross-project/workset priority, dispatch, routing, attempt/
   replan accounting, and operator interaction.
 
+## Planning the workset
+
+Planner/Task Decomposer decides how the workset should execute, not only how it is
+split into task descriptions.
+
+For a multi-task workset, record enough of the following to make dispatch and
+integration unambiguous:
+
+- bounded task identities and outcomes;
+- dependency edges;
+- tasks that may start concurrently;
+- tasks that must wait for another task;
+- stacked branch/base relationships where applicable;
+- execution waves or fan-in points when useful;
+- intended integration/merge order; and
+- assumptions whose failure should trigger replanning.
+
+Parallelism is deliberate: independent tasks should not be serialized without a
+reason, while dependent or stacked tasks should not be launched as if they were
+independent.
+
 ## Workset flow
 
 1. Identify the intended deliverable/workset.
-2. Use Planner when the work needs decomposition, dependency discovery, or a
-   stacking plan.
-3. Dispatch bounded tasks to Coders, parallelizing independent work.
+2. Use Planner when decomposition, dependencies, parallelism, stacking, fan-in, or
+   integration order are not already settled. Planner emits the current workset
+   execution strategy.
+3. Watchtower dispatches according to that strategy: start independent tasks in
+   parallel, preserve required sequences/stacks, and wait at declared fan-in
+   points only when needed.
 4. Bind Reviewer/Tester evidence to exact candidate heads as required by policy.
 5. Route local findings back to the relevant Coder while the current attempt
-   ceiling allows it; use Replanner when the task/dependency boundary changes or
-   the implementation loop is not converging.
-6. Replanner receives the current plan plus useful failure evidence and the
+   ceiling allows it; use Replanner when the task boundary, dependency graph,
+   parallel/stacking strategy, or implementation direction changes.
+6. Replanner receives the current workset plan plus useful failure evidence and the
    cumulative `attempt_count`, `attempt_limit`, and `replan_count`. A materially
    revised plan extends the Coder ceiling by 10, up to a hard limit of 30 total
    Coder attempts. The lineage may use at most 3 Replanner turns; counters never
@@ -41,28 +66,30 @@ controlled publication.
 7. When an exact committed candidate needs no-mistakes assurance, dispatch a
    No-Mistakes Runner with the candidate identity and selected machine/global
    no-mistakes profile.
-8. Keep each task branch/head and its assurance evidence attached to the workset.
+8. Keep each task branch/head and its assurance evidence attached to its planned
+   dependency/stack position in the workset.
 9. Dispatch or reuse a Workset Merger when branches must be integrated, stacked,
    ordered, or landed.
-10. The Workset Merger reads the Planner/Decomposer result when available, then
-    reconciles it against actual branches/heads and determines the current merge
-    order.
-11. Integrate in dependency order. Any integration-created head gets the exact-head
-    assurance required by repository policy.
-12. Give no-mistakes results to the Workset Merger when their interpretation
+10. The Workset Merger reads the current Planner/Replanner execution strategy,
+    reconciles it against actual branches/heads, and executes the planned
+    integration order.
+11. If actual repository state invalidates a planned dependency, base, stack, or
+    order, the merger reports the evidence to Watchtower for Replanner rather than
+    silently inventing a new workset strategy.
+12. Any integration-created head gets the exact-head assurance required by
+    repository policy.
+13. Give no-mistakes results to the Workset Merger when their interpretation
     depends on the integrated workset. It classifies findings as local repair,
-    integration fallout, or a planning/dependency problem and reports the next
-    route to Watchtower.
-13. When the integrated candidate is ready to land, apply `/afk` policy:
+    integration fallout, or evidence that the plan must be revised.
+14. When the integrated candidate is ready to land, apply `/afk` policy:
     - ON: the Workset Merger may perform the final supported merge when evidence,
       repository policy, and existing operator authority permit.
     - OFF: the merger stops immediately before the final merge mutation and asks
       the operator to confirm.
-14. Record the actual landed identity and required post-merge evidence before the
+15. Record the actual landed identity and required post-merge evidence before the
     workset is complete.
 
-A one-task workset follows the same flow with the integration step collapsed to a
-single candidate.
+A one-task workset follows the same flow with parallelism/stacking collapsed away.
 
 ## Attempt and replan budget
 
@@ -79,8 +106,9 @@ replan #3:     attempt_limit=30  replan_count=3
 ```
 
 `attempt_count` is cumulative. Replanning extends the lineage instead of resetting
-it. The third Replanner turn is available for final restructuring, splitting, or
-deferral decisions but does not authorize Coder attempt 31.
+it. The third Replanner turn is available for final restructuring, splitting,
+parallel/stack strategy changes, or deferral decisions but does not authorize
+Coder attempt 31.
 
 At the current Coder ceiling, let assurance for the exact candidate finish. If
 another code repair is required and another budget-extending replan is available,
@@ -105,12 +133,15 @@ Watchtower writes each brief from the current task/workset state. Prefer
 **intent + pointer + only the context, constraints, and evidence this specialist
 needs**.
 
-For Replanner, include the current task/plan, useful failed directions and findings,
-and the current `attempt_count`, `attempt_limit`, and `replan_count`.
+For Planner, include the workset intent and operator constraints; expect a usable
+execution strategy, not only a list of tasks.
 
-For Workset Merger, include the workset intent, plan/decomposition when available,
-participating exact heads, dependency clues, assurance/no-mistakes evidence,
-target merge policy, and current `/afk` state.
+For Replanner, include the current task/workset plan, failed directions and
+findings, and the current `attempt_count`, `attempt_limit`, and `replan_count`.
+
+For Workset Merger, include the current Planner/Replanner strategy, participating
+exact heads, assurance/no-mistakes evidence, target merge policy, and current
+`/afk` state.
 
 ## Learning
 
