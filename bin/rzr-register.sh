@@ -5,10 +5,10 @@
 #   rzr-register.sh --harness <claude|codex|copilot|pi> [--backend auto|codex|herdr]
 #                   [--agent-session <absolute-session-file>] [--driver-id <id>] [--quiet]
 #
-# Writes watchtowers/<driver-id>/target.json pinning ONE immutable delivery
-# identity for `rzr-watch --wake`. The declared harness is validated against live
-# state before it is pinned, so a stale inherited CODEX_THREAD_ID can never wake
-# the wrong conversation:
+# Writes the current watchtowers/<driver-id>/target.json attribution and appends
+# a registration record to registrations.jsonl for `rzr-watch --wake`. The
+# declared harness is validated against live state before it is recorded, so a
+# stale inherited CODEX_THREAD_ID can never wake the wrong conversation:
 #   - codex backend: requires CODEX_THREAD_ID and a Codex CLI with `queue`; the
 #     declared harness must be codex.
 #   - herdr backend: requires HERDR_PANE_ID and that the pane REPORTS the declared
@@ -19,8 +19,10 @@
 #     queue is available; otherwise the validated herdr pane. It never selects a
 #     backend from the mere presence of an environment variable.
 #
-# Prints the driver id (unless --quiet). Idempotent for the same identity.
+# Prints the driver id (unless --quiet). Re-registration replaces the current
+# target and appends a fresh history record for the same identity.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 HARNESS="" BACKEND="auto" DRIVER_ID="" AGENT_SESSION="" QUIET=0
@@ -87,23 +89,139 @@ case "$BACKEND" in
       BACKEND=herdr; IDENTITY="$HERDR_PANE_ID"
     fi ;;
 esac
+rzr_validate_wt_metadata "$IDENTITY" "wake target identity"
 
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
-DIR="$(rzr_driver_dir "$DRIVER_ID")"
-mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)"
-mkdir -p "$DIR"; chmod 700 "$DIR"
+rzr_validate_task_component "$DRIVER_ID" "driver id"
+[ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
+[ -z "${ROZORO_WT_POLICY_SHA256:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_POLICY_SHA256" "watchtower policy SHA"
+if [ -n "${ROZORO_WT_PRESET:-}" ]; then
+  rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
+  rzr_validate_wt_metadata "${ROZORO_WT_PRESET_VERSION:-}" "watchtower preset version"
+  rzr_validate_wt_metadata "${ROZORO_WT_PRESET_SHA256:-}" "watchtower preset SHA"
+  rzr_validate_wt_metadata "${ROZORO_WT_MODEL:-}" "watchtower model"
+  rzr_validate_wt_metadata "${ROZORO_WT_EFFORT:-}" "watchtower effort"
+fi
 
-RZR_REG_OUT="$DIR/target.json" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
+RZR_REG_HOME="$RZR_HOME" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
+RZR_REG_WT_NAME="${ROZORO_WT_NAME:-}" RZR_REG_PRESET="${ROZORO_WT_PRESET:-}" \
+RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_SHA256:-}" \
+RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
+RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import json, os
-tmp = os.environ["RZR_REG_OUT"] + ".tmp.%d" % os.getpid()
+import fcntl, json, os, stat
+nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
+def child(parent,name):
+    try: os.mkdir(name,0o700,dir_fd=parent)
+    except FileExistsError: pass
+    info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid(): raise SystemExit("unsafe watchtower directory")
+    fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent)
+    if (info.st_dev,info.st_ino)!=(os.fstat(fd).st_dev,os.fstat(fd).st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
+    os.fchmod(fd,0o700); return fd
+home=os.environ["RZR_REG_HOME"]; before=os.stat(home,follow_symlinks=False)
+root=os.open(home,os.O_RDONLY|directory|nofollow)
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("watchtower home changed during open")
+try: towers=child(root,"watchtowers")
+finally: os.close(root)
+try: dirfd=child(towers,os.environ["RZR_REG_ID"])
+finally: os.close(towers)
+legacy_tmp = ".target.%d.tmp" % os.getpid(); target_name="target.json"
+try: os.stat(legacy_tmp,dir_fd=dirfd,follow_symlinks=False); raise SystemExit("registration temporary already exists")
+except FileNotFoundError: pass
+tmp_name = ".target.%d.%s.tmp" % (os.getpid(), __import__("secrets").token_hex(12))
 os.umask(0o077)
-json.dump({"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
-           "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
-           "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
-           "created": os.environ["RZR_REG_TS"]}, open(tmp, "w"), indent=2)
-os.replace(tmp, os.environ["RZR_REG_OUT"])
+def write_all(fd, payload):
+    view = memoryview(payload)
+    while view:
+        count = os.write(fd, view)
+        if count <= 0: raise OSError("short registration write")
+        view = view[count:]
+def cleanup_owned(parent, name, identity):
+    fcntl.flock(parent, fcntl.LOCK_EX)
+    entry_fd=None
+    try:
+        try: entry_fd=os.open(name,os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=parent)
+        except FileNotFoundError: return
+        current=os.fstat(entry_fd)
+        if (current.st_dev, current.st_ino)==identity and current.st_nlink==1: os.unlink(name,dir_fd=parent)
+    finally:
+        if entry_fd is not None: os.close(entry_fd)
+        fcntl.flock(parent, fcntl.LOCK_UN)
+def replace_owned(parent, source, destination, identity, source_fd):
+    owned=os.fstat(source_fd)
+    if (owned.st_dev,owned.st_ino)!=identity or owned.st_nlink!=1: raise SystemExit("registration temporary source drifted")
+    current=os.stat(source,dir_fd=parent,follow_symlinks=False)
+    if (current.st_dev,current.st_ino)!=identity: raise SystemExit("registration temporary changed during write")
+    os.replace(source,destination,src_dir_fd=parent,dst_dir_fd=parent)
+    published=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+    if (published.st_dev,published.st_ino)!=identity or os.fstat(source_fd).st_nlink!=1:
+        raise SystemExit("registration target publication drifted")
+data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
+        "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
+        "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
+        "created": os.environ["RZR_REG_TS"]}
+if os.environ["RZR_REG_WT_NAME"]:
+    data["watchtower_name"] = os.environ["RZR_REG_WT_NAME"]
+if os.environ["RZR_REG_PRESET"]:
+    data["preset"] = {"name": os.environ["RZR_REG_PRESET"],
+                      "version": os.environ["RZR_REG_VERSION"] or "0",
+                      "sha256": os.environ["RZR_REG_SHA"],
+                      "model": os.environ["RZR_REG_MODEL"],
+                      "effort": os.environ["RZR_REG_EFFORT"]}
+    if os.environ["RZR_REG_POLICY_SHA"]:
+        data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
+if os.environ["RZR_REG_POLICY_SHA"]:
+    data["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
+record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
+          "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
+if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
+if "preset" in data: record["preset"] = data["preset"]
+if "policy_sha256" in data: record["policy_sha256"] = data["policy_sha256"]
+flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+try:
+    logfd = os.open("registrations.jsonl", flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dirfd)
+except FileExistsError:
+    before=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+    logfd=os.open("registrations.jsonl",flags,dir_fd=dirfd)
+    if (before.st_dev,before.st_ino)!=(os.fstat(logfd).st_dev,os.fstat(logfd).st_ino):
+        os.close(logfd); raise SystemExit("registrations log changed during open")
+try:
+    info = os.fstat(logfd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1: raise SystemExit("unsafe registrations log")
+    log_identity=(info.st_dev,info.st_ino)
+    os.fchmod(logfd, 0o600)
+    tmp_created=False; tmp_identity=None; fd=None
+    try:
+        fd=os.open(tmp_name,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
+        tmp_created=True; tmp_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
+        payload=json.dumps(data,indent=2).encode(); write_all(fd,payload); os.fsync(fd)
+        replace_owned(dirfd,tmp_name,target_name,tmp_identity,fd)
+        tmp_created=False
+        os.fsync(dirfd)
+        log_tmp=".registrations.%d.%s.tmp" % (os.getpid(), __import__("secrets").token_hex(12))
+        log_tmp_fd=os.open(log_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
+        os.lseek(logfd,0,os.SEEK_SET)
+        while True:
+            chunk=os.read(logfd,65536)
+            if not chunk: break
+            write_all(log_tmp_fd,chunk)
+        write_all(log_tmp_fd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(log_tmp_fd)
+        current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(logfd).st_nlink != 1:
+            raise SystemExit("registrations log changed before publication")
+        log_tmp_identity=(os.fstat(log_tmp_fd).st_dev,os.fstat(log_tmp_fd).st_ino)
+        os.replace(log_tmp,"registrations.jsonl",src_dir_fd=dirfd,dst_dir_fd=dirfd)
+        published=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+        if (published.st_dev,published.st_ino)!=log_tmp_identity: raise SystemExit("registrations log publication drifted")
+        os.close(log_tmp_fd)
+    finally:
+        if fd is not None:
+            if tmp_created: pass
+            os.close(fd)
+finally:
+    os.close(logfd); os.close(dirfd)
 PY
 
 [ "$QUIET" -eq 1 ] || echo "$DRIVER_ID"

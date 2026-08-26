@@ -37,6 +37,7 @@
 # an optional `agent prompt` to deliver the first instruction. The pane id is
 # recorded as the task's authority in state/<id>.meta.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 ID="" ; CWD="" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
@@ -57,7 +58,11 @@ while [ $# -gt 0 ]; do
     --no-agent) NO_AGENT=1; shift ;;
     -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
-    *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
+    *)
+      if [ -z "$ID" ]; then ID="$1"; shift
+      else rzr_die "unexpected arg: $1"
+      fi
+      ;;
   esac
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"
@@ -178,6 +183,18 @@ do_spawn() {
   [ -n "$SESSION_ID" ] && rzr_meta_set "$ID" session "$SESSION_ID"
   rzr_meta_set "$ID" event_bus "$EVENT_BUS"
   rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+
+  # Attribution is observational only: lookup or writes must never block spawn.
+  local dispatcher
+  dispatcher="$(rzr_dispatcher_lookup 2>/dev/null || true)"
+  if [ -n "$dispatcher" ]; then
+    rzr_meta_set "$ID" dispatcher_driver "$(printf '%s' "$dispatcher" | jq -r '.driver_id // empty')" || true
+    rzr_meta_set "$ID" dispatcher_wt_name "$(printf '%s' "$dispatcher" | jq -r '.watchtower_name // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset "$(printf '%s' "$dispatcher" | jq -r '.preset.name // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset_version "$(printf '%s' "$dispatcher" | jq -r '.preset.version // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset_sha "$(printf '%s' "$dispatcher" | jq -r '.preset.sha256 // empty')" || true
+    rzr_meta_set "$ID" dispatcher_policy_sha "$(printf '%s' "$dispatcher" | jq -r '.policy_sha256 // empty')" || true
+  fi
 
   echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
 

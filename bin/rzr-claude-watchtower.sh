@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
 # Launch or exactly resume a daemon-authoritative Claude watchtower.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-RESUME="" CWD="$PWD" PASS=()
+RESUME="" CWD="$PWD" PASS=() PRESET="" WT_NAME="" MODEL="" EFFORT="" VERSION="" PRESET_SHA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --resume) RESUME="${2:-}"; shift 2 ;;
     --cwd) CWD="${2:-}"; shift 2 ;;
+    --preset) PRESET="${2:-}"; [ -n "$PRESET" ] || rzr_die "--preset requires a name"; shift 2 ;;
+    --wt-name) WT_NAME="${2:-}"; [ -n "$WT_NAME" ] || rzr_die "--wt-name requires a name"; shift 2 ;;
     --) shift; PASS+=("$@"); break ;;
-    -h|--help) echo "usage: ./bin/rozoro claude-watchtower [--resume session-id] [--cwd dir] [-- claude-args...]"; exit 0 ;;
+    -h|--help) echo "usage: ./bin/rozoro claude-watchtower [--preset name] [--wt-name name] [--resume session-id] [--cwd dir] [-- claude-args...]"; exit 0 ;;
     *) PASS+=("$1"); shift ;;
   esac
 done
+unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
+[ -z "$WT_NAME" ] || rzr_validate_wt_metadata "$WT_NAME" "watchtower name"
+if [ -n "$PRESET" ]; then
+  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"
+  [ "$(printf '%s' "$RESOLVED" | jq -r '.document.harness')" = claude ] || rzr_die "watchtower preset '$PRESET' is not for harness claude"
+  [ -n "$WT_NAME" ] || WT_NAME="$PRESET"
+  MODEL="$(printf '%s' "$RESOLVED" | jq -r '.document.model // empty')"
+  EFFORT="$(printf '%s' "$RESOLVED" | jq -r '.document.effort // empty')"
+  VERSION="$(printf '%s' "$RESOLVED" | jq -r '.document.version // 0')"
+  PRESET_SHA="$(printf '%s' "$RESOLVED" | jq -r '.sha256')"
+fi
 rzr_claude_event_capability || exit 1
 "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
 CLAUDE_BIN="$(command -v claude)"
@@ -25,15 +39,21 @@ case "$NATIVE_SESSION" in ''|*[!A-Za-z0-9._-]*) rzr_die "invalid Claude session 
 INCARNATION="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 ADAPTER_SESSION="$NATIVE_SESSION.$INCARNATION"
 DRIVER="claude-$NATIVE_SESSION"
-DIR="$(rzr_driver_dir "$DRIVER")"; mkdir -p "$(rzr_watchtowers_dir)" "$DIR"; chmod 700 "$(rzr_watchtowers_dir)" "$DIR"
+if [ -n "$WT_NAME" ]; then
+  export ROZORO_WT_DRIVER="$DRIVER" ROZORO_WT_NAME="$WT_NAME" ROZORO_WT_PRESET="$PRESET"
+  export ROZORO_WT_PRESET_VERSION="$VERSION" ROZORO_WT_PRESET_SHA256="$PRESET_SHA"
+  export ROZORO_WT_MODEL="$MODEL" ROZORO_WT_EFFORT="$EFFORT"
+fi
+DIR="$(rzr_driver_dir_prepare "$DRIVER")"
+RZR_DRIVER_EXPECTED_IDENTITY="$(rzr_driver_dir_identity "$DIR")"; export RZR_DRIVER_EXPECTED_IDENTITY
 # Refuse mixed ownership before starting either path.
-if [ -e "$DIR/pending.json" ] || [ -e "$DIR/ack" ]; then
+if rzr_driver_entry_exists "$DIR" pending.json || rzr_driver_entry_exists "$DIR" ack; then
   g="$(rzr_ledger_int "$DIR" generation)"; a="$(rzr_ledger_int "$DIR" ack)"
   [ "$g" -eq "$a" ] || rzr_die "legacy wake ledger has pending work for $DRIVER"
 fi
 SETTINGS="$DIR/claude-event-settings.json"
 rzr_claude_watchtower_settings "$SETTINGS" "$DRIVER" "$ADAPTER_SESSION" "$NATIVE_SESSION" "$PANE"
-READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
+READY_NAME="poller-ready.$INCARNATION"; READY="$DIR/$READY_NAME"; rzr_driver_entry_remove "$DIR" "$READY_NAME"
 
 # Registration is validated only after Herdr observes the launched Claude. The
 # child retains the same session/driver/pane tuple and dies when the exec'd
@@ -55,5 +75,7 @@ READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
 
 args=(--settings "$SETTINGS")
 if [ -n "$RESUME" ]; then args+=(--resume "$NATIVE_SESSION"); else args+=(--session-id "$NATIVE_SESSION"); fi
+[ -z "$MODEL" ] || args+=(--model "$MODEL")
+[ -z "$EFFORT" ] || args+=(--effort "$EFFORT")
 if [ "${#PASS[@]}" -gt 0 ]; then exec "$CLAUDE_BIN" "${args[@]}" "${PASS[@]}"; fi
 exec "$CLAUDE_BIN" "${args[@]}"

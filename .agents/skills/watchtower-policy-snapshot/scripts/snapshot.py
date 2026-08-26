@@ -19,10 +19,10 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v7"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v8"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "f7414264943923bf2aebb1714c6af17c6b4483613ac682b801071cb26013abfa"
+PI_LAUNCHER_SHA256 = "3281261fcd02c9041593df78acc9c9d11b2fe533c4672a73813b6ab022de8ee5"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"

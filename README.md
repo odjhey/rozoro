@@ -192,7 +192,8 @@ List known tasks:
 | `./bin/rozoro ack` | advance task open-item acknowledgement |
 | `./bin/rozoro list` | list known tasks and live state |
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
-| `./bin/rozoro crew list\|show` | inspect launch presets |
+| `./bin/rozoro crew list\|show` | inspect crew launch presets |
+| `./bin/rozoro watchtower list\|show\|path\|registered` | inspect watchtower presets and registrations |
 | `./bin/rozoro teardown` | close live hosting while keeping the task folder |
 | `./bin/rozoro doctor` | check dependencies and harness support |
 
@@ -240,6 +241,24 @@ Example:
 ```
 
 `crew` is the current command and file name. We may rename it later if the ACP and acpx work points to a simpler launch-profile model. There is no reason to break compatibility just to clean up the name.
+
+### Watchtower presets
+
+Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`. They are opt-in: launching without `--preset` preserves the ambient Pi/Claude configuration. A version plus boot-time preset hash (and Pi policy hash) makes each registration attributable even when a file changes later.
+
+```json
+{
+  "schema": 1,
+  "version": 3,
+  "harness": "pi",
+  "model": "luna",
+  "effort": "high"
+}
+```
+
+Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; launchers derive the driver id from transport identity.
+
+The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited watchtower attribution before applying the command-line options, so an unpreset launch cannot reuse stale name, preset, hash, model, effort, or driver values.
 
 ## Operator artifact skills
 

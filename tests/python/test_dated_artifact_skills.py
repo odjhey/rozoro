@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -34,6 +35,22 @@ def handoff(turn: int, verdict: str, *, reason: str = "", pending: str = "none",
 
 
 class DatedArtifactSkillTests(unittest.TestCase):
+    def test_policy_snapshot_emits_launcher_contract_metadata(self) -> None:
+        claude_script = REPO / ".claude/skills/watchtower-policy-snapshot/scripts/snapshot.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_root = Path(temporary).resolve() / "artifacts"
+            runs = [
+                self.run_script(POLICY_SCRIPT, "--repo-root", str(REPO), "--artifact-root", str(artifact_root), "--now", NOW),
+                self.run_script(claude_script, "--repo-root", str(REPO), "--artifact-root", str(artifact_root), "--now", NOW),
+            ]
+            expected_sha = hashlib.sha256(PI_LAUNCHER_BYTES).hexdigest()
+            for run in runs:
+                metadata = json.loads((run / "metadata.json").read_text())
+                coverage = metadata["harness_coverage"]["pi"]
+                self.assertEqual(coverage["status"], "captured")
+                self.assertEqual(coverage["launcher"], "bin/rzr-pi-watchtower.sh")
+                self.assertEqual(coverage["launcher_sha256"], expected_sha)
+
     def run_script(self, script: Path, *args: str, env: dict[str, str] | None = None) -> Path:
         result = subprocess.run(
             ["python3", str(script), *args],
@@ -105,7 +122,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v7")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v8")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
