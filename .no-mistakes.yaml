@@ -8,3 +8,77 @@ commands:
 # Allow one automatic fix round; anything unresolved still parks for a human.
 auto_fix:
   review: 1
+
+# Review-owned repo-specific judgment (issue #117; values proposed there).
+# Scoping rule (v1.57.0 source-traced): Review's post-model code drops findings
+# whose delivery a later pipeline step owns, so entries here must target
+# correctness/contracts/invariants — never lint or docs concerns. This block is
+# the standing home for the crew→gate ratchet: when review/test crews hit a
+# repeated finding class, its codification lands here (or as a suite test or
+# lint rule), and the gate enforces it on every future candidate.
+review:
+  path_instructions:
+    - path: "bin/rzr-pi-watchtower.sh"
+      instructions: |
+        This launcher is byte-hash-pinned by the watchtower-policy-snapshot
+        skill (PI_LAUNCHER_SHA256 in the .claude/ and .agents/ skill copies).
+        Flag ANY edit that does not update the constant in BOTH copies and bump
+        the artifact schema. The exec line and the top-level args=( ... )
+        grammar are contract.
+    - path: "lib/rozoro_monitor/protocol.py"
+      instructions: |
+        Frozen wire contract: unknown fields are rejected at runtime, so a new
+        field on an existing message must be optional and tolerated when
+        absent. Immutable identities (harness, role, driver_id, registration
+        epoch semantics) must stay immutable. Flag any schema change that would
+        break an older client or reorder validation semantics.
+    - path: "lib/rozoro_monitor/**"
+      instructions: |
+        Deliberate patterns — do not flag as defects when justified by a
+        comment: broad excepts used as fail-safe/fail-closed guards;
+        single-writer files with flock + atomic tmp/replace; fsync of parent
+        directories. DO flag: a broad except that silently swallows errors with
+        no justification; any write to generation_*_snapshots rows after
+        creation (they are immutable by design); any path where
+        delivered/acked cursor invariants (acked <= delivered <= latest) could
+        regress.
+    - path: "bin/*.sh"
+      instructions: |
+        bash 3.2 floor (no associative arrays, ${var,,}, readarray).
+        NUL-separated arg-passing conventions (printf '%s\0') must stay
+        NUL-safe end to end. Watch set -euo pipefail interactions: a trailing
+        `[ -n "$x" ] && ...` as a function's last line changes its exit status.
+    - path: ".claude/skills/**"
+      instructions: |
+        Skills exist as byte-identical copies under .claude/skills/ and
+        .agents/skills/. Flag any change to one copy that does not identically
+        change the other.
+    - path: ".agents/skills/**"
+      instructions: |
+        Skills exist as byte-identical copies under .claude/skills/ and
+        .agents/skills/. Flag any change to one copy that does not identically
+        change the other.
+    - path: "tests/**"
+      instructions: |
+        Tests must assert observable behavior (exit status, stdout, on-disk
+        state) — flag tests that grep implementation source as proof. The suite
+        runs network-disabled in a Linux container: flag macOS-specific or
+        network-dependent test assumptions.
+    - path: "docs/decisions/**"
+      instructions: |
+        Approved ADRs are immutable history. Flag edits that change the meaning
+        of an approved ADR — the correct shape is a new superseding ADR with a
+        supersedes: reference.
+
+# Docs ownership policy for the document step. "Docs move with code" is this
+# repo's most-repeated review finding; its delivery is document-owned, so it
+# lives here rather than in review.path_instructions.
+document:
+  instructions: |
+    Docs move with code: when behavior, flags, or environment variables change,
+    the same change must update README.md (command table and env-flag docs),
+    the `bin/rozoro help` output, the affected script's usage banner, and any
+    file under docs/ stating the old behavior. Ownership: README.md owns the
+    operator-facing command surface and quickstart; docs/ owns deep guides and
+    runbooks; docs/ubiquitous-language.md owns terminology; docs/decisions/
+    owns rationale (new ADRs supersede, never rewrite approved ones).
