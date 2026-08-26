@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -34,6 +36,14 @@ def handoff(turn: int, verdict: str, *, reason: str = "", pending: str = "none",
 
 
 class DatedArtifactSkillTests(unittest.TestCase):
+    def test_policy_snapshot_copies_and_launcher_hash_cannot_drift(self) -> None:
+        agents = REPO / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
+        claude = REPO / ".claude/skills/watchtower-policy-snapshot/scripts/snapshot.py"
+        self.assertEqual(agents.read_bytes(), claude.read_bytes())
+        match = re.search(r'^PI_LAUNCHER_SHA256 = "([0-9a-f]{64})"$', agents.read_text(), re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(hashlib.sha256(PI_LAUNCHER_BYTES).hexdigest(), match.group(1))
+
     def run_script(self, script: Path, *args: str, env: dict[str, str] | None = None) -> Path:
         result = subprocess.run(
             ["python3", str(script), *args],
@@ -105,7 +115,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v7")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v8")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")

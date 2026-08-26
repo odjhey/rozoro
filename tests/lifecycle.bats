@@ -31,6 +31,20 @@ load test_helper/common
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tstart\t'"$agent_name"$'\t--kind\tclaude\t--pane\tp1'
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\tdo exactly this'
   ! grep -F 'do exactly this' "$ROZORO_HOME/tasks/task/sysprompt.md"
+  ! grep -F 'dispatcher_' "$ROZORO_HOME/state/task.meta"
+}
+
+@test "spawn best-effort stamps its registered dispatcher" {
+  mkdir -p "$ROZORO_HOME/watchtowers/herdr-driver-pane"
+  printf '%s\n' '{"schema":1,"driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","preset":{"name":"luna","version":"3","sha256":"abc"}}' > "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"
+  run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  meta="$ROZORO_HOME/state/task.meta"
+  assert_file_contains "$meta" 'dispatcher_driver=herdr-driver-pane'
+  assert_file_contains "$meta" 'dispatcher_wt_name=north'
+  assert_file_contains "$meta" 'dispatcher_preset=luna'
+  assert_file_contains "$meta" 'dispatcher_preset_version=3'
+  assert_file_contains "$meta" 'dispatcher_preset_sha=abc'
 }
 
 @test "Claude event-bus production generates isolated hooks and exact launch identity" {
@@ -303,7 +317,9 @@ teardown_preserves_cwd() {
 
 @test "session link persists and enriches the effective launch profile" {
   uuid='11111111-2222-4333-8444-555555555555'
-  write_meta task 'harness=pi' 'model=anthropic/claude-sonnet-4-6' 'effort=high' 'permission_mode=auto' 'fast=false' "session=$uuid"
+  write_meta task 'harness=pi' 'model=anthropic/claude-sonnet-4-6' 'effort=high' 'permission_mode=auto' 'fast=false' "session=$uuid" \
+    'dispatcher_driver=herdr-p1' 'dispatcher_wt_name=north' 'dispatcher_preset=luna' \
+    'dispatcher_preset_version=3' 'dispatcher_preset_sha=abc'
   store="$HOME/.pi/agent/sessions/--fixture--"
   mkdir -p "$store" "$ROZORO_HOME/tasks/task"
   printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/pi.jsonl"
@@ -313,6 +329,7 @@ teardown_preserves_cwd() {
   [ "$(jq -r '.profile.model' "$ROZORO_HOME/tasks/task/session.json")" = 'anthropic/claude-sonnet-4-6' ]
   [ "$(jq -r '.profile.effort' "$ROZORO_HOME/tasks/task/session.json")" = high ]
   [ "$(jq -r '.profile.fast' "$ROZORO_HOME/tasks/task/session.json")" = false ]
+  [ "$(jq -r '[.dispatcher.driver_id,.dispatcher.watchtower_name,.dispatcher.preset,.dispatcher.preset_version,.dispatcher.preset_sha256] | join(":")' "$ROZORO_HOME/tasks/task/session.json")" = 'herdr-p1:north:luna:3:abc' ]
 }
 
 @test "Codex session link stores a fast resolved profile" {

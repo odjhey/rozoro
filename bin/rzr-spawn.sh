@@ -179,6 +179,17 @@ do_spawn() {
   rzr_meta_set "$ID" event_bus "$EVENT_BUS"
   rzr_meta_set "$ID" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
+  # Attribution is observational only: lookup or writes must never block spawn.
+  local dispatcher
+  dispatcher="$(rzr_dispatcher_lookup 2>/dev/null || true)"
+  if [ -n "$dispatcher" ]; then
+    rzr_meta_set "$ID" dispatcher_driver "$(printf '%s' "$dispatcher" | jq -r '.driver_id // empty')" || true
+    rzr_meta_set "$ID" dispatcher_wt_name "$(printf '%s' "$dispatcher" | jq -r '.watchtower_name // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset "$(printf '%s' "$dispatcher" | jq -r '.preset.name // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset_version "$(printf '%s' "$dispatcher" | jq -r '.preset.version // empty')" || true
+    rzr_meta_set "$ID" dispatcher_preset_sha "$(printf '%s' "$dispatcher" | jq -r '.preset.sha256 // empty')" || true
+  fi
+
   echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"
 
   if [ "$NO_AGENT" -eq 1 ]; then

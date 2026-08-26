@@ -3,7 +3,7 @@ name: watchtower-policy-snapshot
 description: Persist an immutable, dated snapshot of the explicit Pi Watchtower policy source in this Rozoro checkout, with accurate per-harness coverage. Use when an operator asks to archive, capture, or compare current Watchtower rules or policy.
 compatibility: Requires Python 3.11+, a Rozoro checkout, and local filesystem access.
 metadata:
-  artifact-schema: rozoro.watchtower-policy-snapshot/v7
+  artifact-schema: rozoro.watchtower-policy-snapshot/v8
 ---
 
 # Watchtower policy snapshot

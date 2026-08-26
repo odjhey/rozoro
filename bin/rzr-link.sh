@@ -35,12 +35,18 @@ if [ -z "$HARNESS" ] && [ -s "$OUT" ]; then
 fi
 HARNESS="${HARNESS:-claude}"
 HAVE_PROFILE=0; PROFILE_MODEL=""; PROFILE_EFFORT=""; PROFILE_PERMMODE=""; PROFILE_FAST="false"
+DISPATCHER_DRIVER=""; DISPATCHER_NAME=""; DISPATCHER_PRESET=""; DISPATCHER_VERSION=""; DISPATCHER_SHA=""
 if rzr_task_exists "$ID"; then
   HAVE_PROFILE=1
   PROFILE_MODEL="$(rzr_meta_get "$ID" model || true)"
   PROFILE_EFFORT="$(rzr_meta_get "$ID" effort || true)"
   PROFILE_PERMMODE="$(rzr_meta_get "$ID" permission_mode || true)"
   PROFILE_FAST="$(rzr_meta_get "$ID" fast || true)"; PROFILE_FAST="${PROFILE_FAST:-false}"
+  DISPATCHER_DRIVER="$(rzr_meta_get "$ID" dispatcher_driver || true)"
+  DISPATCHER_NAME="$(rzr_meta_get "$ID" dispatcher_wt_name || true)"
+  DISPATCHER_PRESET="$(rzr_meta_get "$ID" dispatcher_preset || true)"
+  DISPATCHER_VERSION="$(rzr_meta_get "$ID" dispatcher_preset_version || true)"
+  DISPATCHER_SHA="$(rzr_meta_get "$ID" dispatcher_preset_sha || true)"
   rzr_profile_validate "$HARNESS" "$PROFILE_MODEL" "$PROFILE_EFFORT" "$PROFILE_FAST"
 fi
 
@@ -53,7 +59,10 @@ if [ "$REFRESH" -eq 0 ] && [ -s "$OUT" ] && RZR_EXPECT_HARNESS="$HARNESS" RZR_EX
     tmp="$OUT.tmp.$$"
     if jq --arg harness "$HARNESS" --arg model "$PROFILE_MODEL" --arg effort "$PROFILE_EFFORT" \
       --arg permission_mode "$PROFILE_PERMMODE" --argjson fast "$PROFILE_FAST" \
-      '.profile = {harness:$harness, model:$model, effort:$effort, permission_mode:$permission_mode, fast:$fast}' \
+      --arg dd "$DISPATCHER_DRIVER" --arg dn "$DISPATCHER_NAME" --arg dp "$DISPATCHER_PRESET" \
+      --arg dv "$DISPATCHER_VERSION" --arg ds "$DISPATCHER_SHA" \
+      '.profile = {harness:$harness, model:$model, effort:$effort, permission_mode:$permission_mode, fast:$fast} |
+       if $dd != "" then .dispatcher = {driver_id:$dd, watchtower_name:$dn, preset:$dp, preset_version:$dv, preset_sha256:$ds} else del(.dispatcher) end' \
       "$OUT" > "$tmp"; then
       mv "$tmp" "$OUT"
     else
@@ -188,7 +197,10 @@ esac
 RZR_OUT="$OUT" RZR_ID="$ID" RZR_HARNESS="$HARNESS" RZR_CWD="$CWD" \
 RZR_UUID="$uuid" RZR_PATH="$([ "$match" = preallocated ] && printf '' || printf '%s' "$match")" RZR_RESUME="$resume" RZR_HAVE_PROFILE="$HAVE_PROFILE" \
 RZR_PROFILE_MODEL="$PROFILE_MODEL" RZR_PROFILE_EFFORT="$PROFILE_EFFORT" \
-RZR_PROFILE_PERMMODE="$PROFILE_PERMMODE" RZR_PROFILE_FAST="$PROFILE_FAST" python3 - <<'PY'
+RZR_PROFILE_PERMMODE="$PROFILE_PERMMODE" RZR_PROFILE_FAST="$PROFILE_FAST" \
+RZR_DISPATCHER_DRIVER="$DISPATCHER_DRIVER" RZR_DISPATCHER_NAME="$DISPATCHER_NAME" \
+RZR_DISPATCHER_PRESET="$DISPATCHER_PRESET" RZR_DISPATCHER_VERSION="$DISPATCHER_VERSION" \
+RZR_DISPATCHER_SHA="$DISPATCHER_SHA" python3 - <<'PY'
 import json, os
 data = {"id": os.environ["RZR_ID"], "harness": os.environ["RZR_HARNESS"], "cwd": os.environ["RZR_CWD"],
         "session_id": os.environ["RZR_UUID"], "resume": os.environ["RZR_RESUME"]}
@@ -200,6 +212,12 @@ if os.environ["RZR_HAVE_PROFILE"] == "1":
                        "effort": os.environ["RZR_PROFILE_EFFORT"],
                        "permission_mode": os.environ["RZR_PROFILE_PERMMODE"],
                        "fast": os.environ["RZR_PROFILE_FAST"] == "true"}
+if os.environ["RZR_DISPATCHER_DRIVER"]:
+    data["dispatcher"] = {"driver_id": os.environ["RZR_DISPATCHER_DRIVER"],
+                          "watchtower_name": os.environ["RZR_DISPATCHER_NAME"],
+                          "preset": os.environ["RZR_DISPATCHER_PRESET"],
+                          "preset_version": os.environ["RZR_DISPATCHER_VERSION"],
+                          "preset_sha256": os.environ["RZR_DISPATCHER_SHA"]}
 json.dump(data, open(os.environ["RZR_OUT"], "w"), indent=2)
 PY
 echo "rzr-link: $ID -> $uuid  (resume: $resume)"

@@ -3,16 +3,27 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
-RESUME="" CWD="$PWD" PASS=()
+RESUME="" CWD="$PWD" PASS=() PRESET="" WT_NAME="" MODEL="" EFFORT="" VERSION="" PRESET_SHA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --resume) RESUME="${2:-}"; shift 2 ;;
     --cwd) CWD="${2:-}"; shift 2 ;;
+    --preset) PRESET="${2:-}"; [ -n "$PRESET" ] || rzr_die "--preset requires a name"; shift 2 ;;
+    --wt-name) WT_NAME="${2:-}"; [ -n "$WT_NAME" ] || rzr_die "--wt-name requires a name"; shift 2 ;;
     --) shift; PASS+=("$@"); break ;;
-    -h|--help) echo "usage: ./bin/rozoro claude-watchtower [--resume session-id] [--cwd dir] [-- claude-args...]"; exit 0 ;;
+    -h|--help) echo "usage: ./bin/rozoro claude-watchtower [--preset name] [--wt-name name] [--resume session-id] [--cwd dir] [-- claude-args...]"; exit 0 ;;
     *) PASS+=("$1"); shift ;;
   esac
 done
+if [ -n "$PRESET" ]; then
+  rzr_wtpreset_exists "$PRESET" || rzr_die "no such watchtower preset '$PRESET'"
+  rzr_wtpreset_validate "$PRESET" || rzr_die "watchtower preset '$PRESET' has invalid JSON or known field types"
+  [ "$(rzr_wtpreset_field "$PRESET" harness)" = claude ] || rzr_die "watchtower preset '$PRESET' is not for harness claude"
+  [ -n "$WT_NAME" ] || WT_NAME="$PRESET"
+  MODEL="$(rzr_wtpreset_field "$PRESET" model)"; EFFORT="$(rzr_wtpreset_field "$PRESET" effort)"
+  VERSION="$(rzr_wtpreset_field "$PRESET" version)"; VERSION="${VERSION:-0}"
+  PRESET_SHA="$(rzr_sha256_file "$(rzr_wtpreset_path "$PRESET")")"
+fi
 rzr_claude_event_capability || exit 1
 "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
 CLAUDE_BIN="$(command -v claude)"
@@ -25,6 +36,11 @@ case "$NATIVE_SESSION" in ''|*[!A-Za-z0-9._-]*) rzr_die "invalid Claude session 
 INCARNATION="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 ADAPTER_SESSION="$NATIVE_SESSION.$INCARNATION"
 DRIVER="claude-$NATIVE_SESSION"
+if [ -n "$WT_NAME" ]; then
+  export ROZORO_WT_DRIVER="$DRIVER" ROZORO_WT_NAME="$WT_NAME" ROZORO_WT_PRESET="$PRESET"
+  export ROZORO_WT_PRESET_VERSION="$VERSION" ROZORO_WT_PRESET_SHA256="$PRESET_SHA"
+  export ROZORO_WT_MODEL="$MODEL" ROZORO_WT_EFFORT="$EFFORT"
+fi
 DIR="$(rzr_driver_dir "$DRIVER")"; mkdir -p "$(rzr_watchtowers_dir)" "$DIR"; chmod 700 "$(rzr_watchtowers_dir)" "$DIR"
 # Refuse mixed ownership before starting either path.
 if [ -e "$DIR/pending.json" ] || [ -e "$DIR/ack" ]; then
@@ -55,5 +71,7 @@ READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
 
 args=(--settings "$SETTINGS")
 if [ -n "$RESUME" ]; then args+=(--resume "$NATIVE_SESSION"); else args+=(--session-id "$NATIVE_SESSION"); fi
+[ -z "$MODEL" ] || args+=(--model "$MODEL")
+[ -z "$EFFORT" ] || args+=(--effort "$EFFORT")
 if [ "${#PASS[@]}" -gt 0 ]; then exec "$CLAUDE_BIN" "${args[@]}" "${PASS[@]}"; fi
 exec "$CLAUDE_BIN" "${args[@]}"

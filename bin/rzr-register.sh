@@ -95,15 +95,40 @@ mkdir -p "$DIR"; chmod 700 "$DIR"
 
 RZR_REG_OUT="$DIR/target.json" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
+RZR_REG_WT_NAME="${ROZORO_WT_NAME:-}" RZR_REG_PRESET="${ROZORO_WT_PRESET:-}" \
+RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_SHA256:-}" \
+RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
+RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" RZR_REG_LOG="$DIR/registrations.jsonl" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import json, os
 tmp = os.environ["RZR_REG_OUT"] + ".tmp.%d" % os.getpid()
 os.umask(0o077)
-json.dump({"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
-           "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
-           "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
-           "created": os.environ["RZR_REG_TS"]}, open(tmp, "w"), indent=2)
+data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
+        "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
+        "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
+        "created": os.environ["RZR_REG_TS"]}
+if os.environ["RZR_REG_WT_NAME"]:
+    data["watchtower_name"] = os.environ["RZR_REG_WT_NAME"]
+if os.environ["RZR_REG_PRESET"]:
+    data["preset"] = {"name": os.environ["RZR_REG_PRESET"],
+                      "version": os.environ["RZR_REG_VERSION"] or "0",
+                      "sha256": os.environ["RZR_REG_SHA"],
+                      "model": os.environ["RZR_REG_MODEL"],
+                      "effort": os.environ["RZR_REG_EFFORT"]}
+    if os.environ["RZR_REG_POLICY_SHA"]:
+        data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
+with open(tmp, "w") as stream:
+    json.dump(data, stream, indent=2)
 os.replace(tmp, os.environ["RZR_REG_OUT"])
+record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
+          "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
+if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
+if "preset" in data: record["preset"] = data["preset"]
+fd = os.open(os.environ["RZR_REG_LOG"], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+try:
+    os.write(fd, (json.dumps(record, separators=(",", ":")) + "\n").encode())
+finally:
+    os.close(fd)
 PY
 
 [ "$QUIET" -eq 1 ] || echo "$DRIVER_ID"

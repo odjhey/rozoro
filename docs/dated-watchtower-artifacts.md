@@ -36,7 +36,7 @@ Example metadata shape:
 
 ```json
 {
-  "schema": "rozoro.watchtower-policy-snapshot/v7",
+  "schema": "rozoro.watchtower-policy-snapshot/v8",
   "artifact_type": "watchtower-policy-snapshot",
   "created_at": "2026-08-24T03:25:36.123456Z",
   "run_id": "20260824T032536.123456Z-a1b2c3d4",
@@ -59,7 +59,7 @@ Example metadata shape:
   },
   "harness_coverage": {
     "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v1",
-    "expected_pi_launcher_sha256": "f7414264943923bf2aebb1714c6af17c6b4483613ac682b801071cb26013abfa",
+    "expected_pi_launcher_sha256": "47699ceae08f8ff74287b940204415119ddbb482fcd591a2b2b7c99fd8fee5e2",
     "option": "--append-system-prompt",
     "value": "$ROOT/templates/watchtower.md",
     "pi": {"status": "captured", "launcher": "bin/rzr-pi-watchtower.sh", "launcher_sha256": "…"},

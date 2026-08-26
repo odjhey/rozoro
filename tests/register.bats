@@ -16,6 +16,28 @@ load test_helper/common
   [ "$(file_perm "$target")" = 600 ]
 }
 
+@test "registration records optional watchtower preset and appends private tenure records" {
+  export HERDR_PANE_ID=driver-pane ROZORO_WT_NAME=north ROZORO_WT_PRESET=luna
+  export ROZORO_WT_PRESET_VERSION=3 ROZORO_WT_PRESET_SHA256=abc ROZORO_WT_POLICY_SHA256=def
+  export ROZORO_WT_MODEL=luna ROZORO_WT_EFFORT=high
+  fake_pane driver-pane idle pi true
+  run rzr-register.sh --harness pi; assert_success
+  target="$ROZORO_HOME/watchtowers/$output/target.json"; log="${target%/target.json}/registrations.jsonl"
+  [ "$(jq -r '.watchtower_name' "$target")" = north ]
+  [ "$(jq -r '.preset | [.name,.version,.sha256,.policy_sha256,.model,.effort] | join(":")' "$target")" = 'luna:3:abc:def:luna:high' ]
+  [ "$(wc -l < "$log" | tr -d ' ')" = 1 ]; [ "$(file_perm "$log")" = 600 ]
+  run rzr-register.sh --harness pi; assert_success
+  [ "$(wc -l < "$log" | tr -d ' ')" = 2 ]
+}
+
+@test "registration without watchtower env preserves legacy target shape" {
+  export HERDR_PANE_ID=driver-pane
+  fake_pane driver-pane idle claude true
+  run rzr-register.sh --harness claude; assert_success
+  target="$ROZORO_HOME/watchtowers/$output/target.json"
+  [ "$(jq 'has("watchtower_name") or has("preset")' "$target")" = false ]
+}
+
 @test "auto selection ignores a stale CODEX_THREAD_ID and picks the validated harness" {
   # A Claude watchtower launched from a Codex environment inherits CODEX_THREAD_ID.
   # It must NOT wake that stale thread; it must register the real Claude pane.

@@ -271,6 +271,68 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
   rzr_crew_json "$1" | jq -r '(.rules // []) | join("\n")' 2>/dev/null
 }
 
+# --- watchtower presets ----------------------------------------------------
+# Named, versioned launch metadata for resident drivers. Unlike crew presets,
+# there is intentionally no virtual default: no preset preserves legacy launch
+# behavior exactly.
+RZR_WT_PRESETS="$RZR_HOME/watchtower-presets"
+
+rzr_wtpreset_path() { printf '%s/%s.json' "$RZR_WT_PRESETS" "$1"; }
+rzr_wtpreset_exists() { [ -f "$(rzr_wtpreset_path "$1")" ]; }
+rzr_wtpreset_json() { cat "$(rzr_wtpreset_path "$1")"; }
+rzr_wtpreset_field() { rzr_wtpreset_json "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null; }
+rzr_wtpreset_validate() {
+  local json
+  json="$(rzr_wtpreset_json "$1")" || return 1
+  printf '%s' "$json" | jq -e '
+    . as $p | type == "object" and
+    (["harness", "model", "effort", "permission_mode", "notes"] |
+      all(. as $k | ($p | has($k) | not) or ($p[$k] | type == "string"))) and
+    (($p | has("schema") | not) or ($p.schema | type == "number")) and
+    (($p | has("version") | not) or ($p.version | type == "number")) and
+    (($p.harness // "") | IN("claude", "pi")) and
+    (($p.effort // "") | IN("", "low", "medium", "high", "xhigh", "max"))
+  ' >/dev/null 2>&1
+}
+
+rzr_sha256_file() { python3 - "$1" <<'PY'
+import hashlib, sys
+with open(sys.argv[1], "rb") as stream:
+    print(hashlib.sha256(stream.read()).hexdigest())
+PY
+}
+
+# Best-effort dispatcher discovery. Always succeeds; prints the registered
+# target JSON only for one unambiguous match.
+rzr_dispatcher_lookup() {
+  local dir cand matches="" target
+  if [ -n "${ROZORO_WT_DRIVER:-}" ]; then
+    cand="$(rzr_driver_dir "$ROZORO_WT_DRIVER" 2>/dev/null || true)"
+    [ -s "$cand/target.json" ] && matches="$cand"
+  fi
+  if [ -z "$matches" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")" 2>/dev/null || true)"
+    [ -s "$cand/target.json" ] && matches="$cand"
+  fi
+  if [ -z "$matches" ] && [ -n "${CODEX_THREAD_ID:-}" ]; then
+    cand="$(rzr_driver_dir "$(rzr_driver_id_for codex "$CODEX_THREAD_ID")" 2>/dev/null || true)"
+    [ -s "$cand/target.json" ] && matches="$cand"
+  fi
+  if [ -z "$matches" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    for target in "$(rzr_watchtowers_dir)"/*/target.json; do
+      [ -s "$target" ] || continue
+      [ "$(jq -r '.identity // empty' "$target" 2>/dev/null)" = "$HERDR_PANE_ID" ] || continue
+      matches="${matches}${matches:+ }${target%/target.json}"
+    done
+  fi
+  # Paths are generated from safe driver components and cannot contain spaces.
+  # shellcheck disable=SC2086
+  set -- $matches
+  [ $# -eq 1 ] || return 0
+  jq -c '.' "$1/target.json" 2>/dev/null || true
+  return 0
+}
+
 # Validate the fully-resolved launch tuple. Fast is intentionally Codex-only in
 # stage 1 and limited to the model whose catalog advertises the priority tier.
 rzr_profile_validate() {  # <harness> <model> <effort> <fast>
