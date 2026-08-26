@@ -59,6 +59,13 @@ SH
   grep -E '^wt= preset= version= driver= preset_sha= policy_sha=$' "$PI_LOG"
 }
 
+@test "named Pi launch stamps shipped policy identity without a preset" {
+  setup_pi
+  run rzr-pi-watchtower.sh --wt-name north --cwd "$TEST_ROOT"
+  assert_success
+  grep -E '^wt=north preset= version= driver=herdr-manual_p1 preset_sha= policy_sha=[0-9a-f]{64}$' "$PI_LOG"
+}
+
 @test "Pi watchtower preset injects resources and stamps inherited registration env" {
   setup_pi
   mkdir -p "$ROZORO_HOME/watchtower-presets"

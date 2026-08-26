@@ -32,10 +32,10 @@ if [ -n "$PRESET" ]; then
   EFFORT="$(printf '%s' "$RESOLVED" | jq -r '.document.effort // empty')"
   VERSION="$(printf '%s' "$RESOLVED" | jq -r '.document.version // 0')"
   PRESET_SHA="$(printf '%s' "$RESOLVED" | jq -r '.sha256')"
-  POLICY_ID="$(rzr_file_identity "$ROOT/templates/watchtower.md")"
-  POLICY_SHA="${POLICY_ID##*:}"
 fi
 if [ -n "$WT_NAME" ]; then
+  POLICY_ID="$(rzr_file_identity "$ROOT/templates/watchtower.md")"
+  POLICY_SHA="${POLICY_ID##*:}"
   export ROZORO_WT_NAME="$WT_NAME" ROZORO_WT_PRESET="$PRESET" ROZORO_WT_PRESET_VERSION="$VERSION"
   export ROZORO_WT_PRESET_SHA256="$PRESET_SHA" ROZORO_WT_POLICY_SHA256="$POLICY_SHA"
   export ROZORO_WT_MODEL="$MODEL" ROZORO_WT_EFFORT="$EFFORT"
