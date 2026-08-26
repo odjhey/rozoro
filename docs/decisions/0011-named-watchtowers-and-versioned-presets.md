@@ -15,7 +15,7 @@ Registration remains filesystem-only. `target.json` is the authoritative current
 
 Dispatch copies a best-effort match into task metadata and `session.json`; absent or ambiguous identity never prevents a spawn.
 
-Filesystem safety for this state means owner-private directories, no-follow traversal, owned regular files, exclusive temporary creation, and fail-closed handling when suspicious state is detected. An actively malicious or continuously racing process running as the same Unix UID is outside this contract. Rozoro does not promise forward progress or checked-inode rename/unlink semantics under same-UID sabotage; adding that guarantee requires a separate architectural decision and an isolation boundary stronger than pathname hardening.
+Filesystem safety for this state means owner-private directories, no-follow traversal, owned regular files, exclusive temporary creation, and fail-closed handling when suspicious state is detected. An actively malicious or continuously racing process running as the same Unix UID is outside this contract. Rozoro does not promise forward progress or checked-inode rename/unlink semantics under same-UID sabotage; adding that guarantee requires a separate architectural decision and an isolation boundary stronger than pathname hardening. Reviews of this feature must not silently broaden that threat model; any stronger guarantee is a new architectural decision.
 
 ## Consequences
 
