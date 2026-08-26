@@ -414,11 +414,23 @@ rzr_dispatcher_candidate_matches() {  # <json> <backend> <identity>
   actual_backend="$(printf '%s' "$json" | jq -r '.backend // empty')"
   [ -z "$actual_backend" ] || [ "$actual_backend" = "$backend" ]
 }
+rzr_dispatcher_add_candidate() {  # <driver-id> <backend> <identity>
+  local candidate="$1" backend="$2" identity="$3" existing
+  if [ "${#dispatcher_candidates[@]}" -gt 0 ]; then
+    for existing in "${dispatcher_candidates[@]}"; do
+      [ "$existing" = "$candidate" ] && return 0
+    done
+  fi
+  dispatcher_candidates+=("$candidate")
+  dispatcher_backends+=("$backend")
+  dispatcher_identities+=("$identity")
+}
 
 # Best-effort dispatcher discovery. Explicit driver wins; identity-derived and
 # scan candidates are deduplicated and accepted only when unambiguous.
 rzr_dispatcher_lookup() {
-  local candidate json; local -a dispatcher_candidates=() dispatcher_backends=() dispatcher_identities=()
+  local candidate json
+  local -a dispatcher_candidates=() dispatcher_backends=() dispatcher_identities=()
   if [ -n "${ROZORO_WT_DRIVER:-}" ]; then
     json="$(rzr_dispatcher_target_json "$ROZORO_WT_DRIVER" || true)"
     if [ -n "$json" ]; then printf '%s\n' "$json"; return 0; fi
@@ -427,27 +439,25 @@ rzr_dispatcher_lookup() {
     candidate="$(rzr_driver_id_for herdr "$HERDR_PANE_ID")"
     json="$(rzr_dispatcher_target_json "$candidate" || true)"
     if rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID"; then
-      dispatcher_candidates+=("$candidate"); dispatcher_backends+=(herdr); dispatcher_identities+=("$HERDR_PANE_ID")
+      rzr_dispatcher_add_candidate "$candidate" herdr "$HERDR_PANE_ID"
     fi
   fi
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
     candidate="$(rzr_driver_id_for codex "$CODEX_THREAD_ID")"
     json="$(rzr_dispatcher_target_json "$candidate" || true)"
     if rzr_dispatcher_candidate_matches "$json" codex "$CODEX_THREAD_ID"; then
-      dispatcher_candidates+=("$candidate"); dispatcher_backends+=(codex); dispatcher_identities+=("$CODEX_THREAD_ID")
+      rzr_dispatcher_add_candidate "$candidate" codex "$CODEX_THREAD_ID"
     fi
   fi
-  if [ -n "${HERDR_PANE_ID:-}" ]; then
+  if [ -n "${HERDR_PANE_ID:-}${CODEX_THREAD_ID:-}" ]; then
     while IFS= read -r json; do
-      rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID" || continue
       candidate="$(printf '%s' "$json" | jq -r '.driver_id')"
-      local seen=0 existing
-      if [ "${#dispatcher_candidates[@]}" -gt 0 ]; then
-        for existing in "${dispatcher_candidates[@]}"; do [ "$existing" != "$candidate" ] || seen=1; done
+      if [ -n "${HERDR_PANE_ID:-}" ] && rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID"; then
+        rzr_dispatcher_add_candidate "$candidate" herdr "$HERDR_PANE_ID"
       fi
-      [ "$seen" -eq 1 ] && continue
-      dispatcher_candidates+=("$candidate")
-      dispatcher_backends+=(herdr); dispatcher_identities+=("$HERDR_PANE_ID")
+      if [ -n "${CODEX_THREAD_ID:-}" ] && rzr_dispatcher_candidate_matches "$json" codex "$CODEX_THREAD_ID"; then
+        rzr_dispatcher_add_candidate "$candidate" codex "$CODEX_THREAD_ID"
+      fi
     done < <(rzr_watchtower_target_json || true)
   fi
   [ "${#dispatcher_candidates[@]}" -eq 1 ] || return 0
@@ -1025,7 +1035,12 @@ PY
 }
 
 rzr_target_field() {  # <driver-dir> <field>
-  jq -r --arg k "$2" '.[$k] // empty' "$1/target.json" 2>/dev/null
+  local dir="$1" field="$2" driver json
+  driver="${dir##*/}"
+  [ "$dir" = "$(rzr_driver_dir "$driver")" ] || return 1
+  json="$(rzr_watchtower_target_json "$driver" || true)"
+  [ -n "$json" ] || return 1
+  printf '%s' "$json" | jq -r --arg k "$field" '.[$k] // empty' 2>/dev/null
 }
 
 # Resolve the registered wake target for `--wake`. With an explicit id, require it
@@ -1034,25 +1049,26 @@ rzr_target_field() {  # <driver-dir> <field>
 # guess a backend from a bare environment variable: an unregistered or ambiguous
 # environment is a hard error (register first).
 rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
-  local explicit="${1:-}" dir cand matches=""
+  local explicit="${1:-}" dir cand target
+  local -a matches=()
   if [ -n "$explicit" ]; then
-    dir="$(rzr_driver_dir "$explicit")"
-    [ -s "$dir/target.json" ] || rzr_die "driver '$explicit' is not registered (run: ./bin/rozoro register --harness <h>)"
-    printf '%s' "$dir"; return 0
+    target="$(rzr_watchtower_target_json "$explicit" || true)"
+    [ -n "$target" ] || rzr_die "driver '$explicit' is not registered (run: ./bin/rozoro register --harness <h>)"
+    printf '%s' "$(rzr_driver_dir "$explicit")"; return 0
   fi
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
-    cand="$(rzr_driver_dir "$(rzr_driver_id_for codex "$CODEX_THREAD_ID")")"
-    [ -s "$cand/target.json" ] && matches="$matches $cand"
+    cand="$(rzr_driver_id_for codex "$CODEX_THREAD_ID")"
+    target="$(rzr_watchtower_target_json "$cand" || true)"
+    [ -n "$target" ] && matches+=("$(rzr_driver_dir "$cand")")
   fi
   if [ -n "${HERDR_PANE_ID:-}" ]; then
-    cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")")"
-    [ -s "$cand/target.json" ] && matches="$matches $cand"
+    cand="$(rzr_driver_id_for herdr "$HERDR_PANE_ID")"
+    target="$(rzr_watchtower_target_json "$cand" || true)"
+    [ -n "$target" ] && matches+=("$(rzr_driver_dir "$cand")")
   fi
-  # shellcheck disable=SC2086 # Matches contain only validated path components.
-  set -- $matches
-  case $# in
+  case ${#matches[@]} in
     0) rzr_die "--wake found no registered watchtower for this environment (run: ./bin/rozoro register --harness <h>)" ;;
-    1) printf '%s' "$1" ;;
+    1) printf '%s' "${matches[0]}" ;;
     *) rzr_die "--wake is ambiguous: multiple registered targets match this environment; pass --driver <id>" ;;
   esac
 }
