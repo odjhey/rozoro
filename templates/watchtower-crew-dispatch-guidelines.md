@@ -49,28 +49,91 @@ its own scheduling strategy and for the Workset Merger to preserve the intended
 stack/integration shape. Unknown repository facts may remain explicit assumptions
 or discovery tasks rather than being treated as settled.
 
+## Verification ordering
+
+Mechanics precede judgment. When a Coder reports a committed candidate, the
+No-Mistakes Runner must be the first post-Coder verification hop for that exact
+head. Reviewer and Tester must follow only after the gate reports green for the exact
+final head reported by the run, which may differ from the submitted head when the
+pipeline changes the candidate. The sole exception is that, after the gate reports
+red, Watchtower may dispatch an explicitly labeled red-candidate judgment recording
+`gate_status: red`, the exact red commit/tree/base/merge-base, and a reason limited
+to a suspected design dead end, contract ambiguity, acceptance risk, or deeper
+direction within those categories that the gate cannot provide. That judgment must
+be labeled "not verification of record," does not bypass or replace No-Mistakes,
+can never satisfy the gate, and does not authorize redundant suite execution.
+
+Every repair, gate fix, test contribution, integration, or other candidate-changing
+action creates a new exact candidate, invalidates prior gate and Reviewer/Tester
+attestations for that new head, and must re-enter No-Mistakes. A mechanical-only
+change still requires that gate rerun, but does not require fresh Reviewer or Tester
+judgment unless it creates or changes a design, contract, correctness, acceptance,
+behavior/test-design, or other judgment question.
+
+Old gate and Reviewer/Tester observations remain context bound only to their old
+head; never relabel them as observations of, or assurance produced for, a new head.
+The Workset Merger, or a named reconciliation owner it explicitly routes, records
+for every final-head reconciliation: old commit/tree/base/merge-base identities,
+final commit/tree/base/merge-base identities, changed paths and cause, affected
+judgment questions, the rationale, whether fresh judgment is required, and the
+named owner.
+Whenever any new final head retains judgment from an old head, including after a
+mechanical gate fix or a Tester/Test Designer contribution, this named-owner
+reconciliation is mandatory. It must contain every field above even when its
+explicit fresh-judgment decision is "no fresh judgment required." Final readiness
+must reject an incomplete reconciliation. This record is final-head provenance,
+not rewritten old evidence.
+
+After a Reviewer finding is repaired, always gate the repaired candidate. Request
+fresh Reviewer judgment for each changed review question and fresh Test Designer
+judgment for each changed behavior/test-design question; when neither is affected,
+record the scoped no-new-judgment rationale in the reconciliation without rewriting
+old-head judgments. Apply the same rule after a rebase, merge, or other integration:
+gate the exact integrated head, request fresh Reviewer and/or Test Designer judgment
+for each affected question, and otherwise preserve old evidence only as context
+alongside the explicit final-head reconciliation provenance.
+
 ### Coder — `gpt-5.6-sol`, low
 
 Implement one bounded task. Follow repository-local rules and the supplied task
 boundary. Repair concrete reviewer/tester/no-mistakes/integration findings when
 Watchtower routes them back and the task boundary still holds.
 
-Report the candidate head and useful evidence so later roles can reason about the
-exact implementation that was produced.
+Report the exact committed candidate head and tree, plus its base and merge-base,
+ready for the No-Mistakes gate so later roles can reason about the exact
+implementation that was produced.
 
 ### Reviewer — `gpt-5.6-luna`, high
 
-Review an exact candidate in fresh context against the task, contracts,
-surrounding code, and acceptance criteria. Separate correctness defects from
-optional cleanup and provide evidence precise enough to route a repair or accept
-the candidate.
+Review a gate-green exact candidate in fresh context, applying judgment
+to its design, contracts, correctness reasoning, surrounding-code fit, and
+acceptance fit. Separate correctness defects from optional cleanup and provide
+evidence precise enough to route a repair or accept the judgment.
+
+This is a judgment-only role: do not execute the repository test suite. The
+No-Mistakes gate owns mechanical execution evidence bound to the exact head. For
+every repeated finding class, the handoff must propose codification as
+`review.path_instructions` in `.no-mistakes.yaml`, a test joining the repository
+suite, or a lint rule, so the gate owns future enforcement; novel and contextual
+judgment remains crew work.
 
 ### Tester — `gpt-5.6-luna`, high
 
-Exercise an exact candidate from its intended use case and meaningful failure
-modes. Cover boundaries, invalid inputs, retries, partial failures, state
-transitions, integrations, regressions, and weak-test risks that matter to the
-task. Bind the result to the tested head.
+Examine a gate-green exact candidate as a test designer, not a redundant
+suite runner. Drive behavior exploratorily from intended use cases and meaningful
+failure modes, covering boundaries, invalid inputs, retries, partial failures,
+state transitions, integrations, regressions, and weak-test risks that matter to
+the task. The durable deliverable is a new or extended test that joins the
+repository suite, or a patch-level test specification when the workflow does not
+permit a contribution, so the gate can enforce it on future candidates.
+
+Do not run the full existing repository suite as verification of record; bind
+exploratory findings and test contributions to the tested head. A test contribution
+creates a new candidate that must re-enter the gate rather than being presumed
+green. For every repeated finding class, the handoff must propose
+`review.path_instructions` in `.no-mistakes.yaml`, a repository-suite test, or a
+lint rule; once codified, the gate owns future enforcement while novel and
+contextual test judgment remains crew work.
 
 ### Escalation Replanner — `gpt-5.6-sol`, high
 
@@ -100,10 +163,18 @@ Coder ceiling remains 30 and it does not create attempts 31–40. Use the
 Operate the configured no-mistakes pipeline for an exact committed candidate.
 This is a thin execution/listening role, not another independent code reviewer.
 
+The gate is the first verification hop after a Coder's committed candidate and the
+re-entry point after every repair or candidate-changing action. Its rerun is the
+verification of record for mechanical confidence; do not replace it with fresh
+Reviewer or Tester crews merely to repeat suite, lint, format, or other mechanical
+checks. For every run, report separate submitted and final candidate records, each with its
+exact commit, tree, base, and merge-base identities. When the gate changes the head,
+do not collapse those records. Final readiness must reject any missing identity.
+
 Give it:
 
 - repository and workset/task identity;
-- exact candidate branch/head/base;
+- exact candidate branch, commit/tree, base, and merge-base;
 - operator intent/acceptance pointer that no-mistakes needs;
 - the selected no-mistakes profile when the machine profile names one; and
 - whether it should submit a new run or reattach to a known run.
@@ -114,8 +185,9 @@ submit through the configured `no-mistakes` Git remote or use the supported
 CLI/AXI flow for the installed version.
 
 Once a run exists, keep the runner available to listen/attach and report actionable
-structured state. The runner reports run ID, submitted/final heads, findings/gate
-state, fixes performed by no-mistakes, PR/CI state, and custody/recovery state.
+structured state. The runner reports run ID; separate submitted and final candidate
+commit/tree/base/merge-base records; findings/gate state; fixes performed by
+no-mistakes; PR/CI state; and custody/recovery state.
 Interpretation that depends on dependency order or integrated workset state goes
 to the Workset Merger.
 
