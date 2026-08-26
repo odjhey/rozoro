@@ -414,6 +414,7 @@ try:
                 if "owner_pid" in data and (not isinstance(data["owner_pid"],str) or not data["owner_pid"].isdigit() or not 1<=int(data["owner_pid"])<=2**63-1): continue
                 if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
                 if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
+                if data.get("schema") == 1 and (not safe(data.get("registration_id")) or not data["registration_id"]): continue
                 if "preset" in data:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue

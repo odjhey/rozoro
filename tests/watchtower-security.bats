@@ -151,12 +151,20 @@ SH
   long121="$(printf '%0121d' 0)"; long10k="$(printf '%010000d' 0)"; exact120="$(printf '%0120d' 0)"
   make_target long121 "{\"driver_id\":\"long121\",\"watchtower_name\":\"$long121\"}"
   make_target long10k "{\"driver_id\":\"long10k\",\"watchtower_name\":\"$long10k\"}"
-  make_target valid "{\"schema\":1,\"driver_id\":\"valid\",\"owner_pid\":\"42\",\"identity\":\"scan-pane\",\"watchtower_name\":\"$exact120\",\"preset\":{\"name\":\"luna\",\"version\":3,\"sha256\":\"abc\"},\"unknown\":\"$long10k\"}"
+  make_target missing-registration-id '{"schema":1,"driver_id":"missing-registration-id","identity":"missing-pane"}'
+  make_target empty-registration-id '{"schema":1,"registration_id":"","driver_id":"empty-registration-id","identity":"empty-pane"}'
+  make_target long-registration-id "{\"schema\":1,\"registration_id\":\"$long121\",\"driver_id\":\"long-registration-id\",\"identity\":\"long-pane\"}"
+  make_target valid "{\"schema\":1,\"registration_id\":\"$exact120\",\"driver_id\":\"valid\",\"owner_pid\":\"42\",\"identity\":\"scan-pane\",\"watchtower_name\":\"$exact120\",\"preset\":{\"name\":\"luna\",\"version\":3,\"sha256\":\"abc\"},\"unknown\":\"$long10k\"}"
   run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
   assert_success
   [ "$(printf '%s\n' "$output" | grep -c '^valid[[:space:]]')" -eq 1 ]
   [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" != *overflow* ]]; [[ "$output" != *unsafe-integer* ]]; [[ "$output" != *oversized-float* ]]
-  [[ "$output" != *registration-number* ]]; [[ "$output" != *registration-control* ]]; [[ "$output" == *'luna@3'* ]]
+  [[ "$output" != *registration-number* ]]; [[ "$output" != *registration-control* ]]; [[ "$output" != *missing-registration-id* ]]
+  [[ "$output" != *empty-registration-id* ]]; [[ "$output" != *long-registration-id* ]]; [[ "$output" == *'luna@3'* ]]
+  for driver in registration-number registration-control missing-registration-id empty-registration-id long-registration-id; do
+    run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER="$driver" bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+    assert_success; [ -z "$output" ]
+  done
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=nan bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
   assert_success; [ -z "$output" ]
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=overflow bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
@@ -266,6 +274,30 @@ SH
   [ "$(find "$ROZORO_HOME/watchtowers/herdr-pane" -name '.target.*.tmp' ! -name ".target.$pid.tmp" -print -quit)" = '' ]
 }
 
+@test "registration cleans its random temp when target commit fails" {
+  export HERDR_PANE_ID=pane; fake_pane pane idle pi true
+  run rzr-register.sh --harness pi --driver-id herdr-pane --quiet; assert_success
+  driver="$ROZORO_HOME/watchtowers/herdr-pane"; target="$driver/target.json"; history="$driver/registrations.jsonl"
+  printf 'unrelated-bytes\n' > "$driver/.target.predictable.tmp"
+  cp "$target" "$TEST_ROOT/before-target"; cp "$history" "$TEST_ROOT/before-history"
+  mkdir "$TEST_ROOT/python-intercept"
+  cat > "$TEST_ROOT/python-intercept/sitecustomize.py" <<'PY'
+import os
+_original_replace = os.replace
+def rejected_replace(src, dst, *args, **kwargs):
+    if dst == "target.json" and isinstance(src, str) and src.startswith(".target."):
+        raise OSError("test-local target commit failure")
+    return _original_replace(src, dst, *args, **kwargs)
+os.replace = rejected_replace
+PY
+  run env PYTHONPATH="$TEST_ROOT/python-intercept" rzr-register.sh --harness pi --driver-id herdr-pane --quiet
+  assert_failure
+  cmp "$target" "$TEST_ROOT/before-target"; cmp "$history" "$TEST_ROOT/before-history"
+  [ "$(cat "$driver/.target.predictable.tmp")" = unrelated-bytes ]
+  [ "$(find "$driver" -name '.target.*.tmp' ! -name '.target.predictable.tmp' -print -quit)" = '' ]
+  [ "$(cat "$SENTINEL")" = untouched ]
+}
+
 @test "registration refuses a hardlinked registrations log" {
   export HERDR_PANE_ID=pane; fake_pane pane idle pi true
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane"
@@ -273,6 +305,27 @@ SH
   ln "$TEST_ROOT/sentinel" "$ROZORO_HOME/watchtowers/herdr-pane/registrations.jsonl"
   run rzr-register.sh --harness pi --quiet
   assert_failure; [ "$(cat "$TEST_ROOT/sentinel")" = untouched ]
+}
+
+@test "FIFO registration and preset inputs fail without hanging" {
+  export HERDR_PANE_ID=pane; fake_pane pane idle pi true
+  bounded_failure() {
+    "$@" > "$TEST_ROOT/bounded.out" 2>&1 & pid=$!; register_pid "$pid"
+    count=0
+    while kill -0 "$pid" 2>/dev/null && [ "$count" -lt 50 ]; do sleep 0.1; count=$((count + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 1; fi
+    if wait "$pid"; then return 1; else return 0; fi
+  }
+  driver="$ROZORO_HOME/watchtowers/herdr-pane"
+  for entry in target.json registrations.jsonl .registration.lock; do
+    rm -rf "$ROZORO_HOME/watchtowers"; mkdir -p "$driver"; chmod 700 "$ROZORO_HOME/watchtowers" "$driver"
+    mkfifo "$driver/$entry"; chmod 600 "$driver/$entry"
+    bounded_failure rzr-register.sh --harness pi --driver-id herdr-pane --quiet
+    [ "$(cat "$SENTINEL")" = untouched ]
+  done
+  mkdir -p "$ROZORO_HOME/watchtower-presets"; mkfifo "$ROZORO_HOME/watchtower-presets/fifo.json"; chmod 600 "$ROZORO_HOME/watchtower-presets/fifo.json"
+  bounded_failure rozoro watchtower show fifo
+  [ "$(cat "$SENTINEL")" = untouched ]
 }
 
 @test "Claude settings capability write rejects a swapped watchtowers path" {

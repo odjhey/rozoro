@@ -135,6 +135,10 @@ def child(parent, name):
         os.close(fd)
         raise SystemExit("watchtower directory changed during open")
     os.fchmod(fd, 0o700)
+    tightened = os.fstat(fd)
+    if stat.S_IMODE(tightened.st_mode) != 0o700:
+        os.close(fd)
+        raise SystemExit("could not secure watchtower directory")
     return fd
 
 def require_owned_regular(fd, what):
@@ -142,6 +146,30 @@ def require_owned_regular(fd, what):
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
         raise SystemExit(f"unsafe {what}")
     return info
+
+def open_state_file(dirfd, name, flags, what):
+    """Descriptor-relative, no-follow, race-safe create-or-open for macOS/Linux."""
+    for _ in range(8):
+        try:
+            fd = os.open(name, flags | nofollow, dir_fd=dirfd)
+        except FileNotFoundError:
+            try:
+                fd = os.open(name, flags | os.O_CREAT | os.O_EXCL | nofollow, 0o600, dir_fd=dirfd)
+            except FileExistsError:
+                continue
+        info = require_owned_regular(fd, what)
+        os.fchmod(fd, 0o600)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            os.close(fd)
+            raise SystemExit(f"could not secure {what}")
+        return fd
+    raise SystemExit(f"could not create or open {what}")
+
+def safe_string(value):
+    return isinstance(value, str) and len(value) <= 120 and "=" not in value and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+def valid_registration_id(value):
+    return safe_string(value) and bool(value)
 
 def write_all(fd, payload):
     view = memoryview(payload)
@@ -153,9 +181,25 @@ def write_all(fd, payload):
 
 def record_from_target(data, *, recovered=False):
     registration_id = data.get("registration_id")
-    if not isinstance(registration_id, str) or not registration_id:
+    if data.get("schema") == 1 and not valid_registration_id(registration_id):
+        raise SystemExit("invalid registration id")
+    if not valid_registration_id(registration_id):
         return None
+    copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256")
+    if any(key in data and not safe_string(data[key]) for key in copied):
+        raise SystemExit("invalid existing registration metadata")
+    preset = data.get("preset")
+    if preset is not None:
+        if not isinstance(preset, dict):
+            raise SystemExit("invalid existing registration preset")
+        for key in ("name", "sha256", "policy_sha256", "model", "effort"):
+            if key in preset and not safe_string(preset[key]):
+                raise SystemExit("invalid existing registration preset")
+        version = preset.get("version")
+        if version is not None and not safe_string(str(version)):
+            raise SystemExit("invalid existing registration preset")
     record = {
+        "schema": 1,
         "ts": data.get("created", "unknown"),
         "registration_id": registration_id,
         "driver_id": data.get("driver_id", ""),
@@ -165,8 +209,8 @@ def record_from_target(data, *, recovered=False):
     }
     if "watchtower_name" in data:
         record["watchtower_name"] = data["watchtower_name"]
-    if "preset" in data:
-        record["preset"] = data["preset"]
+    if preset is not None:
+        record["preset"] = preset
     if "policy_sha256" in data:
         record["policy_sha256"] = data["policy_sha256"]
     if recovered:
@@ -182,9 +226,10 @@ def last_history_registration_id(logfd):
             try:
                 item = json.loads(line)
             except (UnicodeError, ValueError):
-                continue
-            if isinstance(item, dict) and isinstance(item.get("registration_id"), str):
-                last = item["registration_id"]
+                raise SystemExit("invalid registrations history")
+            if not isinstance(item, dict) or not valid_registration_id(item.get("registration_id")):
+                raise SystemExit("invalid registrations history")
+            last = item["registration_id"]
     finally:
         stream.close()
     return last
@@ -200,6 +245,9 @@ def read_current_target(dirfd):
             data = json.load(stream)
         if not isinstance(data, dict) or data.get("driver_id") != os.environ["RZR_REG_ID"]:
             raise SystemExit("invalid existing registration target")
+        if data.get("schema") == 1 and not valid_registration_id(data.get("registration_id")):
+            raise SystemExit("invalid existing registration target")
+        record_from_target(data)
         return data
     except (UnicodeError, ValueError, TypeError):
         raise SystemExit("invalid existing registration target")
@@ -227,14 +275,10 @@ tmp_fd = None
 tmp_name = None
 tmp_created = False
 try:
-    lockfd = os.open(".registration.lock", os.O_RDWR | os.O_CREAT | nofollow, 0o600, dir_fd=dirfd)
-    require_owned_regular(lockfd, "registration lock")
-    os.fchmod(lockfd, 0o600)
+    lockfd = open_state_file(dirfd, ".registration.lock", os.O_RDWR, "registration lock")
     fcntl.flock(lockfd, fcntl.LOCK_EX)
 
-    logfd = os.open("registrations.jsonl", os.O_RDWR | os.O_APPEND | os.O_CREAT | nofollow | nonblock, 0o600, dir_fd=dirfd)
-    require_owned_regular(logfd, "registrations log")
-    os.fchmod(logfd, 0o600)
+    logfd = open_state_file(dirfd, "registrations.jsonl", os.O_RDWR | os.O_APPEND | nonblock, "registrations log")
 
     current = read_current_target(dirfd)
     last_history_id = last_history_registration_id(logfd)

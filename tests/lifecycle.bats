@@ -34,27 +34,46 @@ load test_helper/common
   ! grep -F 'dispatcher_' "$ROZORO_HOME/state/task.meta"
 }
 
-@test "spawn best-effort stamps named unpreset and preset dispatcher policy provenance" {
+@test "spawn link and idempotent relink preserve named unpreset and preset policy provenance" {
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-driver-pane"
   target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"
-  printf '%s\n' '{"schema":1,"driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","policy_sha256":"policy-unpreset"}' > "$target"
-  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/herdr-driver-pane"; chmod 600 "$target"
-  run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" unpreset --cwd "$TEST_ROOT" --no-agent
-  assert_success
-  meta="$ROZORO_HOME/state/unpreset.meta"
-  assert_file_contains "$meta" 'dispatcher_wt_name=north'
-  assert_file_contains "$meta" 'dispatcher_policy_sha=policy-unpreset'
-  assert_file_contains "$meta" 'dispatcher_preset='
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/herdr-driver-pane"
+  store="$HOME/.pi/agent/sessions/fixture"; mkdir -p "$store"
 
-  printf '%s\n' '{"schema":1,"driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","policy_sha256":"policy-preset","preset":{"name":"luna","version":"3","sha256":"abc","policy_sha256":"policy-preset"}}' > "$target"
-  run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" preset --cwd "$TEST_ROOT" --no-agent
+  printf '%s\n' '{"schema":1,"registration_id":"unpreset-id","driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","policy_sha256":"policy-unpreset"}' > "$target"; chmod 600 "$target"
+  run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" unpreset --cwd "$TEST_ROOT" --harness pi --no-agent
   assert_success
-  meta="$ROZORO_HOME/state/preset.meta"
-  assert_file_contains "$meta" 'dispatcher_driver=herdr-driver-pane'
-  assert_file_contains "$meta" 'dispatcher_preset=luna'
-  assert_file_contains "$meta" 'dispatcher_preset_version=3'
-  assert_file_contains "$meta" 'dispatcher_preset_sha=abc'
-  assert_file_contains "$meta" 'dispatcher_policy_sha=policy-preset'
+  meta="$ROZORO_HOME/state/unpreset.meta"; uuid="$(sed -n 's/^session=//p' "$meta")"
+  assert_file_contains "$meta" 'dispatcher_policy_sha=policy-unpreset'; assert_file_contains "$meta" 'dispatcher_preset='
+  printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/unpreset.jsonl"
+  run rzr-link.sh unpreset "$TEST_ROOT"; assert_success
+  descriptor="$ROZORO_HOME/tasks/unpreset/session.json"
+  [ "$(jq -r '.dispatcher.policy_sha256' "$descriptor")" = policy-unpreset ]; [ "$(jq -r '.dispatcher.preset' "$descriptor")" = '' ]
+  run rzr-link.sh unpreset "$TEST_ROOT"; assert_success
+  [ "$(jq -r '.dispatcher.policy_sha256' "$descriptor")" = policy-unpreset ]; [ "$(jq -r '.dispatcher.preset' "$descriptor")" = '' ]
+
+  printf '%s\n' '{"schema":1,"registration_id":"preset-id","driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","policy_sha256":"policy-preset","preset":{"name":"luna","version":"3","sha256":"abc","policy_sha256":"policy-preset"}}' > "$target"
+  run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" preset --cwd "$TEST_ROOT" --harness pi --no-agent
+  assert_success
+  meta="$ROZORO_HOME/state/preset.meta"; uuid="$(sed -n 's/^session=//p' "$meta")"
+  assert_file_contains "$meta" 'dispatcher_preset=luna'; assert_file_contains "$meta" 'dispatcher_policy_sha=policy-preset'
+  printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$uuid" "$TEST_ROOT" > "$store/preset.jsonl"
+  run rzr-link.sh preset "$TEST_ROOT"; assert_success
+  descriptor="$ROZORO_HOME/tasks/preset/session.json"
+  [ "$(jq -r '[.dispatcher.preset,.dispatcher.policy_sha256] | join(":")' "$descriptor")" = luna:policy-preset ]
+  run rzr-link.sh preset "$TEST_ROOT"; assert_success
+  [ "$(jq -r '[.dispatcher.preset,.dispatcher.policy_sha256] | join(":")' "$descriptor")" = luna:policy-preset ]
+}
+
+@test "ambiguous dispatcher identity never blocks spawn or stamps attribution" {
+  for driver in one two; do
+    mkdir -p "$ROZORO_HOME/watchtowers/$driver"; chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/$driver"
+    printf '{"schema":1,"registration_id":"%s-id","driver_id":"%s","identity":"shared-pane"}\n' "$driver" "$driver" > "$ROZORO_HOME/watchtowers/$driver/target.json"
+    chmod 600 "$ROZORO_HOME/watchtowers/$driver/target.json"
+  done
+  run env HERDR_PANE_ID=shared-pane "$REPO_ROOT/bin/rzr-spawn.sh" ambiguous --cwd "$TEST_ROOT" --no-agent
+  assert_success
+  ! grep -F 'dispatcher_' "$ROZORO_HOME/state/ambiguous.meta"
 }
 
 @test "Claude event-bus production generates isolated hooks and exact launch identity" {

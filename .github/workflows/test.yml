@@ -45,3 +45,5 @@ jobs:
         run: python3 tests/monitor-python-runtime.py
       - name: Exercise the supported Homebrew Python
         run: /opt/homebrew/bin/python3 tests/monitor-python-runtime.py
+      - name: Probe concurrent registration on macOS APFS
+        run: PATH="/opt/homebrew/bin:$PATH" ./tests/registration-concurrency-probe.sh 20
