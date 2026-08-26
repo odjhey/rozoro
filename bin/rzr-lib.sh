@@ -1049,26 +1049,27 @@ rzr_target_field() {  # <driver-dir> <field>
 # guess a backend from a bare environment variable: an unregistered or ambiguous
 # environment is a hard error (register first).
 rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
-  local explicit="${1:-}" dir cand target
+  local explicit="${1:-}" candidate target existing duplicate
   local -a matches=()
   if [ -n "$explicit" ]; then
     target="$(rzr_watchtower_target_json "$explicit" || true)"
     [ -n "$target" ] || rzr_die "driver '$explicit' is not registered (run: ./bin/rozoro register --harness <h>)"
     printf '%s' "$(rzr_driver_dir "$explicit")"; return 0
   fi
-  if [ -n "${CODEX_THREAD_ID:-}" ]; then
-    cand="$(rzr_driver_id_for codex "$CODEX_THREAD_ID")"
-    target="$(rzr_watchtower_target_json "$cand" || true)"
-    [ -n "$target" ] && matches+=("$(rzr_driver_dir "$cand")")
-  fi
-  if [ -n "${HERDR_PANE_ID:-}" ]; then
-    cand="$(rzr_driver_id_for herdr "$HERDR_PANE_ID")"
-    target="$(rzr_watchtower_target_json "$cand" || true)"
-    [ -n "$target" ] && matches+=("$(rzr_driver_dir "$cand")")
-  fi
+  while IFS= read -r target; do
+    candidate="$(printf '%s' "$target" | jq -r '.driver_id')"
+    if { [ -n "${HERDR_PANE_ID:-}" ] && rzr_dispatcher_candidate_matches "$target" herdr "$HERDR_PANE_ID"; } ||
+       { [ -n "${CODEX_THREAD_ID:-}" ] && rzr_dispatcher_candidate_matches "$target" codex "$CODEX_THREAD_ID"; }; then
+      duplicate=0
+      if [ "${#matches[@]}" -gt 0 ]; then
+        for existing in "${matches[@]}"; do [ "$existing" = "$candidate" ] && duplicate=1; done
+      fi
+      [ "$duplicate" -eq 1 ] || matches+=("$candidate")
+    fi
+  done < <(rzr_watchtower_target_json || true)
   case ${#matches[@]} in
     0) rzr_die "--wake found no registered watchtower for this environment (run: ./bin/rozoro register --harness <h>)" ;;
-    1) printf '%s' "${matches[0]}" ;;
+    1) printf '%s' "$(rzr_driver_dir "${matches[0]}")" ;;
     *) rzr_die "--wake is ambiguous: multiple registered targets match this environment; pass --driver <id>" ;;
   esac
 }

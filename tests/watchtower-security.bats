@@ -196,6 +196,16 @@ SH
   assert_success; [ -z "$output" ]
 }
 
+@test "registered wake rejects duplicate identity across custom drivers" {
+  mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane" "$ROZORO_HOME/watchtowers/backup"
+  printf '%s\n' '{"driver_id":"herdr-pane","identity":"pane","backend":"herdr"}' > "$ROZORO_HOME/watchtowers/herdr-pane/target.json"
+  printf '%s\n' '{"driver_id":"backup","identity":"pane","backend":"herdr"}' > "$ROZORO_HOME/watchtowers/backup/target.json"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers"/*; chmod 600 "$ROZORO_HOME/watchtowers"/*/target.json
+  run env ROZORO_LEGACY_DIAGNOSTIC=1 HERDR_PANE_ID=pane rzr-watch.sh --once --wake
+  assert_failure
+  assert_output_contains 'ambiguous'
+}
+
 @test "registration refuses a hardlinked registrations log" {
   export HERDR_PANE_ID=pane; fake_pane pane idle pi true
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane"
