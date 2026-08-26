@@ -213,6 +213,28 @@ SH
   assert_output_contains 'ambiguous'
 }
 
+@test "registration preserves a pre-existing predictable target temp" {
+  export HERDR_PANE_ID=pane
+  fake_pane pane idle pi true
+  real_python="$(command -v python3)"
+  mkdir "$TEST_ROOT/wrap"
+  cat > "$TEST_ROOT/wrap/python3" <<'SH'
+#!/bin/sh
+if [ -n "${RZR_REG_HOME:-}" ]; then
+  printf '%s' "$$" > "$PID_FILE"
+  mkdir -p "$RZR_REG_HOME/watchtowers/$RZR_REG_ID"
+  : > "$RZR_REG_HOME/watchtowers/$RZR_REG_ID/.target.$$.tmp"
+fi
+exec "$REAL_PYTHON" "$@"
+SH
+  chmod +x "$TEST_ROOT/wrap/python3"
+  run env PATH="$TEST_ROOT/wrap:$PATH" REAL_PYTHON="$real_python" PID_FILE="$TEST_ROOT/python.pid" \
+    HERDR_PANE_ID=pane rzr-register.sh --harness pi --driver-id herdr-pane --quiet
+  assert_failure
+  pid="$(cat "$TEST_ROOT/python.pid")"
+  [ -e "$ROZORO_HOME/watchtowers/herdr-pane/.target.$pid.tmp" ]
+}
+
 @test "registration refuses a hardlinked registrations log" {
   export HERDR_PANE_ID=pane; fake_pane pane idle pi true
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane"
@@ -232,10 +254,23 @@ SH
   [ -z "$(find "$TEST_ROOT/outside" -type f -print -quit)" ]
 }
 
-@test "task-local Claude capability proof rejects a predictable hardlink" {
+@test "watchtower Claude capability proof preserves a predictable hardlink" {
+  mkdir -p "$ROZORO_HOME/watchtowers/claude-session"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/claude-session"
+  proof_tmp="$ROZORO_HOME/watchtowers/claude-session/claude-event-settings.json.capability.json.tmp"
+  ln "$SENTINEL" "$proof_tmp"
+  run bash -c '. "$1/bin/rzr-lib.sh"; rzr_claude_watchtower_settings "$RZR_HOME/watchtowers/claude-session/claude-event-settings.json" claude-session adapter native pane' _ "$REPO_ROOT"
+  assert_failure
+  [ -e "$proof_tmp" ]
+  [ "$(cat "$SENTINEL")" = untouched ]
+}
+
+@test "Claude capability proof rejects a predictable hardlink without removing it" {
   mkdir -p "$ROZORO_HOME/tasks/task"
-  ln "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json.capability.json.tmp"
+  proof_tmp="$ROZORO_HOME/tasks/task/claude-event-settings.json.capability.json.tmp"
+  ln "$SENTINEL" "$proof_tmp"
   run bash -c '. "$1/bin/rzr-lib.sh"; rzr_claude_event_settings task session' _ "$REPO_ROOT"
   assert_failure
+  [ -e "$proof_tmp" ]
   [ "$(cat "$SENTINEL")" = untouched ]
 }

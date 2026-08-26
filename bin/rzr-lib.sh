@@ -564,17 +564,19 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        proof_created=True
         try:
             payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
             os.write(proof_fd,payload); os.fsync(proof_fd)
         finally: os.close(proof_fd)
         os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
     finally:
-        try: os.unlink(proof_tmp,dir_fd=fd)
-        except FileNotFoundError: pass
+        if proof_created:
+            try: os.unlink(proof_tmp,dir_fd=fd)
+            except FileNotFoundError: pass
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
@@ -624,9 +626,10 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
+        proof_created=True
         try:
             payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
             view=memoryview(payload)
@@ -635,8 +638,9 @@ try:
         finally: os.close(proof_fd)
         os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
     finally:
-        try: os.unlink(proof_tmp,dir_fd=dirfd)
-        except FileNotFoundError: pass
+        if proof_created:
+            try: os.unlink(proof_tmp,dir_fd=dirfd)
+            except FileNotFoundError: pass
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",
         f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
