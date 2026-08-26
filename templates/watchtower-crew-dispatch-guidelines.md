@@ -53,13 +53,15 @@ or discovery tasks rather than being treated as settled.
 
 Mechanics precede judgment. When a Coder reports a committed candidate, the
 No-Mistakes Runner must be the first post-Coder verification hop for that exact
-head. Reviewer and Tester normally follow only after the gate reports green for
-the exact final head reported by the run, which may differ from the submitted
-head when the pipeline changes the candidate. Watchtower may explicitly dispatch
-an explicitly labeled red-candidate judgment for a suspected design dead end,
-contract ambiguity, acceptance risk, or another question the gate cannot answer;
-that judgment is not a verification hop, does not bypass or replace No-Mistakes,
-and does not turn red into green or authorize redundant suite execution.
+head. Reviewer and Tester must follow only after the gate reports green for the exact
+final head reported by the run, which may differ from the submitted head when the
+pipeline changes the candidate. The sole exception is that, after the gate reports
+red, Watchtower may dispatch an explicitly labeled red-candidate judgment recording
+`gate_status: red`, the exact red commit/tree/base/merge-base, and a reason limited
+to a suspected design dead end, contract ambiguity, acceptance risk, or deeper
+direction within those categories that the gate cannot provide. That judgment must
+be labeled "not verification of record," does not bypass or replace No-Mistakes,
+can never satisfy the gate, and does not authorize redundant suite execution.
 
 Every repair, gate fix, test contribution, integration, or other candidate-changing
 action creates a new exact candidate and must re-enter No-Mistakes. A mechanical-only
@@ -73,7 +75,12 @@ The Workset Merger, or a named reconciliation owner it explicitly routes, record
 for every final-head reconciliation: old commit/tree identities, final commit/tree
 identities, base/merge-base identities, changed paths and cause, affected judgment
 questions, the rationale, whether fresh judgment is required, and the named owner.
-This record is final-head provenance, not rewritten old evidence.
+Whenever any new final head retains judgment from an old head, including after a
+mechanical gate fix or a Tester/Test Designer contribution, this named-owner
+reconciliation is mandatory. It must contain every field above even when its
+explicit fresh-judgment decision is "no fresh judgment required." Final readiness
+must reject an incomplete reconciliation. This record is final-head provenance,
+not rewritten old evidence.
 
 After a Reviewer finding is repaired, always gate the repaired candidate. Request
 fresh Reviewer judgment for each changed review question and fresh Test Designer
@@ -90,13 +97,13 @@ Implement one bounded task. Follow repository-local rules and the supplied task
 boundary. Repair concrete reviewer/tester/no-mistakes/integration findings when
 Watchtower routes them back and the task boundary still holds.
 
-Report the exact committed candidate head ready for the No-Mistakes gate and
-useful evidence, including tree and base identity when available, so later roles
-can reason about the exact implementation that was produced.
+Report the exact committed candidate head and tree, plus its base and merge-base,
+ready for the No-Mistakes gate so later roles can reason about the exact
+implementation that was produced.
 
 ### Reviewer — `gpt-5.6-luna`, high
 
-Normally review a gate-green exact candidate in fresh context, applying judgment
+Review a gate-green exact candidate in fresh context, applying judgment
 to its design, contracts, correctness reasoning, surrounding-code fit, and
 acceptance fit. Separate correctness defects from optional cleanup and provide
 evidence precise enough to route a repair or accept the judgment.
@@ -110,7 +117,7 @@ judgment remains crew work.
 
 ### Tester — `gpt-5.6-luna`, high
 
-Normally examine a gate-green exact candidate as a test designer, not a redundant
+Examine a gate-green exact candidate as a test designer, not a redundant
 suite runner. Drive behavior exploratorily from intended use cases and meaningful
 failure modes, covering boundaries, invalid inputs, retries, partial failures,
 state transitions, integrations, regressions, and weak-test risks that matter to
@@ -158,13 +165,14 @@ The gate is the first verification hop after a Coder's committed candidate and t
 re-entry point after every repair or candidate-changing action. Its rerun is the
 verification of record for mechanical confidence; do not replace it with fresh
 Reviewer or Tester crews merely to repeat suite, lint, format, or other mechanical
-checks. If the pipeline fixes or otherwise changes the candidate, report the exact
-submitted and final heads so later evidence remains bound to the right candidate.
+checks. For every run, report separate submitted and final candidate records, each with its
+exact commit, tree, base, and merge-base identities. When the gate changes the head,
+do not collapse those records. Final readiness must reject any missing identity.
 
 Give it:
 
 - repository and workset/task identity;
-- exact candidate branch/head/base;
+- exact candidate branch, commit/tree, base, and merge-base;
 - operator intent/acceptance pointer that no-mistakes needs;
 - the selected no-mistakes profile when the machine profile names one; and
 - whether it should submit a new run or reattach to a known run.
@@ -175,8 +183,9 @@ submit through the configured `no-mistakes` Git remote or use the supported
 CLI/AXI flow for the installed version.
 
 Once a run exists, keep the runner available to listen/attach and report actionable
-structured state. The runner reports run ID, submitted/final heads, findings/gate
-state, fixes performed by no-mistakes, PR/CI state, and custody/recovery state.
+structured state. The runner reports run ID; separate submitted and final candidate
+commit/tree/base/merge-base records; findings/gate state; fixes performed by
+no-mistakes; PR/CI state; and custody/recovery state.
 Interpretation that depends on dependency order or integrated workset state goes
 to the Workset Merger.
 
