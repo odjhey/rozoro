@@ -834,7 +834,8 @@ rzr_wait_agent_ready() {  # <pane> [attempts]
 # refuses to guess from raw environment variables.
 #
 # Files:
-#   target.json  - driver identity + backend (written once by rzr-register)
+#   target.json  - current driver attribution (atomically replaced by rzr-register)
+#   registrations.jsonl - append-only registration history
 #   pending.json - generation/delivered + affected tasks (locked read-modify-write;
 #                  overlapping watchers for one driver are supported)
 #   ack          - last generation the driver reconciled (written by reconcile)

@@ -5,10 +5,10 @@
 #   rzr-register.sh --harness <claude|codex|copilot|pi> [--backend auto|codex|herdr]
 #                   [--agent-session <absolute-session-file>] [--driver-id <id>] [--quiet]
 #
-# Writes watchtowers/<driver-id>/target.json pinning ONE immutable delivery
-# identity for `rzr-watch --wake`. The declared harness is validated against live
-# state before it is pinned, so a stale inherited CODEX_THREAD_ID can never wake
-# the wrong conversation:
+# Writes the current watchtowers/<driver-id>/target.json attribution and appends
+# a registration record to registrations.jsonl for `rzr-watch --wake`. The
+# declared harness is validated against live state before it is recorded, so a
+# stale inherited CODEX_THREAD_ID can never wake the wrong conversation:
 #   - codex backend: requires CODEX_THREAD_ID and a Codex CLI with `queue`; the
 #     declared harness must be codex.
 #   - herdr backend: requires HERDR_PANE_ID and that the pane REPORTS the declared
@@ -19,7 +19,8 @@
 #     queue is available; otherwise the validated herdr pane. It never selects a
 #     backend from the mere presence of an environment variable.
 #
-# Prints the driver id (unless --quiet). Idempotent for the same identity.
+# Prints the driver id (unless --quiet). Re-registration replaces the current
+# target and appends a fresh history record for the same identity.
 set -euo pipefail
 # shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
