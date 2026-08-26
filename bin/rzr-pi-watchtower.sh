@@ -18,6 +18,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "${HERDR_PANE_ID:-}" ] || { echo "rzr: pi-watchtower requires the owning HERDR_PANE_ID" >&2; exit 1; }
+unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
 if [ -n "$PRESET$WT_NAME" ]; then
   # shellcheck disable=SC1091 # The library path is resolved beside this script.
   . "$RZR_BIN/rzr-lib.sh"

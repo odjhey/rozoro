@@ -324,7 +324,10 @@ for key in ("harness", "model", "effort", "permission_mode", "notes"):
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
         raise SystemExit("invalid preset field type")
-if "version" in doc and len(str(doc["version"])) > 120: raise SystemExit("preset version is too long")
+if "version" in doc:
+    version=doc["version"]
+    if len(str(version)) > 120: raise SystemExit("preset version is too long")
+    if isinstance(version,(int,float)) and abs(version) > 2**53-1: raise SystemExit("preset version exceeds JSON numeric precision")
 if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
     raise SystemExit("invalid preset effort")

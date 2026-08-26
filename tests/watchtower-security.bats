@@ -175,7 +175,9 @@ SH
 @test "overflow versions and hardlinked preset and target files are rejected" {
   mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtowers/herdr-pane"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":1e999}' > "$ROZORO_HOME/watchtower-presets/overflow.json"
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":9007199254740993}' > "$ROZORO_HOME/watchtower-presets/unsafe-integer.json"
   run rozoro watchtower show overflow; assert_failure
+  run rozoro watchtower show unsafe-integer; assert_failure
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low"}' > "$TEST_ROOT/hardlink.json"
   ln "$TEST_ROOT/hardlink.json" "$ROZORO_HOME/watchtower-presets/hardlink.json"
   run rozoro watchtower show hardlink; assert_failure

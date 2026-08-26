@@ -50,6 +50,15 @@ SH
   grep -Fx "$REPO_ROOT/templates/watchtower.md" "$PI_LOG"
 }
 
+@test "Pi no-preset launch clears inherited watchtower attribution" {
+  setup_pi
+  run env ROZORO_WT_NAME=stale ROZORO_WT_PRESET=old ROZORO_WT_PRESET_VERSION=9 \
+    ROZORO_WT_PRESET_SHA256=bad ROZORO_WT_POLICY_SHA256=bad ROZORO_WT_MODEL=old ROZORO_WT_EFFORT=low \
+    ROZORO_WT_DRIVER=stale-driver rzr-pi-watchtower.sh --cwd "$TEST_ROOT"
+  assert_success
+  grep -E '^wt= preset= version= driver= preset_sha= policy_sha=$' "$PI_LOG"
+}
+
 @test "Pi watchtower preset injects resources and stamps inherited registration env" {
   setup_pi
   mkdir -p "$ROZORO_HOME/watchtower-presets"

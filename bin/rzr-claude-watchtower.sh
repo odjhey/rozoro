@@ -16,6 +16,7 @@ while [ $# -gt 0 ]; do
     *) PASS+=("$1"); shift ;;
   esac
 done
+unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
 [ -z "$WT_NAME" ] || rzr_validate_wt_metadata "$WT_NAME" "watchtower name"
 if [ -n "$PRESET" ]; then
   RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"
