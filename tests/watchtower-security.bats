@@ -146,6 +146,8 @@ SH
   make_target owner-text '{"driver_id":"owner-text","owner_pid":"pid"}'
   make_target owner-negative '{"driver_id":"owner-negative","owner_pid":"-1"}'
   make_target owner-large '{"driver_id":"owner-large","owner_pid":"999999999999999999999999999999"}'
+  make_target registration-number '{"driver_id":"registration-number","registration_id":42}'
+  make_target registration-control '{"driver_id":"registration-control","registration_id":"bad\u000aid"}'
   long121="$(printf '%0121d' 0)"; long10k="$(printf '%010000d' 0)"; exact120="$(printf '%0120d' 0)"
   make_target long121 "{\"driver_id\":\"long121\",\"watchtower_name\":\"$long121\"}"
   make_target long10k "{\"driver_id\":\"long10k\",\"watchtower_name\":\"$long10k\"}"
@@ -153,7 +155,8 @@ SH
   run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
   assert_success
   [ "$(printf '%s\n' "$output" | grep -c '^valid[[:space:]]')" -eq 1 ]
-  [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" != *overflow* ]]; [[ "$output" != *unsafe-integer* ]]; [[ "$output" != *oversized-float* ]]; [[ "$output" == *'luna@3'* ]]
+  [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" != *overflow* ]]; [[ "$output" != *unsafe-integer* ]]; [[ "$output" != *oversized-float* ]]
+  [[ "$output" != *registration-number* ]]; [[ "$output" != *registration-control* ]]; [[ "$output" == *'luna@3'* ]]
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=nan bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
   assert_success; [ -z "$output" ]
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=overflow bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
@@ -251,9 +254,16 @@ SH
   chmod +x "$TEST_ROOT/wrap/python3"
   run env PATH="$TEST_ROOT/wrap:$PATH" REAL_PYTHON="$real_python" PID_FILE="$TEST_ROOT/python.pid" \
     HERDR_PANE_ID=pane rzr-register.sh --harness pi --driver-id herdr-pane --quiet
-  assert_failure
+  assert_success
   pid="$(cat "$TEST_ROOT/python.pid")"
-  [ -e "$ROZORO_HOME/watchtowers/herdr-pane/.target.$pid.tmp" ]
+  unrelated="$ROZORO_HOME/watchtowers/herdr-pane/.target.$pid.tmp"
+  [ -e "$unrelated" ]; [ ! -s "$unrelated" ]
+  target="$ROZORO_HOME/watchtowers/herdr-pane/target.json"
+  history="$ROZORO_HOME/watchtowers/herdr-pane/registrations.jsonl"
+  registration_id="$(jq -r .registration_id "$target")"
+  [ -n "$registration_id" ]
+  [ "$(tail -n 1 "$history" | jq -r .registration_id)" = "$registration_id" ]
+  [ "$(find "$ROZORO_HOME/watchtowers/herdr-pane" -name '.target.*.tmp' ! -name ".target.$pid.tmp" -print -quit)" = '' ]
 }
 
 @test "registration refuses a hardlinked registrations log" {

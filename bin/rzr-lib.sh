@@ -412,8 +412,8 @@ try:
                 if not isinstance(data,dict) or data.get("driver_id") != name or not safe(data.get("driver_id")): continue
                 if "schema" in data and (not isinstance(data["schema"],int) or isinstance(data["schema"],bool) or data["schema"]!=1): continue
                 if "owner_pid" in data and (not isinstance(data["owner_pid"],str) or not data["owner_pid"].isdigit() or not 1<=int(data["owner_pid"])<=2**63-1): continue
-                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256")): continue
-                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256")): continue
+                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
+                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
                 if "preset" in data:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue
