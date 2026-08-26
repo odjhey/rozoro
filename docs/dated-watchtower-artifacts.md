@@ -59,7 +59,7 @@ Example metadata shape:
   },
   "harness_coverage": {
     "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v1",
-    "expected_pi_launcher_sha256": "fd00389d44498dae845957da31ab9bea155192022102354309dd4c4c66557990",
+    "expected_pi_launcher_sha256": "ae387a5511cdb22fc13a4be1cd5bd20f1767319d271cc6fa6e8fa37fd72baf4f",
     "option": "--append-system-prompt",
     "value": "$ROOT/templates/watchtower.md",
     "pi": {"status": "captured", "launcher": "bin/rzr-pi-watchtower.sh", "launcher_sha256": "…"},

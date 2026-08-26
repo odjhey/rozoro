@@ -36,6 +36,17 @@ json.dump({"driver_id":"herdr-pane","identity":"pane","watchtower_name":"north\n
 PY
   run env ROZORO_HOME="$home" RZR_HOME="$home" HERDR_PANE_ID=pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
   assert_success; [ -z "$output" ]
+
+  for control in 27 127; do
+    python3 - "$home/watchtowers/herdr-pane/target.json" "$control" <<'PY'
+import json,sys
+json.dump({"driver_id":"herdr-pane","identity":"pane","watchtower_name":"north"+chr(int(sys.argv[2]))+"forged"},open(sys.argv[1],"w"))
+PY
+    run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
+    assert_success; [[ "$output" != *forged* ]]
+    run env ROZORO_HOME="$home" RZR_HOME="$home" HERDR_PANE_ID=pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+    assert_success; [ -z "$output" ]
+  done
 }
 
 @test "registration refuses log and driver directory symlinks" {
@@ -169,14 +180,22 @@ SH
   run rzr-pi-watchtower.sh --preset long; assert_failure
 }
 
-@test "watchtower names reject line metadata delimiters" {
+@test "metadata ingress rejects C0 controls, DEL, and line metadata delimiters" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"luna","effort":"high"}' > "$ROZORO_HOME/watchtower-presets/luna.json"
   export HERDR_PANE_ID=pane
-  for name in $'north\nforged=x' $'north\tbad' 'north=bad'; do
+  for name in $'north\nforged=x' $'north\tbad' $'north\033bad' $'north\177bad' 'north=bad'; do
     run rzr-pi-watchtower.sh --preset luna --wt-name "$name"
     assert_failure
   done
+
+  fake_pane pane idle pi true
+  run env ROZORO_WT_NAME=$'north\033bad' rzr-register.sh --harness pi --quiet
+  assert_failure
+
+  printf '%s\n' '{"harness":"pi","model":"luna\u001bbad","effort":"high"}' > "$ROZORO_HOME/watchtower-presets/control.json"
+  run rozoro watchtower show control
+  assert_failure
 }
 
 @test "overflow versions and hardlinked preset and target files are rejected" {

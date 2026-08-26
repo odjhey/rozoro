@@ -280,7 +280,10 @@ RZR_WT_PRESETS="$RZR_HOME/watchtower-presets"
 rzr_validate_wtpreset_name() { rzr_validate_task_component "$1" "watchtower preset name"; }
 rzr_validate_wt_metadata() {  # <value> <description>
   local value="$1" what="$2"
-  case "$value" in *$'\n'*|*$'\r'*|*$'\t'*|*=*) rzr_die "$what contains unsafe control or metadata characters" ;; esac
+  case "$value" in *=*) rzr_die "$what contains unsafe control or metadata characters" ;; esac
+  if printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    rzr_die "$what contains unsafe control or metadata characters"
+  fi
   [ "${#value}" -le 120 ] || rzr_die "$what is too long (maximum 120 characters)"
 }
 rzr_wtpreset_path() { rzr_validate_wtpreset_name "$1"; printf '%s/%s.json' "$RZR_WT_PRESETS" "$1"; }
@@ -320,14 +323,15 @@ for key in ("harness", "model", "effort", "permission_mode", "notes"):
     if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
 for key in ("harness", "model", "effort", "permission_mode", "notes"):
     if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
-    if any(char in doc.get(key, "") for char in "\r\n\t="): raise SystemExit("preset field contains unsafe metadata characters")
+    if "=" in doc.get(key, "") or any(ord(char) < 32 or ord(char) == 127 for char in doc.get(key, "")):
+        raise SystemExit("preset field contains unsafe metadata characters")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
         raise SystemExit("invalid preset field type")
 if "version" in doc:
     version=doc["version"]
     if len(str(version)) > 120: raise SystemExit("preset version is too long")
-    if isinstance(version,str) and any(char in version for char in "\r\n\t="):
+    if isinstance(version,str) and ("=" in version or any(ord(char) < 32 or ord(char) == 127 for char in version)):
         raise SystemExit("preset version contains unsafe metadata characters")
     if isinstance(version,(int,float)) and abs(version) > 2**53-1: raise SystemExit("preset version exceeds JSON numeric precision")
 if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
@@ -368,7 +372,8 @@ rzr_watchtower_target_json() {  # [driver-id]
 import json, math, os, stat
 nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
 def private_dir(info): return stat.S_ISDIR(info.st_mode) and info.st_uid==os.geteuid() and not stat.S_IMODE(info.st_mode)&0o077
-def safe(value): return isinstance(value,str) and len(value)<=120 and not any(c in value for c in "\r\n\t=")
+def safe(value):
+    return isinstance(value,str) and len(value)<=120 and "=" not in value and not any(ord(c)<32 or ord(c)==127 for c in value)
 def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
 try: root=os.open(os.environ["RZR_TARGET_HOME"],os.O_RDONLY|directory|nofollow)
 except OSError: raise SystemExit
