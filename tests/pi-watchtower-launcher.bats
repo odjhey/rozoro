@@ -13,6 +13,21 @@ SH
   export PATH="$TEST_ROOT:$PATH"
 }
 
+@test "no-preset Pi launch does not require herdr or initialize Rozoro state" {
+  export HERDR_PANE_ID=manual:p1 PI_LOG="$TEST_ROOT/pi.log"
+  mkdir "$TEST_ROOT/minbin" "$TEST_ROOT/empty-home"
+  cat > "$TEST_ROOT/minbin/pi" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" > "$PI_LOG"
+SH
+  chmod +x "$TEST_ROOT/minbin/pi"
+  run env PATH="$TEST_ROOT/minbin:/usr/bin:/bin" HOME="$TEST_ROOT/empty-home" ROZORO_HOME="$TEST_ROOT/empty-home/rozoro" \
+    HERDR_PANE_ID="$HERDR_PANE_ID" PI_LOG="$PI_LOG" "$REPO_ROOT/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"
+  assert_success
+  grep -Fx -- '--extension' "$PI_LOG"
+  [ ! -e "$TEST_ROOT/empty-home/rozoro" ]
+}
+
 @test "supported Pi watchtower launch carries immutable role and explicit resources" {
   setup_pi
   run rzr-pi-watchtower.sh --cwd "$TEST_ROOT" -- --model test/model
@@ -44,6 +59,28 @@ SH
   grep -A1 -Fx -- '--model' "$PI_LOG" | grep -Fx luna
   grep -A1 -Fx -- '--thinking' "$PI_LOG" | grep -Fx high
   grep -E '^wt=north preset=luna version=3 driver=herdr-manual_p1 preset_sha=[0-9a-f]{64} policy_sha=[0-9a-f]{64}$' "$PI_LOG"
+}
+
+@test "Pi preset replacement cannot split launch fields from recorded SHA" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$TEST_ROOT/wrap"
+  preset="$ROZORO_HOME/watchtower-presets/luna.json"
+  printf '%s\n' '{"harness":"pi","model":"old-model","effort":"low"}' > "$preset"
+  printf '%s\n' '{"harness":"pi","model":"new-model","effort":"high"}' > "$TEST_ROOT/new.json"
+  expected="$(shasum -a 256 "$TEST_ROOT/new.json" | awk '{print $1}')"; real_python="$(command -v python3)"
+  cat > "$TEST_ROOT/wrap/python3" <<'SH'
+#!/bin/sh
+if [ ! -e "$SWAPPED" ]; then : > "$SWAPPED"; mv "$NEW_PRESET" "$WATCH_PRESET"; fi
+exec "$REAL_PYTHON" "$@"
+SH
+  chmod +x "$TEST_ROOT/wrap/python3"
+  run env PATH="$TEST_ROOT/wrap:$PATH" SWAPPED="$TEST_ROOT/swapped" NEW_PRESET="$TEST_ROOT/new.json" \
+    WATCH_PRESET="$preset" REAL_PYTHON="$real_python" HERDR_PANE_ID="$HERDR_PANE_ID" PI_LOG="$PI_LOG" \
+    ROZORO_HOME="$ROZORO_HOME" rzr-pi-watchtower.sh --preset luna --cwd "$TEST_ROOT"
+  assert_success
+  grep -A1 -Fx -- '--model' "$PI_LOG" | grep -Fx new-model
+  grep -A1 -Fx -- '--thinking' "$PI_LOG" | grep -Fx high
+  grep -F "preset_sha=$expected" "$PI_LOG"
 }
 
 @test "Pi watchtower unknown preset fails before launch" {

@@ -15,14 +15,15 @@ while [ $# -gt 0 ]; do
     *) PASS+=("$1"); shift ;;
   esac
 done
+[ -z "$WT_NAME" ] || rzr_validate_wt_metadata "$WT_NAME" "watchtower name"
 if [ -n "$PRESET" ]; then
-  rzr_wtpreset_exists "$PRESET" || rzr_die "no such watchtower preset '$PRESET'"
-  rzr_wtpreset_validate "$PRESET" || rzr_die "watchtower preset '$PRESET' has invalid JSON or known field types"
-  [ "$(rzr_wtpreset_field "$PRESET" harness)" = claude ] || rzr_die "watchtower preset '$PRESET' is not for harness claude"
+  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"
+  [ "$(printf '%s' "$RESOLVED" | jq -r '.document.harness')" = claude ] || rzr_die "watchtower preset '$PRESET' is not for harness claude"
   [ -n "$WT_NAME" ] || WT_NAME="$PRESET"
-  MODEL="$(rzr_wtpreset_field "$PRESET" model)"; EFFORT="$(rzr_wtpreset_field "$PRESET" effort)"
-  VERSION="$(rzr_wtpreset_field "$PRESET" version)"; VERSION="${VERSION:-0}"
-  PRESET_SHA="$(rzr_sha256_file "$(rzr_wtpreset_path "$PRESET")")"
+  MODEL="$(printf '%s' "$RESOLVED" | jq -r '.document.model // empty')"
+  EFFORT="$(printf '%s' "$RESOLVED" | jq -r '.document.effort // empty')"
+  VERSION="$(printf '%s' "$RESOLVED" | jq -r '.document.version // 0')"
+  PRESET_SHA="$(printf '%s' "$RESOLVED" | jq -r '.sha256')"
 fi
 rzr_claude_event_capability || exit 1
 "$RZR_BIN/rzr-monitor.sh" start >/dev/null || rzr_die "resident monitor failed readiness"
@@ -41,7 +42,7 @@ if [ -n "$WT_NAME" ]; then
   export ROZORO_WT_PRESET_VERSION="$VERSION" ROZORO_WT_PRESET_SHA256="$PRESET_SHA"
   export ROZORO_WT_MODEL="$MODEL" ROZORO_WT_EFFORT="$EFFORT"
 fi
-DIR="$(rzr_driver_dir "$DRIVER")"; mkdir -p "$(rzr_watchtowers_dir)" "$DIR"; chmod 700 "$(rzr_watchtowers_dir)" "$DIR"
+DIR="$(rzr_driver_dir_prepare "$DRIVER")"
 # Refuse mixed ownership before starting either path.
 if [ -e "$DIR/pending.json" ] || [ -e "$DIR/ack" ]; then
   g="$(rzr_ledger_int "$DIR" generation)"; a="$(rzr_ledger_int "$DIR" ack)"

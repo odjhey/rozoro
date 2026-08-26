@@ -277,59 +277,119 @@ rzr_crew_rules() {  # <preset> -> rules joined by newlines (empty if none)
 # behavior exactly.
 RZR_WT_PRESETS="$RZR_HOME/watchtower-presets"
 
-rzr_wtpreset_path() { printf '%s/%s.json' "$RZR_WT_PRESETS" "$1"; }
-rzr_wtpreset_exists() { [ -f "$(rzr_wtpreset_path "$1")" ]; }
-rzr_wtpreset_json() { cat "$(rzr_wtpreset_path "$1")"; }
-rzr_wtpreset_field() { rzr_wtpreset_json "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null; }
-rzr_wtpreset_validate() {
-  local json
-  json="$(rzr_wtpreset_json "$1")" || return 1
-  printf '%s' "$json" | jq -e '
-    . as $p | type == "object" and
-    (["harness", "model", "effort", "permission_mode", "notes"] |
-      all(. as $k | ($p | has($k) | not) or ($p[$k] | type == "string"))) and
-    (($p | has("schema") | not) or ($p.schema | type == "number")) and
-    (($p | has("version") | not) or ($p.version | type == "number")) and
-    (($p.harness // "") | IN("claude", "pi")) and
-    (($p.effort // "") | IN("", "low", "medium", "high", "xhigh", "max"))
-  ' >/dev/null 2>&1
+rzr_validate_wtpreset_name() { rzr_validate_task_component "$1" "watchtower preset name"; }
+rzr_validate_wt_metadata() {  # <value> <description>
+  local value="$1" what="$2"
+  case "$value" in *$'\n'*|*$'\r'*|*$'\t'*|*=*) rzr_die "$what contains unsafe control or metadata characters" ;; esac
+  [ "${#value}" -le 120 ] || rzr_die "$what is too long (maximum 120 characters)"
 }
+rzr_wtpreset_path() { rzr_validate_wtpreset_name "$1"; printf '%s/%s.json' "$RZR_WT_PRESETS" "$1"; }
 
-rzr_sha256_file() { python3 - "$1" <<'PY'
-import hashlib, sys
-with open(sys.argv[1], "rb") as stream:
-    print(hashlib.sha256(stream.read()).hexdigest())
+# Open and read a preset exactly once through no-follow descriptors. The result
+# contains both the parsed document and the SHA of those exact same bytes.
+rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
+  local name="$1"; rzr_validate_wtpreset_name "$name"
+  RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
+import hashlib, json, os, stat
+root = os.open(os.environ["RZR_WTP_DIR"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+try:
+    fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=root)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise SystemExit("preset is not an owned regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            chunks.append(chunk)
+    finally: os.close(fd)
+finally: os.close(root)
+raw = b"".join(chunks)
+try: doc = json.loads(raw)
+except (UnicodeError, ValueError): raise SystemExit("invalid preset JSON")
+if not isinstance(doc, dict): raise SystemExit("preset must be an object")
+for key in ("harness", "model", "effort", "permission_mode", "notes"):
+    if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
+for key in ("schema", "version"):
+    if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
+        raise SystemExit("invalid preset field type")
+if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
+if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
+    raise SystemExit("invalid preset effort")
+print(json.dumps({"document": doc, "sha256": hashlib.sha256(raw).hexdigest()}, separators=(",", ":")))
+PY
+}
+rzr_wtpreset_exists() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
+rzr_wtpreset_json() { rzr_wtpreset_resolve "$1" | jq -c '.document'; }
+rzr_wtpreset_field() { rzr_wtpreset_resolve "$1" | jq -r --arg k "$2" '.document[$k] // empty' 2>/dev/null; }
+rzr_wtpreset_validate() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
+
+rzr_file_identity() { python3 - "$1" <<'PY'
+import hashlib, os, stat, sys
+fd=os.open(sys.argv[1], os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode): raise SystemExit("not a regular file")
+    digest=hashlib.sha256()
+    while True:
+        chunk=os.read(fd,65536)
+        if not chunk: break
+        digest.update(chunk)
+    print(f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}:{digest.hexdigest()}")
+finally: os.close(fd)
+PY
+}
+rzr_sha256_file() { rzr_file_identity "$1" | awk -F: '{print $5}'; }
+
+# Parse a target without following its final entry and reject values unsafe for
+# the line-oriented task metadata store.
+rzr_dispatcher_target_json() {  # <target-path>
+  python3 - "$1" <<'PY' 2>/dev/null
+import json, os, stat, sys
+fd=os.open(sys.argv[1],os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode): raise SystemExit
+    with os.fdopen(fd) as stream: data=json.load(stream)
+except Exception: raise SystemExit
+def safe(value): return isinstance(value,str) and not any(c in value for c in "\r\n\t=")
+if not safe(data.get("driver_id")): raise SystemExit
+for value in (data.get("watchtower_name", ""), *(data.get("preset") or {}).values()):
+    if isinstance(value, str) and not safe(value): raise SystemExit
+print(json.dumps(data,separators=(",",":")))
 PY
 }
 
-# Best-effort dispatcher discovery. Always succeeds; prints the registered
-# target JSON only for one unambiguous match.
+# Best-effort dispatcher discovery. Explicit driver wins; identity-derived and
+# scan candidates are deduplicated and accepted only when unambiguous.
 rzr_dispatcher_lookup() {
-  local dir cand matches="" target
+  local cand target json; local -a dispatcher_candidates=()
   if [ -n "${ROZORO_WT_DRIVER:-}" ]; then
     cand="$(rzr_driver_dir "$ROZORO_WT_DRIVER" 2>/dev/null || true)"
-    [ -s "$cand/target.json" ] && matches="$cand"
+    if [ -s "$cand/target.json" ]; then
+      json="$(rzr_dispatcher_target_json "$cand/target.json" || true)"
+      [ -z "$json" ] || printf '%s\n' "$json"
+      return 0
+    fi
   fi
-  if [ -z "$matches" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  if [ -n "${HERDR_PANE_ID:-}" ]; then
     cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")" 2>/dev/null || true)"
-    [ -s "$cand/target.json" ] && matches="$cand"
+    [ -z "$(rzr_dispatcher_target_json "$cand/target.json" || true)" ] || dispatcher_candidates+=("$cand")
   fi
-  if [ -z "$matches" ] && [ -n "${CODEX_THREAD_ID:-}" ]; then
+  if [ -n "${CODEX_THREAD_ID:-}" ]; then
     cand="$(rzr_driver_dir "$(rzr_driver_id_for codex "$CODEX_THREAD_ID")" 2>/dev/null || true)"
-    [ -s "$cand/target.json" ] && matches="$cand"
+    [ -z "$(rzr_dispatcher_target_json "$cand/target.json" || true)" ] || dispatcher_candidates+=("$cand")
   fi
-  if [ -z "$matches" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  if [ "${#dispatcher_candidates[@]}" -eq 0 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
     for target in "$(rzr_watchtowers_dir)"/*/target.json; do
-      [ -s "$target" ] || continue
-      [ "$(jq -r '.identity // empty' "$target" 2>/dev/null)" = "$HERDR_PANE_ID" ] || continue
-      matches="${matches}${matches:+ }${target%/target.json}"
+      json="$(rzr_dispatcher_target_json "$target" || true)"; [ -n "$json" ] || continue
+      [ "$(printf '%s' "$json" | jq -r '.identity // empty')" = "$HERDR_PANE_ID" ] || continue
+      cand="${target%/target.json}"
+      dispatcher_candidates+=("$cand")
     done
   fi
-  # Paths are generated from safe driver components and cannot contain spaces.
-  # shellcheck disable=SC2086
-  set -- $matches
-  [ $# -eq 1 ] || return 0
-  jq -c '.' "$1/target.json" 2>/dev/null || true
+  [ "${#dispatcher_candidates[@]}" -eq 1 ] || return 0
+  rzr_dispatcher_target_json "${dispatcher_candidates[0]}/target.json" || true
   return 0
 }
 
@@ -682,6 +742,33 @@ rzr_watchtowers_dir() { printf '%s/watchtowers' "$RZR_HOME"; }
 rzr_driver_dir() {  # <driver-id>
   rzr_validate_task_component "$1" "driver id"
   printf '%s/%s' "$(rzr_watchtowers_dir)" "$1"
+}
+
+# Create/validate the watchtower root and one driver directory without following
+# either final component. Existing entries must be owned real directories.
+rzr_driver_dir_prepare() {  # <driver-id> -> path
+  local id="$1"; rzr_validate_task_component "$id" "driver id"
+  RZR_DRIVER_HOME="$RZR_HOME" RZR_DRIVER_ID="$id" python3 - <<'PY'
+import os, stat
+home=os.environ["RZR_DRIVER_HOME"]
+def directory(parent, name):
+    try: info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    except FileNotFoundError:
+        os.mkdir(name,0o700,dir_fd=parent); info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid():
+        raise SystemExit("unsafe watchtower directory")
+    fd=os.open(name,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=parent)
+    os.fchmod(fd,0o700)
+    return fd
+root=os.open(home,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    towers=directory(root,"watchtowers")
+    try:
+        driver=directory(towers,os.environ["RZR_DRIVER_ID"]); os.close(driver)
+    finally: os.close(towers)
+finally: os.close(root)
+print(os.path.join(home,"watchtowers",os.environ["RZR_DRIVER_ID"]))
+PY
 }
 
 # A filesystem-safe, stable driver id derived from an immutable backend identity

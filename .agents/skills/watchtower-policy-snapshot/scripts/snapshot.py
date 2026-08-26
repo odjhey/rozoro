@@ -22,7 +22,7 @@ from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 SCHEMA = "rozoro.watchtower-policy-snapshot/v8"
 SOURCE = "templates/watchtower.md"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "47699ceae08f8ff74287b940204415119ddbb482fcd591a2b2b7c99fd8fee5e2"
+PI_LAUNCHER_SHA256 = "be6c8045609578452c299891e2227eabf4dbfcc7e1a943f328ed1bf64718d575"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"

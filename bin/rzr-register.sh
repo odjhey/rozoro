@@ -89,9 +89,16 @@ case "$BACKEND" in
 esac
 
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
-DIR="$(rzr_driver_dir "$DRIVER_ID")"
-mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)"
-mkdir -p "$DIR"; chmod 700 "$DIR"
+DIR="$(rzr_driver_dir_prepare "$DRIVER_ID")"
+[ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
+if [ -n "${ROZORO_WT_PRESET:-}" ]; then
+  rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
+  rzr_validate_wt_metadata "${ROZORO_WT_PRESET_VERSION:-}" "watchtower preset version"
+  rzr_validate_wt_metadata "${ROZORO_WT_PRESET_SHA256:-}" "watchtower preset SHA"
+  rzr_validate_wt_metadata "${ROZORO_WT_POLICY_SHA256:-}" "watchtower policy SHA"
+  rzr_validate_wt_metadata "${ROZORO_WT_MODEL:-}" "watchtower model"
+  rzr_validate_wt_metadata "${ROZORO_WT_EFFORT:-}" "watchtower effort"
+fi
 
 RZR_REG_OUT="$DIR/target.json" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
@@ -100,8 +107,10 @@ RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_
 RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
 RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" RZR_REG_LOG="$DIR/registrations.jsonl" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import json, os
-tmp = os.environ["RZR_REG_OUT"] + ".tmp.%d" % os.getpid()
+import json, os, stat
+directory, target_name = os.path.split(os.environ["RZR_REG_OUT"])
+dirfd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+tmp_name = ".target.%d.tmp" % os.getpid()
 os.umask(0o077)
 data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
         "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
@@ -117,18 +126,33 @@ if os.environ["RZR_REG_PRESET"]:
                       "effort": os.environ["RZR_REG_EFFORT"]}
     if os.environ["RZR_REG_POLICY_SHA"]:
         data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
-with open(tmp, "w") as stream:
-    json.dump(data, stream, indent=2)
-os.replace(tmp, os.environ["RZR_REG_OUT"])
+try:
+    fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=dirfd)
+    try:
+        payload = json.dumps(data, indent=2).encode()
+        os.write(fd, payload); os.fsync(fd)
+    finally: os.close(fd)
+    os.replace(tmp_name, target_name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+    os.fsync(dirfd)
+finally:
+    try: os.unlink(tmp_name, dir_fd=dirfd)
+    except FileNotFoundError: pass
 record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
           "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
-fd = os.open(os.environ["RZR_REG_LOG"], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+log_name = os.path.basename(os.environ["RZR_REG_LOG"])
+fd = os.open(log_name, flags, 0o600, dir_fd=dirfd)
 try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        raise SystemExit("unsafe registrations log")
+    os.fchmod(fd, 0o600)
     os.write(fd, (json.dumps(record, separators=(",", ":")) + "\n").encode())
+    os.fsync(fd)
 finally:
-    os.close(fd)
+    os.close(fd); os.close(dirfd)
 PY
 
 [ "$QUIET" -eq 1 ] || echo "$DRIVER_ID"
