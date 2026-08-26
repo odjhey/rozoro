@@ -616,11 +616,18 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"
     try:
-        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
-        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+        proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
+        try:
+            payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
+            view=memoryview(payload)
+            while view: view=view[os.write(proof_fd,view):]
+            os.fsync(proof_fd)
+        finally: os.close(proof_fd)
+        os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
     finally:
-        try: os.unlink(proof+".tmp")
+        try: os.unlink(proof_tmp,dir_fd=dirfd)
         except FileNotFoundError: pass
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",

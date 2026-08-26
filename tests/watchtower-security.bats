@@ -224,3 +224,11 @@ SH
   assert_failure
   [ -z "$(find "$TEST_ROOT/outside" -type f -print -quit)" ]
 }
+
+@test "task-local Claude capability proof rejects a predictable hardlink" {
+  mkdir -p "$ROZORO_HOME/tasks/task"
+  ln "$SENTINEL" "$ROZORO_HOME/tasks/task/claude-event-settings.json.capability.json.tmp"
+  run bash -c '. "$1/bin/rzr-lib.sh"; rzr_claude_event_settings task session' _ "$REPO_ROOT"
+  assert_failure
+  [ "$(cat "$SENTINEL")" = untouched ]
+}
