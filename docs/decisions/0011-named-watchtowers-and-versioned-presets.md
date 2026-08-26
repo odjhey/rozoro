@@ -1,6 +1,7 @@
-# ADR 0011: Named Watchtowers and versioned presets
+# ADR-0011: Named Watchtowers and versioned presets
 
-Status: accepted
+review: approved
+date: 2026-08-26
 
 ## Context
 

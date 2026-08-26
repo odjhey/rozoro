@@ -37,6 +37,7 @@
 # an optional `agent prompt` to deliver the first instruction. The pane id is
 # recorded as the task's authority in state/<id>.meta.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 ID="" ; CWD="" ; LABEL="" ; PROMPT="" ; BRIEF="" ; NO_AGENT=0
@@ -57,7 +58,11 @@ while [ $# -gt 0 ]; do
     --no-agent) NO_AGENT=1; shift ;;
     -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1" ;;
-    *)  [ -z "$ID" ] && ID="$1" && shift || rzr_die "unexpected arg: $1" ;;
+    *)
+      if [ -z "$ID" ]; then ID="$1"; shift
+      else rzr_die "unexpected arg: $1"
+      fi
+      ;;
   esac
 done
 [ -n "$ID" ] || rzr_die "need a task id (rzr-spawn.sh <id> ...)"

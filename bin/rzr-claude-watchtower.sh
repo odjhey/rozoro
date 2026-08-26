@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Launch or exactly resume a daemon-authoritative Claude watchtower.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 RESUME="" CWD="$PWD" PASS=() PRESET="" WT_NAME="" MODEL="" EFFORT="" VERSION="" PRESET_SHA=""

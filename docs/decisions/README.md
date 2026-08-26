@@ -51,3 +51,4 @@ If an approved decision changes, prefer a new ADR that `supersedes` the old one 
 - [ADR-0008: Treat no-mistakes as an external gate](0008-no-mistakes-external-gate.md) — superseded by ADR-0009
 - [ADR-0009: Use workset mergers, runner crews, and machine-local routing profiles](0009-workset-merger-runner-and-machine-profile.md)
 - [ADR-0010: CLI reconcile delivers the changed-task delta of a generation window](0010-cli-reconcile-changed-task-delta.md)
+- [ADR-0011: Named Watchtowers and versioned presets](0011-named-watchtowers-and-versioned-presets.md)

@@ -794,6 +794,7 @@ rzr_wait_agent_ready() {  # <pane> [attempts]
 # generation is persisted BEFORE the backend call, so a crash between deliver and
 # recording success re-delivers (a duplicate fixed nudge is acceptable; a lost
 # actionable edge is not).
+# shellcheck disable=SC2034 # Consumed by the separate rzr-watch command.
 RZR_WAKE_MESSAGE="Rozoro notification pending; run ./bin/rozoro reconcile."
 
 rzr_watchtowers_dir() { printf '%s/watchtowers' "$RZR_HOME"; }
@@ -1027,6 +1028,7 @@ rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
     cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")")"
     [ -s "$cand/target.json" ] && matches="$matches $cand"
   fi
+  # shellcheck disable=SC2086 # Matches contain only validated path components.
   set -- $matches
   case $# in
     0) rzr_die "--wake found no registered watchtower for this environment (run: ./bin/rozoro register --harness <h>)" ;;

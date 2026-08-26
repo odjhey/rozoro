@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Inspect named, versioned watchtower presets and active registrations.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 print_row() {

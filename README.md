@@ -193,7 +193,7 @@ List known tasks:
 | `./bin/rozoro list` | list known tasks and live state |
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
 | `./bin/rozoro crew list\|show` | inspect crew launch presets |
-| `./bin/rozoro watchtower list\|show\|registered` | inspect watchtower presets and registrations |
+| `./bin/rozoro watchtower list\|show\|path\|registered` | inspect watchtower presets and registrations |
 | `./bin/rozoro teardown` | close live hosting while keeping the task folder |
 | `./bin/rozoro doctor` | check dependencies and harness support |
 
@@ -244,7 +244,7 @@ Example:
 
 ### Watchtower presets
 
-Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`. They are opt-in: launching without `--preset` preserves the ambient Pi/Claude configuration. A version plus boot-time preset and policy hashes makes each registration attributable even when a file changes later.
+Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`. They are opt-in: launching without `--preset` preserves the ambient Pi/Claude configuration. A version plus boot-time preset hash (and Pi policy hash) makes each registration attributable even when a file changes later.
 
 ```json
 {
@@ -258,7 +258,7 @@ Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`
 }
 ```
 
-Launch with `./bin/rozoro pi-watchtower --preset luna` or the equivalent Claude command. `--wt-name north` can override the display name or name an unpreset watchtower. Registrations are stored in `watchtowers/<driver-id>/target.json` and append-only `registrations.jsonl`; the driver id remains transport-derived.
+Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; the driver id remains transport-derived.
 
 ## Operator artifact skills
 

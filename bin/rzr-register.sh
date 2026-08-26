@@ -21,6 +21,7 @@
 #
 # Prints the driver id (unless --quiet). Idempotent for the same identity.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 HARNESS="" BACKEND="auto" DRIVER_ID="" AGENT_SESSION="" QUIET=0

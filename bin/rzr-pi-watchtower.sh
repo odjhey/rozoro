@@ -18,7 +18,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "${HERDR_PANE_ID:-}" ] || { echo "rzr: pi-watchtower requires the owning HERDR_PANE_ID" >&2; exit 1; }
-if [ -n "$PRESET$WT_NAME" ]; then . "$RZR_BIN/rzr-lib.sh"; fi
+if [ -n "$PRESET$WT_NAME" ]; then
+  # shellcheck disable=SC1091 # The library path is resolved beside this script.
+  . "$RZR_BIN/rzr-lib.sh"
+fi
 if [ -n "$WT_NAME" ]; then rzr_validate_wt_metadata "$WT_NAME" "watchtower name"; fi
 if [ -n "$PRESET" ]; then
   RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"

@@ -13,6 +13,7 @@
 # received the brief). Pi uses its native preallocated session UUID, with marker
 # discovery retained for sessions created before native linking was added.
 set -euo pipefail
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 [ $# -ge 2 ] || rzr_die "usage: rzr-link.sh <id> <cwd> [--refresh]"
