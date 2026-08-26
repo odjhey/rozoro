@@ -377,11 +377,17 @@ try:
                         os.close(fd); continue
                     with os.fdopen(fd) as stream: data=json.load(stream)
                 finally: os.close(driver)
-                if data.get("driver_id") != name or not safe(data.get("driver_id")): continue
-                values=(data.get("watchtower_name",""),*(data.get("preset") or {}).values())
-                if any(isinstance(value,str) and not safe(value) for value in values): continue
+                if not isinstance(data,dict) or data.get("driver_id") != name or not safe(data.get("driver_id")): continue
+                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created")): continue
+                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created")): continue
+                if "preset" in data:
+                    preset=data["preset"]
+                    if not isinstance(preset,dict): continue
+                    if any(key in preset and not isinstance(preset[key],str) for key in ("name","sha256","policy_sha256","model","effort")): continue
+                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool)): continue
+                    if any(isinstance(preset.get(key),str) and not safe(preset[key]) for key in ("name","version","sha256","policy_sha256","model","effort")): continue
                 print(json.dumps(data,separators=(",",":")))
-            except (OSError,ValueError,TypeError): continue
+            except (OSError,ValueError,TypeError,AttributeError): continue
     finally: os.close(towers)
 finally: os.close(root)
 PY

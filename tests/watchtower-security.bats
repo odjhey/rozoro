@@ -95,6 +95,30 @@ SH
   assert_success; [ -z "$output" ]
 }
 
+@test "mixed malformed target shapes are skipped while valid optional shapes list" {
+  home="$TEST_ROOT/shapes"; mkdir -p "$home/state" "$home/watchtowers"; chmod 700 "$home" "$home/watchtowers"
+  make_target() { mkdir "$home/watchtowers/$1"; chmod 700 "$home/watchtowers/$1"; printf '%s\n' "$2" > "$home/watchtowers/$1/target.json"; chmod 600 "$home/watchtowers/$1/target.json"; }
+  make_target array '[]'
+  make_target null 'null'
+  make_target string '"bad"'
+  make_target malformed '{'
+  make_target preset-string '{"driver_id":"preset-string","preset":"bad"}'
+  make_target preset-null '{"driver_id":"preset-null","preset":null}'
+  make_target preset-array '{"driver_id":"preset-array","preset":[]}'
+  make_target empty-object '{}'
+  make_target legacy '{"driver_id":"legacy","identity":"legacy-pane","harness":"pi","backend":"herdr","created":"then","unknown":{"future":true}}'
+  make_target valid '{"driver_id":"valid","identity":"valid-pane","watchtower_name":"north","preset":{"name":"luna","version":3,"sha256":"abc","future":{"x":1}},"harness":"pi","backend":"herdr","created":"now","future":true}'
+  run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
+  assert_success
+  [[ "$output" == *legacy* ]]; [[ "$output" == *north* ]]; [[ "$output" == *'luna@3'* ]]
+  [[ "$output" != *preset-string* ]]; [[ "$output" != *preset-null* ]]; [[ "$output" != *preset-array* ]]
+  [ "$(printf '%s\n' "$output" | grep -cE '^(legacy|valid)[[:space:]]')" -eq 2 ]
+  run env ROZORO_HOME="$home" RZR_HOME="$home" HERDR_PANE_ID=valid-pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ "$(printf '%s' "$output" | jq -r .driver_id)" = valid ]
+  run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=array bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ -z "$output" ]
+}
+
 @test "watchtower names reject line metadata delimiters" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"luna","effort":"high"}' > "$ROZORO_HOME/watchtower-presets/luna.json"
