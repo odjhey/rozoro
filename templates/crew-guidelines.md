@@ -12,6 +12,22 @@ exact head. Reviewers provide judgment only. Testers may drive focused behavior
 exploratorily and design or write new or extended tests that join the repository
 suite; the gate enforces those tests on future candidates.
 
+### Working with the gate (source-verified, no-mistakes v1.57.0)
+
+- **Binding tests ride the candidate branch.** Test files authored by the
+  gate's own agents are demoted to informational, non-gating findings. If
+  coverage matters, commit the test on the branch yourself — never assume the
+  pipeline will author it.
+- **Do not hand-write PR sections titled Intent, Risk Assessment, Testing, or
+  Pipeline.** The PR step strips model/hand-authored versions of those sections
+  and rebuilds them deterministically from pipeline state. Put anything durable
+  in ordinary description prose or in commit messages.
+- **State the task's intent plainly, early in your session.** The pipeline
+  harvests local agent session transcripts to infer user intent and feeds the
+  summary to its review, test, document, lint, and PR agents. A session that
+  names its goal clearly gives the gate better context; garbled or implicit
+  intent degrades every downstream gate step.
+
 ### Before every commit
 
 For implementation and repair work, run the deterministic checks yourself and fix
