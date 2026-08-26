@@ -306,14 +306,18 @@ try:
     finally: os.close(fd)
 finally: os.close(root)
 raw = b"".join(chunks)
-try: doc = json.loads(raw)
+def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
+try: doc = json.loads(raw, parse_constant=reject_constant)
 except (UnicodeError, ValueError): raise SystemExit("invalid preset JSON")
 if not isinstance(doc, dict): raise SystemExit("preset must be an object")
 for key in ("harness", "model", "effort", "permission_mode", "notes"):
     if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
+for key in ("harness", "model", "effort", "permission_mode"):
+    if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
         raise SystemExit("invalid preset field type")
+if "version" in doc and len(str(doc["version"])) > 120: raise SystemExit("preset version is too long")
 if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
     raise SystemExit("invalid preset effort")
@@ -352,7 +356,8 @@ rzr_watchtower_target_json() {  # [driver-id]
 import json, os, stat
 nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
 def private_dir(info): return stat.S_ISDIR(info.st_mode) and info.st_uid==os.geteuid() and not stat.S_IMODE(info.st_mode)&0o077
-def safe(value): return isinstance(value,str) and not any(c in value for c in "\r\n\t=")
+def safe(value): return isinstance(value,str) and len(value)<=120 and not any(c in value for c in "\r\n\t=")
+def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
 try: root=os.open(os.environ["RZR_TARGET_HOME"],os.O_RDONLY|directory|nofollow)
 except OSError: raise SystemExit
 try:
@@ -375,16 +380,18 @@ try:
                     info=os.fstat(fd)
                     if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
                         os.close(fd); continue
-                    with os.fdopen(fd) as stream: data=json.load(stream)
+                    with os.fdopen(fd) as stream: data=json.load(stream,parse_constant=reject_constant)
                 finally: os.close(driver)
                 if not isinstance(data,dict) or data.get("driver_id") != name or not safe(data.get("driver_id")): continue
+                if "schema" in data and (not isinstance(data["schema"],int) or isinstance(data["schema"],bool) or data["schema"]!=1): continue
+                if "owner_pid" in data and (not isinstance(data["owner_pid"],str) or not data["owner_pid"].isdigit() or not 1<=int(data["owner_pid"])<=2**63-1): continue
                 if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created")): continue
                 if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created")): continue
                 if "preset" in data:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue
                     if any(key in preset and not isinstance(preset[key],str) for key in ("name","sha256","policy_sha256","model","effort")): continue
-                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool)): continue
+                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool) or len(str(preset["version"]))>120): continue
                     if any(isinstance(preset.get(key),str) and not safe(preset[key]) for key in ("name","version","sha256","policy_sha256","model","effort")): continue
                 print(json.dumps(data,separators=(",",":")))
             except (OSError,ValueError,TypeError,AttributeError): continue

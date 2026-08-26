@@ -119,6 +119,49 @@ SH
   assert_success; [ -z "$output" ]
 }
 
+@test "strict JSON known fields and metadata bounds skip targets but preserve valid continuity" {
+  home="$TEST_ROOT/strict-targets"; mkdir -p "$home/state" "$home/watchtowers"; chmod 700 "$home" "$home/watchtowers"
+  make_target() { mkdir "$home/watchtowers/$1"; chmod 700 "$home/watchtowers/$1"; printf '%s\n' "$2" > "$home/watchtowers/$1/target.json"; chmod 600 "$home/watchtowers/$1/target.json"; }
+  make_target nan '{"driver_id":"nan","identity":"bad-pane","preset":{"version":NaN}}'
+  make_target infinity '{"driver_id":"infinity","identity":"bad-pane","preset":{"version":Infinity}}'
+  make_target schema-string '{"driver_id":"schema-string","schema":"1"}'
+  make_target schema-bool '{"driver_id":"schema-bool","schema":true}'
+  make_target schema-negative '{"driver_id":"schema-negative","schema":-1}'
+  make_target schema-large '{"driver_id":"schema-large","schema":999999999999999999999999}'
+  make_target owner-bool '{"driver_id":"owner-bool","owner_pid":true}'
+  make_target owner-text '{"driver_id":"owner-text","owner_pid":"pid"}'
+  make_target owner-negative '{"driver_id":"owner-negative","owner_pid":"-1"}'
+  make_target owner-large '{"driver_id":"owner-large","owner_pid":"999999999999999999999999999999"}'
+  long121="$(printf '%0121d' 0)"; long10k="$(printf '%010000d' 0)"; exact120="$(printf '%0120d' 0)"
+  make_target long121 "{\"driver_id\":\"long121\",\"watchtower_name\":\"$long121\"}"
+  make_target long10k "{\"driver_id\":\"long10k\",\"watchtower_name\":\"$long10k\"}"
+  make_target valid "{\"schema\":1,\"driver_id\":\"valid\",\"owner_pid\":\"42\",\"identity\":\"scan-pane\",\"watchtower_name\":\"$exact120\",\"preset\":{\"name\":\"luna\",\"version\":3,\"sha256\":\"abc\"},\"unknown\":\"$long10k\"}"
+  run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
+  assert_success
+  [ "$(printf '%s\n' "$output" | grep -c '^valid[[:space:]]')" -eq 1 ]
+  [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" == *'luna@3'* ]]
+  run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=nan bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ -z "$output" ]
+  run env ROZORO_HOME="$home" RZR_HOME="$home" HERDR_PANE_ID=scan-pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ "$(printf '%s' "$output" | jq -r .driver_id)" = valid ]
+}
+
+@test "preset show and launch reject non-standard JSON and oversized known metadata" {
+  mkdir -p "$ROZORO_HOME/watchtower-presets"
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":NaN}' > "$ROZORO_HOME/watchtower-presets/nan.json"
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":Infinity}' > "$ROZORO_HOME/watchtower-presets/infinity.json"
+  long121="$(printf '%0121d' 0)"; printf '%s\n' "{\"harness\":\"pi\",\"model\":\"$long121\",\"effort\":\"low\"}" > "$ROZORO_HOME/watchtower-presets/long.json"
+  exact120="$(printf '%0120d' 0)"; printf '%s\n' "{\"harness\":\"pi\",\"model\":\"$exact120\",\"effort\":\"low\",\"unknown\":{\"large\":\"$long121\"}}" > "$ROZORO_HOME/watchtower-presets/valid.json"
+  for preset in nan infinity long; do
+    run rozoro watchtower show "$preset"; assert_failure
+  done
+  run rozoro watchtower show valid; assert_success
+  export HERDR_PANE_ID=pane
+  run rzr-pi-watchtower.sh --preset nan; assert_failure
+  run rzr-pi-watchtower.sh --preset infinity; assert_failure
+  run rzr-pi-watchtower.sh --preset long; assert_failure
+}
+
 @test "watchtower names reject line metadata delimiters" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"luna","effort":"high"}' > "$ROZORO_HOME/watchtower-presets/luna.json"
