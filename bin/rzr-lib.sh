@@ -290,7 +290,7 @@ rzr_wtpreset_path() { rzr_validate_wtpreset_name "$1"; printf '%s/%s.json' "$RZR
 rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
   local name="$1"; rzr_validate_wtpreset_name "$name"
   RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
-import hashlib, json, os, stat
+import hashlib, json, math, os, stat
 root = os.open(os.environ["RZR_WTP_DIR"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
 try:
     fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=root)
@@ -310,10 +310,17 @@ def reject_constant(value): raise ValueError("non-standard JSON constant: "+valu
 try: doc = json.loads(raw, parse_constant=reject_constant)
 except (UnicodeError, ValueError): raise SystemExit("invalid preset JSON")
 if not isinstance(doc, dict): raise SystemExit("preset must be an object")
+def finite_json(value):
+    if isinstance(value, float): return math.isfinite(value)
+    if isinstance(value, dict): return all(finite_json(item) for item in value.values())
+    if isinstance(value, list): return all(finite_json(item) for item in value)
+    return True
+if not finite_json(doc): raise SystemExit("preset contains a non-finite number")
 for key in ("harness", "model", "effort", "permission_mode", "notes"):
     if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
-for key in ("harness", "model", "effort", "permission_mode"):
+for key in ("harness", "model", "effort", "permission_mode", "notes"):
     if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
+    if any(char in doc.get(key, "") for char in "\r\n\t="): raise SystemExit("preset field contains unsafe metadata characters")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
         raise SystemExit("invalid preset field type")
@@ -321,7 +328,7 @@ if "version" in doc and len(str(doc["version"])) > 120: raise SystemExit("preset
 if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
     raise SystemExit("invalid preset effort")
-print(json.dumps({"document": doc, "sha256": hashlib.sha256(raw).hexdigest()}, separators=(",", ":")))
+print(json.dumps({"document": doc, "sha256": hashlib.sha256(raw).hexdigest()}, separators=(",", ":"), allow_nan=False))
 PY
 }
 rzr_wtpreset_exists() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
@@ -400,31 +407,47 @@ finally: os.close(root)
 PY
 }
 rzr_dispatcher_target_json() { rzr_watchtower_target_json "$1" | head -n 1; }
+rzr_dispatcher_candidate_matches() {  # <json> <backend> <identity>
+  local json="$1" backend="$2" identity="$3" actual_backend
+  [ -n "$json" ] || return 1
+  [ "$(printf '%s' "$json" | jq -r '.identity // empty')" = "$identity" ] || return 1
+  actual_backend="$(printf '%s' "$json" | jq -r '.backend // empty')"
+  [ -z "$actual_backend" ] || [ "$actual_backend" = "$backend" ]
+}
 
 # Best-effort dispatcher discovery. Explicit driver wins; identity-derived and
 # scan candidates are deduplicated and accepted only when unambiguous.
 rzr_dispatcher_lookup() {
-  local candidate json; local -a dispatcher_candidates=()
+  local candidate json; local -a dispatcher_candidates=() dispatcher_backends=() dispatcher_identities=()
   if [ -n "${ROZORO_WT_DRIVER:-}" ]; then
     json="$(rzr_dispatcher_target_json "$ROZORO_WT_DRIVER" || true)"
     if [ -n "$json" ]; then printf '%s\n' "$json"; return 0; fi
   fi
   if [ -n "${HERDR_PANE_ID:-}" ]; then
     candidate="$(rzr_driver_id_for herdr "$HERDR_PANE_ID")"
-    [ -z "$(rzr_dispatcher_target_json "$candidate" || true)" ] || dispatcher_candidates+=("$candidate")
+    json="$(rzr_dispatcher_target_json "$candidate" || true)"
+    if rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID"; then
+      dispatcher_candidates+=("$candidate"); dispatcher_backends+=(herdr); dispatcher_identities+=("$HERDR_PANE_ID")
+    fi
   fi
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
     candidate="$(rzr_driver_id_for codex "$CODEX_THREAD_ID")"
-    [ -z "$(rzr_dispatcher_target_json "$candidate" || true)" ] || dispatcher_candidates+=("$candidate")
+    json="$(rzr_dispatcher_target_json "$candidate" || true)"
+    if rzr_dispatcher_candidate_matches "$json" codex "$CODEX_THREAD_ID"; then
+      dispatcher_candidates+=("$candidate"); dispatcher_backends+=(codex); dispatcher_identities+=("$CODEX_THREAD_ID")
+    fi
   fi
   if [ "${#dispatcher_candidates[@]}" -eq 0 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
     while IFS= read -r json; do
-      [ "$(printf '%s' "$json" | jq -r '.identity // empty')" = "$HERDR_PANE_ID" ] || continue
+      rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID" || continue
       dispatcher_candidates+=("$(printf '%s' "$json" | jq -r '.driver_id')")
+      dispatcher_backends+=(herdr); dispatcher_identities+=("$HERDR_PANE_ID")
     done < <(rzr_watchtower_target_json || true)
   fi
   [ "${#dispatcher_candidates[@]}" -eq 1 ] || return 0
-  rzr_dispatcher_target_json "${dispatcher_candidates[0]}" || true
+  json="$(rzr_dispatcher_target_json "${dispatcher_candidates[0]}" || true)"
+  rzr_dispatcher_candidate_matches "$json" "${dispatcher_backends[0]}" "${dispatcher_identities[0]}" || return 0
+  printf '%s\n' "$json"
   return 0
 }
 

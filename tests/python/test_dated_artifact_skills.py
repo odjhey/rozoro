@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
 import subprocess
 import tempfile
@@ -36,13 +35,21 @@ def handoff(turn: int, verdict: str, *, reason: str = "", pending: str = "none",
 
 
 class DatedArtifactSkillTests(unittest.TestCase):
-    def test_policy_snapshot_copies_and_launcher_hash_cannot_drift(self) -> None:
-        agents = REPO / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
-        claude = REPO / ".claude/skills/watchtower-policy-snapshot/scripts/snapshot.py"
-        self.assertEqual(agents.read_bytes(), claude.read_bytes())
-        match = re.search(r'^PI_LAUNCHER_SHA256 = "([0-9a-f]{64})"$', agents.read_text(), re.MULTILINE)
-        self.assertIsNotNone(match)
-        self.assertEqual(hashlib.sha256(PI_LAUNCHER_BYTES).hexdigest(), match.group(1))
+    def test_policy_snapshot_emits_launcher_contract_metadata(self) -> None:
+        claude_script = REPO / ".claude/skills/watchtower-policy-snapshot/scripts/snapshot.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_root = Path(temporary).resolve() / "artifacts"
+            runs = [
+                self.run_script(POLICY_SCRIPT, "--repo-root", str(REPO), "--artifact-root", str(artifact_root), "--now", NOW),
+                self.run_script(claude_script, "--repo-root", str(REPO), "--artifact-root", str(artifact_root), "--now", NOW),
+            ]
+            expected_sha = hashlib.sha256(PI_LAUNCHER_BYTES).hexdigest()
+            for run in runs:
+                metadata = json.loads((run / "metadata.json").read_text())
+                coverage = metadata["harness_coverage"]["pi"]
+                self.assertEqual(coverage["status"], "captured")
+                self.assertEqual(coverage["launcher"], "bin/rzr-pi-watchtower.sh")
+                self.assertEqual(coverage["launcher_sha256"], expected_sha)
 
     def run_script(self, script: Path, *args: str, env: dict[str, str] | None = None) -> Path:
         result = subprocess.run(
