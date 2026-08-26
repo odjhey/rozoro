@@ -49,6 +49,23 @@ its own scheduling strategy and for the Workset Merger to preserve the intended
 stack/integration shape. Unknown repository facts may remain explicit assumptions
 or discovery tasks rather than being treated as settled.
 
+The Planner also records the workset **assurance map**: for each task or for the
+workset as a whole,
+
+- the acceptance and judgment questions;
+- the role that owns each question's evidence;
+- the evidence each question requires;
+- the change classes that invalidate that evidence; and
+- which assurance work may run concurrently.
+
+For small bounded tasks a concise default map is enough — for example
+"correctness/contract judgment: Reviewer; behavior/test-design judgment: Tester;
+mechanical evidence: no-mistakes gate; every candidate-changing edit invalidates
+gate evidence; an edit invalidates a judgment only when it changes that
+judgment's question." Do not demand a heavyweight planning artifact merely to
+satisfy the map; do demand that later reconciliation has questions to check
+changes against.
+
 ## Verification ordering
 
 Mechanics precede judgment. When a Coder reports a committed candidate, the
@@ -73,16 +90,21 @@ behavior/test-design, or other judgment question.
 Old gate and Reviewer/Tester observations remain context bound only to their old
 head; never relabel them as observations of, or assurance produced for, a new head.
 The Workset Merger, or a named reconciliation owner it explicitly routes, records
-for every final-head reconciliation: old commit/tree/base/merge-base identities,
-final commit/tree/base/merge-base identities, changed paths and cause, affected
-judgment questions, the rationale, whether fresh judgment is required, and the
-named owner.
-Whenever any new final head retains judgment from an old head, including after a
+a **changed-head reconciliation** for every candidate-changing action: old
+commit/tree/base/merge-base identities, new commit/tree/base/merge-base
+identities, changed paths and cause, affected judgment questions (behavior,
+contracts, correctness, security, test design, documentation, integration, and
+delivery, as applicable), the evidence that remains current, the evidence that
+became stale, the minimum next checks required, the rationale, whether fresh
+judgment is required, and the named owner.
+Whenever any new head retains judgment from an old head, including after a
 mechanical gate fix or a Tester/Test Designer contribution, this named-owner
 reconciliation is mandatory. It must contain every field above even when its
-explicit fresh-judgment decision is "no fresh judgment required." Final readiness
-must reject an incomplete reconciliation. This record is final-head provenance,
-not rewritten old evidence.
+explicit fresh-judgment decision is "no fresh judgment required." Missing or
+incomplete reconciliation fails closed: do not dispatch post-gate Reviewer/Tester
+judgment for the changed head, and final readiness must reject the candidate,
+until the reconciliation exists. This record is changed-head provenance, not
+rewritten old evidence.
 
 After a Reviewer finding is repaired, always gate the repaired candidate. Request
 fresh Reviewer judgment for each changed review question and fresh Test Designer
@@ -91,7 +113,7 @@ record the scoped no-new-judgment rationale in the reconciliation without rewrit
 old-head judgments. Apply the same rule after a rebase, merge, or other integration:
 gate the exact integrated head, request fresh Reviewer and/or Test Designer judgment
 for each affected question, and otherwise preserve old evidence only as context
-alongside the explicit final-head reconciliation provenance.
+alongside the explicit changed-head reconciliation provenance.
 
 When a ratchet proposal picks its codification channel, scope it to the pipeline
 step that owns its delivery (source-verified against no-mistakes v1.57.0):
@@ -101,6 +123,53 @@ mechanically checkable rules go to the repository suite or a lint rule. The gate
 Review step drops findings whose delivery a later step owns, so a lint- or
 docs-flavored `path_instructions` entry is silently discarded — pick the channel
 by ownership, not convenience.
+
+## Evidence-deficit dispatch
+
+Proportional assurance is the default generic model for every artifact type —
+implementation, documentation, configuration, generated output, dependency,
+pipeline-fix, rebase, and integration changes alike. Watchtower neither reruns
+broad Reviewer/Tester scopes after every candidate change nor waves a change
+through because it looks small. After the gate, it dispatches only the
+**evidence deficits** the changed-head reconciliation identifies against the
+assurance map:
+
+- **mechanical/provenance-only change:** exact-head gate rerun; retain prior
+  judgment with the recorded rationale;
+- **design/contract/correctness change:** gate plus focused Reviewer judgment on
+  the affected questions;
+- **behavior/test-design change:** gate plus focused Tester judgment on the
+  affected questions;
+- **both:** gate plus focused Reviewer and focused Tester, normally in parallel
+  on the same head;
+- **integration/base change:** Workset Merger changed-head reconciliation first,
+  then only the affected assurance;
+- **no affected judgment question:** no redundant Reviewer/Tester rerun; record
+  the scoped no-new-judgment rationale in the reconciliation.
+
+Impact class comes from the reconciliation's affected-question analysis, never
+from file type, file count, or diff size. When the impact of a change is
+uncertain, the deficit is the impact analysis itself — route a focused judgment
+turn to settle it rather than guessing "small means safe."
+
+### Fan-in and convergence
+
+- When the affected questions leave Reviewer and Tester independent and the
+  workset strategy permits it, fan both out on one frozen exact head and collect
+  both results before routing one combined repair batch, rather than
+  interleaving repairs per finding.
+- A candidate-changing repair re-enters the exact-head gate once, then reruns
+  only the questions its reconciliation marks affected.
+- Two repeated failures with the same root cause trigger an ownership/authority
+  checkpoint — reconsider which role owns the fix, whether the task boundary or
+  plan is wrong (Replanner), or whether the operator must decide — rather than a
+  blind third attempt down the same route.
+- Where feasible, turn repeated finding classes into repository tests, lint
+  rules, or explicit gate/policy configuration so the gate owns future
+  enforcement.
+- Assurance-only reruns — gate, Reviewer, or Tester turns dispatched for
+  evidence deficits — consume no Coder implementation attempts when no
+  candidate-writing Coder turn occurred; `attempt-budget` owns the accounting.
 
 ### Coder — `gpt-5.6-sol`, low
 
@@ -261,9 +330,11 @@ mutation and asks the operator to confirm.
 `quick-crew-routing` owns eligibility for the bounded fast path. Eligible Quick
 Scout and Quick Coder prefer `gpt-5.3-codex-spark` at low effort.
 
-Use Quick Crew for narrow, mechanical, low-risk work where latency matters. When
-the work expands beyond that boundary, route it into the appropriate standard
-role.
+Use Quick Crew for narrow, mechanical, low-risk work where latency matters.
+Eligibility depends on impact certainty and risk, never on apparent file count,
+diff size, or task size: a one-line contract, configuration, or dependency change
+is not quick merely because it is small. When the work expands beyond the
+boundary, route it into the appropriate standard role.
 
 ## Watchtower — `gpt-5.6-sol`, high preferred
 

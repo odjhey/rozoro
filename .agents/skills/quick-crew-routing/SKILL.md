@@ -23,6 +23,13 @@ Use Quick Crew when all relevant conditions hold:
 - the task is not expected to need long/background work; and
 - a single quick attempt is likely to be enough.
 
+Judge eligibility by impact certainty and risk, not by apparent file count,
+diff size, or task size. A one-line change to a contract, gate configuration, or
+dependency is not quick merely because it is small; a wide mechanical rename can
+be quick when its impact is certain and low-risk. When impact is uncertain, that
+uncertainty is itself the disqualifier — route to a standard role that can
+settle it.
+
 The preferred Quick Crew target is `gpt-5.3-codex-spark` at low effort when this
 machine can run it. If the fast target is unavailable, route the task to the
 appropriate standard role instead of inventing another quick tier.

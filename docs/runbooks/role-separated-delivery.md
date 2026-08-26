@@ -38,8 +38,11 @@ integration unambiguous:
 - tasks that must wait for another task;
 - stacked branch/base relationships where applicable;
 - execution waves or fan-in points when useful;
-- intended integration/merge order; and
-- assumptions whose failure should trigger replanning.
+- intended integration/merge order;
+- assumptions whose failure should trigger replanning; and
+- the assurance map: acceptance/judgment questions, their evidence owners, the
+  evidence required, invalidating change classes, and which assurance may run
+  concurrently (a concise default map is enough for small bounded work).
 
 Parallelism is deliberate: independent tasks should not be serialized without a
 reason, while dependent or stacked tasks should not be launched as if they were
@@ -55,6 +58,10 @@ independent.
    parallel, preserve required sequences/stacks, and wait at declared fan-in
    points only when needed.
 4. Bind Reviewer/Tester evidence to exact candidate heads as required by policy.
+   Dispatch only the evidence deficits the changed-head reconciliation identifies
+   against the assurance map; when Reviewer and Tester judgments are independent
+   and the strategy permits, fan both out on one frozen head and collect both
+   results before routing one combined repair batch.
 5. Route local findings back to the relevant Coder while the current attempt
    ceiling allows it; use Replanner when the task boundary, dependency graph,
    parallel/stacking strategy, or implementation direction changes.
@@ -76,7 +83,8 @@ independent.
 11. If actual repository state invalidates a planned dependency, base, stack, or
     order, the merger reports the evidence to Watchtower for Replanner rather than
     silently inventing a new workset strategy.
-12. Any integration-created head gets the exact-head assurance required by
+12. Any integration-created head gets a changed-head reconciliation first, then
+    only the exact-head assurance its affected judgment questions require under
     repository policy.
 13. Give no-mistakes results to the Workset Merger when their interpretation
     depends on the integrated workset. It classifies findings as local repair,

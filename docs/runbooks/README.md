@@ -18,6 +18,9 @@ constraints still apply to the target work.
 - [Human gates and exact-head evidence](human-gates-and-evidence.md) — preserve
   decisions that genuinely require human authority and bind evidence to immutable
   heads.
+- [Proportional assurance](proportional-assurance.md) — dispatch only the
+  evidence deficits a changed-head reconciliation identifies, with worked
+  pipeline-fix and integration examples.
 
 ## How to use them
 
