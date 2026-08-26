@@ -64,10 +64,12 @@ WAKE_BACKEND="" WAKE_IDENTITY="" DRIVER_DIR=""
 case "$WAKE_REQUEST" in
   "") ;;
   registered)  # backend chosen by the validated registration, never by env priority
-    DRIVER_DIR="$(rzr_resolve_driver_dir "$DRIVER")"
-    WAKE_BACKEND="$(rzr_target_field "$DRIVER_DIR" backend)"
-    WAKE_IDENTITY="$(rzr_target_field "$DRIVER_DIR" identity)"
-    [ -n "$WAKE_BACKEND" ] && [ -n "$WAKE_IDENTITY" ] || rzr_die "registered target is missing backend/identity" ;;
+    WAKE_TARGET="$(rzr_resolve_driver_target "$DRIVER")"
+    WAKE_DRIVER="$(printf '%s' "$WAKE_TARGET" | jq -r '.driver_id // empty')"
+    DRIVER_DIR="$(rzr_driver_dir "$WAKE_DRIVER")"
+    WAKE_BACKEND="$(rzr_target_field "$DRIVER_DIR" backend "$WAKE_TARGET")"
+    WAKE_IDENTITY="$(rzr_target_field "$DRIVER_DIR" identity "$WAKE_TARGET")"
+    [ -n "$WAKE_DRIVER" ] && [ -n "$WAKE_BACKEND" ] && [ -n "$WAKE_IDENTITY" ] || rzr_die "registered target is missing driver/backend/identity" ;;
   codex)
     [ -n "${CODEX_THREAD_ID:-}" ] || rzr_die "--wake-codex requires CODEX_THREAD_ID from the resident Codex thread"
     command -v codex >/dev/null 2>&1 || rzr_die "--wake-codex requires 'codex' on PATH"

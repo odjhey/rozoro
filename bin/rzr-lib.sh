@@ -585,26 +585,34 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
-        proof_created=True
+        proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
         try:
             payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
-            os.write(proof_fd,payload); os.fsync(proof_fd)
+            view=memoryview(payload)
+            while view:
+                count=os.write(proof_fd,view)
+                if count<=0: raise OSError("short capability proof write")
+                view=view[count:]
+            os.fsync(proof_fd)
         finally: os.close(proof_fd)
         os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
         proof_created=False
     finally:
-        if proof_created:
-            try: os.unlink(proof_tmp,dir_fd=fd)
+        if proof_created and proof_identity is not None:
+            try:
+                current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
+                if (current.st_dev,current.st_ino)==proof_identity: os.unlink(proof_tmp,dir_fd=fd)
             except FileNotFoundError: pass
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
-    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"
+    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; tmp_created=False; tmp_identity=None
     try:
         out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        tmp_created=True; tmp_identity=(os.fstat(out).st_dev,os.fstat(out).st_ino)
         try:
             view=memoryview(data)
             while view: view=view[os.write(out,view):]
@@ -612,8 +620,11 @@ try:
         finally: os.close(out)
         os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
     finally:
-        try: os.unlink(tmp,dir_fd=fd)
-        except FileNotFoundError: pass
+        if tmp_created and tmp_identity is not None:
+            try:
+                current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
+                if (current.st_dev,current.st_ino)==tmp_identity: os.unlink(tmp,dir_fd=fd)
+            except FileNotFoundError: pass
 finally: os.close(fd)
 PY
 }
@@ -627,16 +638,31 @@ rzr_claude_event_settings() {  # <task-id> <exact-session-id>
   python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" "$binary" <<'PY' || return 1
 import json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, task, session, binary = sys.argv[1:]
-parent, name = os.path.split(path)
+expected = os.path.join(home, "tasks", task, "claude-event-settings.json")
+if path != expected: raise SystemExit("Claude settings path does not match task capability")
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-before = os.stat(parent, follow_symlinks=False)
-dirfd = os.open(parent, flags)
-if (before.st_dev,before.st_ino)!=(os.fstat(dirfd).st_dev,os.fstat(dirfd).st_ino):
-    os.close(dirfd); raise SystemExit("Claude settings directory changed during open")
+def open_directory(parent, name):
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    fd = os.open(name, flags, dir_fd=parent)
+    info = os.fstat(fd)
+    if (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino):
+        os.close(fd); raise SystemExit("Claude settings directory changed during open")
+    if info.st_uid != os.geteuid() or not stat.S_ISDIR(info.st_mode):
+        os.close(fd); raise SystemExit("refusing unowned Claude settings directory")
+    return fd
+home_before = os.stat(home, follow_symlinks=False)
+root = os.open(home, flags)
+root_info = os.fstat(root)
+if (home_before.st_dev, home_before.st_ino) != (root_info.st_dev, root_info.st_ino):
+    os.close(root); raise SystemExit("Claude settings home changed during open")
+try:
+    tasks = open_directory(root, "tasks")
+    try: dirfd = open_directory(tasks, task)
+    finally: os.close(tasks)
+finally: os.close(root)
+name = "claude-event-settings.json"
 try:
     info = os.fstat(dirfd)
-    if info.st_uid != os.geteuid() or not stat.S_ISDIR(info.st_mode):
-        raise SystemExit("refusing unowned Claude settings directory")
     os.fchmod(dirfd, 0o700)
     if stat.S_IMODE(os.fstat(dirfd).st_mode) != 0o700:
         raise SystemExit("Claude settings directory is not private")
@@ -644,17 +670,17 @@ try:
         final = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
     except FileNotFoundError:
         final = None
-    if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid()):
+    if final is not None and (not stat.S_ISREG(final.st_mode) or final.st_uid != os.geteuid() or final.st_nlink != 1):
         raise SystemExit("refusing unsafe Claude settings destination")
     version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
     match=__import__("re").fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
-        proof_created=True
+        proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
         try:
             payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
             view=memoryview(payload)
@@ -664,8 +690,10 @@ try:
         os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
         proof_created=False
     finally:
-        if proof_created:
-            try: os.unlink(proof_tmp,dir_fd=dirfd)
+        if proof_created and proof_identity is not None:
+            try:
+                current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
+                if (current.st_dev,current.st_ino)==proof_identity: os.unlink(proof_tmp,dir_fd=dirfd)
             except FileNotFoundError: pass
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",
@@ -681,9 +709,11 @@ try:
     temporary = ".claude-settings-" + secrets.token_hex(12) + ".tmp"
     file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     temporary_created = False
+    temporary_identity = None
     try:
         fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
         temporary_created = True
+        temporary_identity = (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
         try:
             view = memoryview(data)
             while view:
@@ -695,8 +725,11 @@ try:
         temporary_created = False
         os.fsync(dirfd)
     finally:
-        if temporary_created:
-            try: os.unlink(temporary, dir_fd=dirfd)
+        if temporary_created and temporary_identity is not None:
+            try:
+                current = os.stat(temporary, dir_fd=dirfd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == temporary_identity:
+                    os.unlink(temporary, dir_fd=dirfd)
             except FileNotFoundError: pass
 finally:
     os.close(dirfd)
@@ -1084,12 +1117,17 @@ os.replace(tmp,p); os.close(lock_fd); os.close(authority_fd)
 PY
 }
 
-rzr_target_field() {  # <driver-dir> <field>
-  local dir="$1" field="$2" driver json
+rzr_target_field() {  # <driver-dir> <field> [validated-target-json]
+  local dir="$1" field="$2" validated="${3:-}" driver json
   driver="${dir##*/}"
   [ "$dir" = "$(rzr_driver_dir "$driver")" ] || return 1
-  json="$(rzr_watchtower_target_json "$driver" || true)"
-  [ -n "$json" ] || return 1
+  if [ -n "$validated" ]; then
+    [ "$(printf '%s' "$validated" | jq -r '.driver_id // empty')" = "$driver" ] || return 1
+    json="$validated"
+  else
+    json="$(rzr_watchtower_target_json "$driver" || true)"
+    [ -n "$json" ] || return 1
+  fi
   printf '%s' "$json" | jq -r --arg k "$field" '.[$k] // empty' 2>/dev/null
 }
 
@@ -1098,13 +1136,13 @@ rzr_target_field() {  # <driver-dir> <field>
 # environment's immutable identities and accept the single registered match. Never
 # guess a backend from a bare environment variable: an unregistered or ambiguous
 # environment is a hard error (register first).
-rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
+rzr_resolve_driver_target() {  # [explicit-driver-id] -> prints validated target JSON
   local explicit="${1:-}" candidate target existing duplicate
-  local -a matches=()
+  local -a matches=() match_targets=()
   if [ -n "$explicit" ]; then
     target="$(rzr_watchtower_target_json "$explicit" || true)"
     [ -n "$target" ] || rzr_die "driver '$explicit' is not registered (run: ./bin/rozoro register --harness <h>)"
-    printf '%s' "$(rzr_driver_dir "$explicit")"; return 0
+    printf '%s' "$target"; return 0
   fi
   while IFS= read -r target; do
     candidate="$(printf '%s' "$target" | jq -r '.driver_id')"
@@ -1114,14 +1152,24 @@ rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
       if [ "${#matches[@]}" -gt 0 ]; then
         for existing in "${matches[@]}"; do [ "$existing" = "$candidate" ] && duplicate=1; done
       fi
-      [ "$duplicate" -eq 1 ] || matches+=("$candidate")
+      if [ "$duplicate" -eq 0 ]; then
+        matches+=("$candidate")
+        match_targets+=("$target")
+      fi
     fi
   done < <(rzr_watchtower_target_json || true)
   case ${#matches[@]} in
     0) rzr_die "--wake found no registered watchtower for this environment (run: ./bin/rozoro register --harness <h>)" ;;
-    1) printf '%s' "$(rzr_driver_dir "${matches[0]}")" ;;
+    1) printf '%s' "${match_targets[0]}" ;;
     *) rzr_die "--wake is ambiguous: multiple registered targets match this environment; pass --driver <id>" ;;
   esac
+}
+
+rzr_resolve_driver_dir() {  # [explicit-driver-id] -> prints driver dir
+  local target driver
+  target="$(rzr_resolve_driver_target "${1:-}")"
+  driver="$(printf '%s' "$target" | jq -r '.driver_id')"
+  printf '%s' "$(rzr_driver_dir "$driver")"
 }
 
 # --- home lock (atomic mkdir, stale-pid reclaim) ---------------------------
