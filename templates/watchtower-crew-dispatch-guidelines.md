@@ -93,6 +93,15 @@ gate the exact integrated head, request fresh Reviewer and/or Test Designer judg
 for each affected question, and otherwise preserve old evidence only as context
 alongside the explicit final-head reconciliation provenance.
 
+When a ratchet proposal picks its codification channel, scope it to the pipeline
+step that owns its delivery (source-verified against no-mistakes v1.57.0):
+review-owned judgment (correctness, contracts, invariants) goes to
+`review.path_instructions`; docs-ownership policy goes to `document.instructions`;
+mechanically checkable rules go to the repository suite or a lint rule. The gate's
+Review step drops findings whose delivery a later step owns, so a lint- or
+docs-flavored `path_instructions` entry is silently discarded — pick the channel
+by ownership, not convenience.
+
 ### Coder — `gpt-5.6-sol`, low
 
 Implement one bounded task. Follow repository-local rules and the supplied task
@@ -175,7 +184,10 @@ Give it:
 
 - repository and workset/task identity;
 - exact candidate branch, commit/tree, base, and merge-base;
-- operator intent/acceptance pointer that no-mistakes needs;
+- operator intent/acceptance pointer that no-mistakes needs — pass it as
+  explicit intent at submission where the installed flow supports it (explicit
+  intent is authoritative; otherwise the pipeline infers intent from local agent
+  session transcripts, which may select the wrong session or a stale summary);
 - the selected no-mistakes profile when the machine profile names one; and
 - whether it should submit a new run or reattach to a known run.
 
