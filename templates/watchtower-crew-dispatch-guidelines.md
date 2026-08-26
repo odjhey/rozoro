@@ -64,7 +64,8 @@ be labeled "not verification of record," does not bypass or replace No-Mistakes,
 can never satisfy the gate, and does not authorize redundant suite execution.
 
 Every repair, gate fix, test contribution, integration, or other candidate-changing
-action creates a new exact candidate and must re-enter No-Mistakes. A mechanical-only
+action creates a new exact candidate, invalidates prior gate and Reviewer/Tester
+attestations for that new head, and must re-enter No-Mistakes. A mechanical-only
 change still requires that gate rerun, but does not require fresh Reviewer or Tester
 judgment unless it creates or changes a design, contract, correctness, acceptance,
 behavior/test-design, or other judgment question.
@@ -72,9 +73,10 @@ behavior/test-design, or other judgment question.
 Old gate and Reviewer/Tester observations remain context bound only to their old
 head; never relabel them as observations of, or assurance produced for, a new head.
 The Workset Merger, or a named reconciliation owner it explicitly routes, records
-for every final-head reconciliation: old commit/tree identities, final commit/tree
-identities, base/merge-base identities, changed paths and cause, affected judgment
-questions, the rationale, whether fresh judgment is required, and the named owner.
+for every final-head reconciliation: old commit/tree/base/merge-base identities,
+final commit/tree/base/merge-base identities, changed paths and cause, affected
+judgment questions, the rationale, whether fresh judgment is required, and the
+named owner.
 Whenever any new final head retains judgment from an old head, including after a
 mechanical gate fix or a Tester/Test Designer contribution, this named-owner
 reconciliation is mandatory. It must contain every field above even when its
