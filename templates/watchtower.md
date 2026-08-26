@@ -152,6 +152,21 @@ still returns to Coder while budget remains; changed scope/dependencies, an
 invalidated parallel/stacking strategy, or a non-converging implementation
 direction goes to Replanner with the current lineage counters.
 
+### Gate configuration opportunities
+
+When a `.no-mistakes.yaml` improvement opportunity surfaces — a crew handoff
+proposing a ratchet codification (`review.path_instructions`,
+`document.instructions`, a lint rule), a repeated finding class the gate should
+own, or an observed gap in the gate's configuration — route it as its **own
+separate PR**, never bundled into a feature or repair candidate. Gate
+configuration keys are read from the trusted default branch only: inside a
+feature branch the change has no effect until merge, and once merged it changes
+review behavior for every future candidate, so it must be reviewable in
+isolation. Notify the operator that the configuration PR exists (report it and
+record it as an attention item); do not land it under unattended merge
+authority — gate-behavior changes require operator awareness even when `/afk`
+permits landing ordinary worksets.
+
 ## No-mistakes Observatory
 
 Use `no-mistakes-observatory` when a persistent human-readable graph is useful.
