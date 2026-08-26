@@ -45,14 +45,15 @@ if [ -n "$WT_NAME" ]; then
   export ROZORO_WT_MODEL="$MODEL" ROZORO_WT_EFFORT="$EFFORT"
 fi
 DIR="$(rzr_driver_dir_prepare "$DRIVER")"
+RZR_DRIVER_EXPECTED_IDENTITY="$(rzr_driver_dir_identity "$DIR")"; export RZR_DRIVER_EXPECTED_IDENTITY
 # Refuse mixed ownership before starting either path.
-if [ -e "$DIR/pending.json" ] || [ -e "$DIR/ack" ]; then
+if rzr_driver_entry_exists "$DIR" pending.json || rzr_driver_entry_exists "$DIR" ack; then
   g="$(rzr_ledger_int "$DIR" generation)"; a="$(rzr_ledger_int "$DIR" ack)"
   [ "$g" -eq "$a" ] || rzr_die "legacy wake ledger has pending work for $DRIVER"
 fi
 SETTINGS="$DIR/claude-event-settings.json"
 rzr_claude_watchtower_settings "$SETTINGS" "$DRIVER" "$ADAPTER_SESSION" "$NATIVE_SESSION" "$PANE"
-READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
+READY_NAME="poller-ready.$INCARNATION"; READY="$DIR/$READY_NAME"; rzr_driver_entry_remove "$DIR" "$READY_NAME"
 
 # Registration is validated only after Herdr observes the launched Claude. The
 # child retains the same session/driver/pane tuple and dies when the exec'd

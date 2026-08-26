@@ -400,7 +400,9 @@ try:
                 info=os.stat(name,dir_fd=towers,follow_symlinks=False)
                 if not private_dir(info): continue
                 driver=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=towers)
-                if (info.st_dev,info.st_ino)!=(os.fstat(driver).st_dev,os.fstat(driver).st_ino): os.close(driver); continue
+                opened_driver=os.fstat(driver)
+                if (info.st_dev,info.st_ino)!=(opened_driver.st_dev,opened_driver.st_ino): os.close(driver); continue
+                driver_identity=(opened_driver.st_dev,opened_driver.st_ino)
                 try:
                     before=os.stat("target.json",dir_fd=driver,follow_symlinks=False)
                     fd=os.open("target.json",os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=driver)
@@ -425,7 +427,8 @@ try:
                         return abs(value)<=2**53-1 and len(str(value))<=120
                     if "version" in preset and not safe_version(preset["version"]): continue
                     if any(isinstance(preset.get(key),str) and not safe(preset[key]) for key in ("name","version","sha256","policy_sha256","model","effort")): continue
-                print(json.dumps(data,separators=(",",":"),allow_nan=False))
+                output=dict(data); output["__rzr_driver_identity"]=[driver_identity[0],driver_identity[1]]
+                print(json.dumps(output,separators=(",",":"),allow_nan=False))
             except (OSError,ValueError,TypeError,AttributeError): continue
     finally: os.close(towers)
 finally: os.close(root)
@@ -563,11 +566,31 @@ import fcntl, json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
 def cleanup_owned(parent, name, identity):
     fcntl.flock(parent, fcntl.LOCK_EX)
+    entry_fd=None
     try:
-        try: current=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        try: entry_fd=os.open(name,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0),dir_fd=parent)
         except FileNotFoundError: return
-        if (current.st_dev,current.st_ino)==identity: os.unlink(name,dir_fd=parent)
-    finally: fcntl.flock(parent, fcntl.LOCK_UN)
+        current=os.fstat(entry_fd)
+        if (current.st_dev,current.st_ino)==identity and current.st_nlink==1: os.unlink(name,dir_fd=parent)
+    finally:
+        if entry_fd is not None: os.close(entry_fd)
+        fcntl.flock(parent, fcntl.LOCK_UN)
+def publish_from_fd(parent, source_fd, destination):
+    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=parent)
+    try:
+        info=os.fstat(target_fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1: raise SystemExit("unsafe Claude destination")
+        os.fchmod(target_fd,0o600)
+        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
+        while True:
+            chunk=os.read(source_fd,65536)
+            if not chunk: break
+            view=memoryview(chunk)
+            while view: view=view[os.write(target_fd,view):]
+        os.fsync(target_fd)
+        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
+    finally: os.close(target_fd)
 name = "claude-event-settings.json"; expected=os.path.join(home,"watchtowers",driver,name)
 if path != expected: raise SystemExit("watchtower settings path does not match driver capability")
 flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
@@ -594,7 +617,7 @@ try:
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
     proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
     try:
-        proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        proof_fd=os.open(proof_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
         payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
         view=memoryview(payload)
@@ -605,14 +628,9 @@ try:
         os.fsync(proof_fd)
         current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
-        os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
-        published=os.stat(proof_name,dir_fd=fd,follow_symlinks=False)
-        if (published.st_dev,published.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof publication drifted")
-        proof_created=False
+        publish_from_fd(fd,proof_fd,proof_name)
     finally:
         if proof_created and proof_fd is not None:
-            try: os.ftruncate(proof_fd,0)
-            except OSError: pass
             cleanup_owned(fd,proof_tmp,proof_identity)
         if proof_fd is not None: os.close(proof_fd)
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
@@ -620,22 +638,17 @@ try:
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
     tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; tmp_created=False; tmp_identity=None; out=None
     try:
-        out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        out=os.open(tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
         tmp_created=True; tmp_identity=(os.fstat(out).st_dev,os.fstat(out).st_ino)
         view=memoryview(data)
         while view: view=view[os.write(out,view):]
         os.fsync(out)
         current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings temporary changed during write")
-        os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd)
-        published=os.stat(name,dir_fd=fd,follow_symlinks=False)
-        if (published.st_dev,published.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings publication drifted")
-        tmp_created=False
+        publish_from_fd(fd,out,name)
         os.fsync(fd)
     finally:
         if tmp_created and out is not None:
-            try: os.ftruncate(out,0)
-            except OSError: pass
             cleanup_owned(fd,tmp,tmp_identity)
         if out is not None: os.close(out)
 finally: os.close(fd)
@@ -653,11 +666,31 @@ import fcntl, json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, task, session, binary = sys.argv[1:]
 def cleanup_owned(parent, name, identity):
     fcntl.flock(parent, fcntl.LOCK_EX)
+    entry_fd=None
     try:
-        try: current=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        try: entry_fd=os.open(name,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0),dir_fd=parent)
         except FileNotFoundError: return
-        if (current.st_dev,current.st_ino)==identity: os.unlink(name,dir_fd=parent)
-    finally: fcntl.flock(parent, fcntl.LOCK_UN)
+        current=os.fstat(entry_fd)
+        if (current.st_dev,current.st_ino)==identity and current.st_nlink==1: os.unlink(name,dir_fd=parent)
+    finally:
+        if entry_fd is not None: os.close(entry_fd)
+        fcntl.flock(parent, fcntl.LOCK_UN)
+def publish_from_fd(parent, source_fd, destination):
+    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=parent)
+    try:
+        info=os.fstat(target_fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1: raise SystemExit("unsafe Claude destination")
+        os.fchmod(target_fd,0o600)
+        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
+        while True:
+            chunk=os.read(source_fd,65536)
+            if not chunk: break
+            view=memoryview(chunk)
+            while view: view=view[os.write(target_fd,view):]
+        os.fsync(target_fd)
+        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
+    finally: os.close(target_fd)
 expected = os.path.join(home, "tasks", task, "claude-event-settings.json")
 if path != expected: raise SystemExit("Claude settings path does not match task capability")
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -699,7 +732,7 @@ try:
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
     proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
     try:
-        proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
+        proof_fd=os.open(proof_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
         payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
         view=memoryview(payload)
@@ -707,14 +740,9 @@ try:
         os.fsync(proof_fd)
         current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
-        os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
-        published=os.stat(proof_name,dir_fd=dirfd,follow_symlinks=False)
-        if (published.st_dev,published.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof publication drifted")
-        proof_created=False
+        publish_from_fd(dirfd,proof_fd,proof_name)
     finally:
         if proof_created and proof_fd is not None:
-            try: os.ftruncate(proof_fd,0)
-            except OSError: pass
             cleanup_owned(dirfd,proof_tmp,proof_identity)
         if proof_fd is not None: os.close(proof_fd)
     command = shlex.join([
@@ -729,7 +757,7 @@ try:
     )}}
     data = (json.dumps(settings, sort_keys=True, separators=(",", ":")) + "\n").encode()
     temporary = ".claude-settings-" + secrets.token_hex(12) + ".tmp"
-    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     temporary_created = False
     temporary_identity = None
     fd = None
@@ -744,16 +772,10 @@ try:
         current = os.stat(temporary, dir_fd=dirfd, follow_symlinks=False)
         if (current.st_dev, current.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
             raise SystemExit("Claude settings temporary changed during write")
-        os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
-        published = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
-        if (published.st_dev, published.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
-            raise SystemExit("Claude settings publication drifted")
-        temporary_created = False
+        publish_from_fd(dirfd,fd,name)
         os.fsync(dirfd)
     finally:
         if temporary_created and fd is not None:
-            try: os.ftruncate(fd,0)
-            except OSError: pass
             cleanup_owned(dirfd,temporary,temporary_identity)
         if fd is not None: os.close(fd)
 finally:
@@ -947,7 +969,7 @@ rzr_driver_dir_prepare() {  # <driver-id> -> path
   local id="$1"; rzr_validate_task_component "$id" "driver id"
   RZR_DRIVER_HOME="$RZR_HOME" RZR_DRIVER_ID="$id" python3 - <<'PY'
 import os, stat
-home=os.environ["RZR_DRIVER_HOME"]
+home=os.environ["RZR_DRIVER_HOME"]; expected=os.environ.get("RZR_DRIVER_EXPECTED_IDENTITY","")
 def directory(parent, name):
     try: info=os.stat(name,dir_fd=parent,follow_symlinks=False)
     except FileNotFoundError:
@@ -957,6 +979,8 @@ def directory(parent, name):
     fd=os.open(name,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=parent)
     opened=os.fstat(fd)
     if (info.st_dev,info.st_ino)!=(opened.st_dev,opened.st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
+    if name==os.environ["RZR_DRIVER_ID"] and expected and f"{opened.st_dev}:{opened.st_ino}" != expected:
+        os.close(fd); raise SystemExit("watchtower directory identity changed")
     os.fchmod(fd,0o700)
     return fd
 root=os.open(home,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
@@ -1007,11 +1031,54 @@ rzr_write_private() {  # <path>  (content on stdin)
   ( umask 077; cat > "$tmp" ) && chmod 600 "$tmp" 2>/dev/null; mv "$tmp" "$path"
 }
 
+rzr_driver_dir_identity() {  # <driver-dir> -> device:inode
+  RZR_DRIVER_DIR_PATH="$1" python3 - <<'PY'
+import os, stat
+path=os.environ["RZR_DRIVER_DIR_PATH"]
+fd=os.open(path,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid(): raise SystemExit("unsafe watchtower directory")
+    print(f"{info.st_dev}:{info.st_ino}")
+finally: os.close(fd)
+PY
+}
+rzr_driver_dir_identity_matches() {
+  [ -z "${RZR_DRIVER_EXPECTED_IDENTITY:-}" ] || [ "$(rzr_driver_dir_identity "$1")" = "$RZR_DRIVER_EXPECTED_IDENTITY" ]
+}
+rzr_driver_entry_exists() {
+  RZR_DRIVER_DIR_PATH="$1" RZR_DRIVER_ENTRY_NAME="$2" RZR_DRIVER_EXPECTED="${RZR_DRIVER_EXPECTED_IDENTITY:-}" python3 - <<'PY'
+import os, stat
+path=os.environ["RZR_DRIVER_DIR_PATH"]; expected=os.environ["RZR_DRIVER_EXPECTED"]
+fd=os.open(path,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if expected and f"{info.st_dev}:{info.st_ino}" != expected: raise SystemExit(1)
+    try: os.stat(os.environ["RZR_DRIVER_ENTRY_NAME"],dir_fd=fd,follow_symlinks=False)
+    except FileNotFoundError: raise SystemExit(1)
+finally: os.close(fd)
+PY
+}
+rzr_driver_entry_remove() {
+  RZR_DRIVER_DIR_PATH="$1" RZR_DRIVER_ENTRY_NAME="$2" RZR_DRIVER_EXPECTED="${RZR_DRIVER_EXPECTED_IDENTITY:-}" python3 - <<'PY'
+import os
+path=os.environ["RZR_DRIVER_DIR_PATH"]; expected=os.environ["RZR_DRIVER_EXPECTED"]
+fd=os.open(path,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+try:
+    info=os.fstat(fd)
+    if expected and f"{info.st_dev}:{info.st_ino}" != expected: raise SystemExit("watchtower directory changed")
+    try: os.unlink(os.environ["RZR_DRIVER_ENTRY_NAME"],dir_fd=fd)
+    except FileNotFoundError: pass
+finally: os.close(fd)
+PY
+}
+
 # Read one field from a driver's ledger integers (generation/delivered/ack).
 # ack lives in its own single-writer file; generation/delivered live in
 # pending.json. Missing/malformed -> 0, so a fresh ledger reads as all-zero.
 rzr_ledger_int() {  # <driver-dir> <generation|delivered|ack>
   local dir="$1" field="$2"
+  rzr_driver_dir_identity_matches "$dir" || return 1
   if [ "$field" = ack ]; then
     local v; v=$(cat "$dir/ack" 2>/dev/null || echo 0)
     case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
@@ -1031,6 +1098,7 @@ PY
 # idempotent while legacy callers without an edge ID retain per-call bumps.
 rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   local dir="$1"
+  rzr_driver_dir_identity_matches "$dir" || return 1
   mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" RZR_LEDGER_EDGE="${4:-}" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
@@ -1071,6 +1139,7 @@ PY
 # soft failure/defer reason without advancing delivered (so it retries).
 rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation]
   local dir="$1" state="$2" err="${3:-}" attempted="${4:-}"
+  rzr_driver_dir_identity_matches "$dir" || return 1
   if [ "$state" = delivered ]; then
     case "$attempted" in ''|*[!0-9]*) rzr_die "delivered ledger record requires the attempted generation" ;; esac
   fi
@@ -1113,6 +1182,7 @@ PY
 # Coalescing gate: deliver iff generation > ack AND delivered <= ack.
 rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
   local dir="$1" g a d
+  rzr_driver_dir_identity_matches "$dir" || return 1
   [ ! -e "$dir/.event-bus-authority" ] && [ ! -L "$dir/.event-bus-authority" ] || return 1
   g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
   [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
@@ -1120,7 +1190,7 @@ rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
 
 # Advance the driver's ack to the given generation (single-writer file, atomic).
 rzr_ledger_ack() {  # <driver-dir> <generation>
-  local dir="$1"; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
+  local dir="$1"; rzr_driver_dir_identity_matches "$dir" || return 1; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
 import fcntl, json, os
 p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"])

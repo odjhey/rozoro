@@ -136,23 +136,32 @@ def write_all(fd, payload):
         view = view[count:]
 def cleanup_owned(parent, name, identity):
     fcntl.flock(parent, fcntl.LOCK_EX)
+    entry_fd=None
     try:
-        try: current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        try: entry_fd=os.open(name,os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=parent)
         except FileNotFoundError: return
-        if (current.st_dev, current.st_ino) == identity: os.unlink(name, dir_fd=parent)
-    finally: fcntl.flock(parent, fcntl.LOCK_UN)
-def replace_owned(parent, source, destination, identity, source_fd):
-    owned = os.fstat(source_fd)
-    if (owned.st_dev, owned.st_ino) != identity or owned.st_nlink != 1:
-        raise SystemExit("registration temporary source drifted")
-    try: current = os.stat(source, dir_fd=parent, follow_symlinks=False)
-    except FileNotFoundError: raise SystemExit("registration temporary disappeared")
-    if (current.st_dev, current.st_ino) != identity:
-        raise SystemExit("registration temporary changed during write")
-    os.replace(source, destination, src_dir_fd=parent, dst_dir_fd=parent)
-    published = os.stat(destination, dir_fd=parent, follow_symlinks=False)
-    if (published.st_dev, published.st_ino) != identity or os.fstat(source_fd).st_nlink != 1:
-        raise SystemExit("registration target publication drifted")
+        current=os.fstat(entry_fd)
+        if (current.st_dev, current.st_ino)==identity and current.st_nlink==1: os.unlink(name,dir_fd=parent)
+    finally:
+        if entry_fd is not None: os.close(entry_fd)
+        fcntl.flock(parent, fcntl.LOCK_UN)
+def publish_from_fd(parent, source_fd, destination):
+    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|nofollow,0o600,dir_fd=parent)
+    try:
+        info=os.fstat(target_fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1:
+            raise SystemExit("unsafe registration target")
+        os.fchmod(target_fd,0o600)
+        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
+        while True:
+            chunk=os.read(source_fd,65536)
+            if not chunk: break
+            write_all(target_fd,chunk)
+        os.fsync(target_fd)
+        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1:
+            raise SystemExit("registration target publication drifted")
+    finally: os.close(target_fd)
 data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
         "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
         "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
@@ -187,28 +196,27 @@ try:
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1: raise SystemExit("unsafe registrations log")
     log_identity=(info.st_dev,info.st_ino)
     os.fchmod(logfd, 0o600)
-    tmp_created=False; tmp_identity=None; fd=None
+    tmp_created=False; tmp_identity=None; fd=None; append_fd=None
     try:
-        fd=os.open(tmp_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
+        fd=os.open(tmp_name,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
         tmp_created=True; tmp_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
         payload=json.dumps(data,indent=2).encode(); write_all(fd,payload); os.fsync(fd)
-        replace_owned(dirfd,tmp_name,target_name,tmp_identity,fd)
-        tmp_created=False
+        publish_from_fd(dirfd,fd,target_name)
         os.fsync(dirfd)
-        current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(logfd).st_nlink != 1:
+        append_fd=os.open("registrations.jsonl",flags,dir_fd=dirfd)
+        append_info=os.fstat(append_fd); current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+        if (append_info.st_dev,append_info.st_ino)!=(log_identity[0],log_identity[1]) or append_info.st_nlink != 1 or (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]):
             raise SystemExit("registrations log changed before append")
-        write_all(logfd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(logfd)
+        write_all(append_fd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(append_fd)
         current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(logfd).st_nlink != 1:
+        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(append_fd).st_nlink != 1:
             raise SystemExit("registrations log changed during append")
     finally:
         if fd is not None:
             if tmp_created:
-                try: os.ftruncate(fd,0)
-                except OSError: pass
                 cleanup_owned(dirfd,tmp_name,tmp_identity)
             os.close(fd)
+        if append_fd is not None: os.close(append_fd)
 finally:
     os.close(logfd); os.close(dirfd)
 PY
