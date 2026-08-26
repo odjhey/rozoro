@@ -193,6 +193,7 @@ do_spawn() {
     rzr_meta_set "$ID" dispatcher_preset "$(printf '%s' "$dispatcher" | jq -r '.preset.name // empty')" || true
     rzr_meta_set "$ID" dispatcher_preset_version "$(printf '%s' "$dispatcher" | jq -r '.preset.version // empty')" || true
     rzr_meta_set "$ID" dispatcher_preset_sha "$(printf '%s' "$dispatcher" | jq -r '.preset.sha256 // empty')" || true
+    rzr_meta_set "$ID" dispatcher_policy_sha "$(printf '%s' "$dispatcher" | jq -r '.policy_sha256 // empty')" || true
   fi
 
   echo "rzr: task '$ID' -> tab ${tab:-?} pane $pane (cwd $CWD)"

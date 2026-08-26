@@ -109,7 +109,7 @@ RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_
 RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
 RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import json, os, stat
+import fcntl, json, os, stat
 nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
 def child(parent,name):
     try: os.mkdir(name,0o700,dir_fd=parent)
@@ -134,6 +134,13 @@ def write_all(fd, payload):
         count = os.write(fd, view)
         if count <= 0: raise OSError("short registration write")
         view = view[count:]
+def cleanup_owned(parent, name, identity):
+    fcntl.flock(parent, fcntl.LOCK_EX)
+    try:
+        try: current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError: return
+        if (current.st_dev, current.st_ino) == identity: os.unlink(name, dir_fd=parent)
+    finally: fcntl.flock(parent, fcntl.LOCK_UN)
 def replace_owned(parent, source, destination, identity, source_fd):
     owned = os.fstat(source_fd)
     if (owned.st_dev, owned.st_ino) != identity or owned.st_nlink != 1:
@@ -143,6 +150,9 @@ def replace_owned(parent, source, destination, identity, source_fd):
     if (current.st_dev, current.st_ino) != identity:
         raise SystemExit("registration temporary changed during write")
     os.replace(source, destination, src_dir_fd=parent, dst_dir_fd=parent)
+    published = os.stat(destination, dir_fd=parent, follow_symlinks=False)
+    if (published.st_dev, published.st_ino) != identity or os.fstat(source_fd).st_nlink != 1:
+        raise SystemExit("registration target publication drifted")
 data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
         "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
         "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
@@ -197,6 +207,7 @@ try:
             if tmp_created:
                 try: os.ftruncate(fd,0)
                 except OSError: pass
+                cleanup_owned(dirfd,tmp_name,tmp_identity)
             os.close(fd)
 finally:
     os.close(logfd); os.close(dirfd)

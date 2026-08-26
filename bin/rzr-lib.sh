@@ -559,8 +559,15 @@ rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <adapter-session
   local target="$1" driver="$2" session="$3" native="$4" pane="$5" binary
   binary="$(command -v claude)" || return 1
   python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$native" "$pane" "$binary" <<'PY' || return 1
-import json, os, secrets, shlex, stat, subprocess, sys
+import fcntl, json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
+def cleanup_owned(parent, name, identity):
+    fcntl.flock(parent, fcntl.LOCK_EX)
+    try:
+        try: current=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        except FileNotFoundError: return
+        if (current.st_dev,current.st_ino)==identity: os.unlink(name,dir_fd=parent)
+    finally: fcntl.flock(parent, fcntl.LOCK_UN)
 name = "claude-event-settings.json"; expected=os.path.join(home,"watchtowers",driver,name)
 if path != expected: raise SystemExit("watchtower settings path does not match driver capability")
 flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
@@ -599,11 +606,14 @@ try:
         current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
         os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
+        published=os.stat(proof_name,dir_fd=fd,follow_symlinks=False)
+        if (published.st_dev,published.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof publication drifted")
         proof_created=False
     finally:
         if proof_created and proof_fd is not None:
             try: os.ftruncate(proof_fd,0)
             except OSError: pass
+            cleanup_owned(fd,proof_tmp,proof_identity)
         if proof_fd is not None: os.close(proof_fd)
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
@@ -618,12 +628,15 @@ try:
         current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings temporary changed during write")
         os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd)
+        published=os.stat(name,dir_fd=fd,follow_symlinks=False)
+        if (published.st_dev,published.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings publication drifted")
         tmp_created=False
         os.fsync(fd)
     finally:
         if tmp_created and out is not None:
             try: os.ftruncate(out,0)
             except OSError: pass
+            cleanup_owned(fd,tmp,tmp_identity)
         if out is not None: os.close(out)
 finally: os.close(fd)
 PY
@@ -636,8 +649,15 @@ rzr_claude_event_settings() {  # <task-id> <exact-session-id>
   target="$(rzr_task_dir "$task_id")/claude-event-settings.json"
   local binary; binary="$(command -v claude)" || return 1
   python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$task_id" "$session_id" "$binary" <<'PY' || return 1
-import json, os, secrets, shlex, stat, subprocess, sys
+import fcntl, json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, task, session, binary = sys.argv[1:]
+def cleanup_owned(parent, name, identity):
+    fcntl.flock(parent, fcntl.LOCK_EX)
+    try:
+        try: current=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        except FileNotFoundError: return
+        if (current.st_dev,current.st_ino)==identity: os.unlink(name,dir_fd=parent)
+    finally: fcntl.flock(parent, fcntl.LOCK_UN)
 expected = os.path.join(home, "tasks", task, "claude-event-settings.json")
 if path != expected: raise SystemExit("Claude settings path does not match task capability")
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -688,11 +708,14 @@ try:
         current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
         os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
+        published=os.stat(proof_name,dir_fd=dirfd,follow_symlinks=False)
+        if (published.st_dev,published.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof publication drifted")
         proof_created=False
     finally:
         if proof_created and proof_fd is not None:
             try: os.ftruncate(proof_fd,0)
             except OSError: pass
+            cleanup_owned(dirfd,proof_tmp,proof_identity)
         if proof_fd is not None: os.close(proof_fd)
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",
@@ -722,12 +745,16 @@ try:
         if (current.st_dev, current.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
             raise SystemExit("Claude settings temporary changed during write")
         os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+        published = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+        if (published.st_dev, published.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
+            raise SystemExit("Claude settings publication drifted")
         temporary_created = False
         os.fsync(dirfd)
     finally:
         if temporary_created and fd is not None:
             try: os.ftruncate(fd,0)
             except OSError: pass
+            cleanup_owned(dirfd,temporary,temporary_identity)
         if fd is not None: os.close(fd)
 finally:
     os.close(dirfd)
@@ -928,6 +955,8 @@ def directory(parent, name):
     if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid():
         raise SystemExit("unsafe watchtower directory")
     fd=os.open(name,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=parent)
+    opened=os.fstat(fd)
+    if (info.st_dev,info.st_ino)!=(opened.st_dev,opened.st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
     os.fchmod(fd,0o700)
     return fd
 root=os.open(home,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))

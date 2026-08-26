@@ -66,7 +66,7 @@ case "$WAKE_REQUEST" in
   registered)  # backend chosen by the validated registration, never by env priority
     WAKE_TARGET="$(rzr_resolve_driver_target "$DRIVER")"
     WAKE_DRIVER="$(printf '%s' "$WAKE_TARGET" | jq -r '.driver_id // empty')"
-    DRIVER_DIR="$(rzr_driver_dir "$WAKE_DRIVER")"
+    DRIVER_DIR="$(rzr_driver_dir_prepare "$WAKE_DRIVER")"
     WAKE_BACKEND="$(rzr_target_field "$DRIVER_DIR" backend "$WAKE_TARGET")"
     WAKE_IDENTITY="$(rzr_target_field "$DRIVER_DIR" identity "$WAKE_TARGET")"
     [ -n "$WAKE_DRIVER" ] && [ -n "$WAKE_BACKEND" ] && [ -n "$WAKE_IDENTITY" ] || rzr_die "registered target is missing driver/backend/identity" ;;
