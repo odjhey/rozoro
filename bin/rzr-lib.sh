@@ -585,46 +585,46 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
-        try:
-            payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
-            view=memoryview(payload)
-            while view:
-                count=os.write(proof_fd,view)
-                if count<=0: raise OSError("short capability proof write")
-                view=view[count:]
-            os.fsync(proof_fd)
-        finally: os.close(proof_fd)
+        payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
+        view=memoryview(payload)
+        while view:
+            count=os.write(proof_fd,view)
+            if count<=0: raise OSError("short capability proof write")
+            view=view[count:]
+        os.fsync(proof_fd)
+        current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
         os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
         proof_created=False
     finally:
-        if proof_created and proof_identity is not None:
-            try:
-                current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
-                if (current.st_dev,current.st_ino)==proof_identity: os.unlink(proof_tmp,dir_fd=fd)
-            except FileNotFoundError: pass
+        if proof_created and proof_fd is not None:
+            try: os.ftruncate(proof_fd,0)
+            except OSError: pass
+        if proof_fd is not None: os.close(proof_fd)
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
     data=(json.dumps({"hooks":{e:entry for e in ("SessionStart","UserPromptSubmit","SubagentStart","SubagentStop","Stop","SessionEnd")}},sort_keys=True,separators=(",",":"))+"\n").encode()
-    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; tmp_created=False; tmp_identity=None
+    tmp=".claude-watchtower-"+secrets.token_hex(12)+".tmp"; tmp_created=False; tmp_identity=None; out=None
     try:
         out=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
         tmp_created=True; tmp_identity=(os.fstat(out).st_dev,os.fstat(out).st_ino)
-        try:
-            view=memoryview(data)
-            while view: view=view[os.write(out,view):]
-            os.fsync(out)
-        finally: os.close(out)
-        os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd); os.fsync(fd)
+        view=memoryview(data)
+        while view: view=view[os.write(out,view):]
+        os.fsync(out)
+        current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings temporary changed during write")
+        os.replace(tmp,name,src_dir_fd=fd,dst_dir_fd=fd)
+        tmp_created=False
+        os.fsync(fd)
     finally:
-        if tmp_created and tmp_identity is not None:
-            try:
-                current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
-                if (current.st_dev,current.st_ino)==tmp_identity: os.unlink(tmp,dir_fd=fd)
-            except FileNotFoundError: pass
+        if tmp_created and out is not None:
+            try: os.ftruncate(out,0)
+            except OSError: pass
+        if out is not None: os.close(out)
 finally: os.close(fd)
 PY
 }
@@ -677,24 +677,23 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
     try:
         proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
-        try:
-            payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
-            view=memoryview(payload)
-            while view: view=view[os.write(proof_fd,view):]
-            os.fsync(proof_fd)
-        finally: os.close(proof_fd)
+        payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
+        view=memoryview(payload)
+        while view: view=view[os.write(proof_fd,view):]
+        os.fsync(proof_fd)
+        current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
         os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
         proof_created=False
     finally:
-        if proof_created and proof_identity is not None:
-            try:
-                current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
-                if (current.st_dev,current.st_ino)==proof_identity: os.unlink(proof_tmp,dir_fd=dirfd)
-            except FileNotFoundError: pass
+        if proof_created and proof_fd is not None:
+            try: os.ftruncate(proof_fd,0)
+            except OSError: pass
+        if proof_fd is not None: os.close(proof_fd)
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",
         f"ROZORO_TASK_ID={task}", f"ROZORO_SESSION_ID={session}",
@@ -710,27 +709,26 @@ try:
     file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     temporary_created = False
     temporary_identity = None
+    fd = None
     try:
         fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
         temporary_created = True
         temporary_identity = (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(fd, view):]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+        current = os.stat(temporary, dir_fd=dirfd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
+            raise SystemExit("Claude settings temporary changed during write")
         os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
         temporary_created = False
         os.fsync(dirfd)
     finally:
-        if temporary_created and temporary_identity is not None:
-            try:
-                current = os.stat(temporary, dir_fd=dirfd, follow_symlinks=False)
-                if (current.st_dev, current.st_ino) == temporary_identity:
-                    os.unlink(temporary, dir_fd=dirfd)
-            except FileNotFoundError: pass
+        if temporary_created and fd is not None:
+            try: os.ftruncate(fd,0)
+            except OSError: pass
+        if fd is not None: os.close(fd)
 finally:
     os.close(dirfd)
 PY

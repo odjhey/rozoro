@@ -64,6 +64,7 @@ SH
   run rzr-pi-watchtower.sh --wt-name north --cwd "$TEST_ROOT"
   assert_success
   grep -E '^wt=north preset= version= driver=herdr-manual_p1 preset_sha= policy_sha=[0-9a-f]{64}$' "$PI_LOG"
+  grep -Fx 'You are a rozoro **watchtower** — the orchestration layer for a fleet of agent' "$PI_LOG"
 }
 
 @test "Pi watchtower preset injects resources and stamps inherited registration env" {

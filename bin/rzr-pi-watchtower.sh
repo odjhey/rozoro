@@ -48,4 +48,34 @@ args=(--extension "$ROOT/.pi/extensions/rozoro-watchtower.ts" --approve --append
 [ -z "$MODEL" ] || args+=(--model "$MODEL")
 [ -z "$EFFORT" ] || args+=(--thinking "$EFFORT")
 [ -z "$POLICY_ID" ] || [ "$(rzr_file_identity "$ROOT/templates/watchtower.md")" = "$POLICY_ID" ] || rzr_die "watchtower policy changed during launch"
+if [ -n "$POLICY_ID" ]; then
+  exec python3 - "$ROOT/templates/watchtower.md" "$POLICY_ID" "${args[@]}" "$@" <<'PY'
+import hashlib, os, stat, sys
+path, expected = sys.argv[1:3]
+fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode): raise SystemExit("watchtower policy is not a regular file")
+    digest = hashlib.sha256()
+    chunks = []
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk: break
+        chunks.append(chunk); digest.update(chunk)
+    actual = f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}:{digest.hexdigest()}"
+    if actual != expected: raise SystemExit("watchtower policy changed during launch")
+    policy = b"".join(chunks).decode()
+finally:
+    os.close(fd)
+pi_args = sys.argv[3:]
+for index, value in enumerate(pi_args[:-1]):
+    if value == "--append-system-prompt" and pi_args[index + 1] == path:
+        pi_args[index + 1] = policy
+        break
+else:
+    raise SystemExit("watchtower policy argument missing")
+os.environ["ROZORO_WATCHTOWER"] = "1"
+os.execvpe("pi", ["pi"] + pi_args, os.environ)
+PY
+fi
 exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"
