@@ -69,18 +69,20 @@ behavior/test-design, or other judgment question.
 
 Old gate and Reviewer/Tester observations remain context bound only to their old
 head; never relabel them as observations of, or assurance produced for, a new head.
-The Workset Merger, or an owner it explicitly routes, records the final-head
-reconciliation decision: old and final head identities, changed paths and cause,
-affected judgment questions, the rationale, and whether fresh judgment is required.
+The Workset Merger, or a named reconciliation owner it explicitly routes, records
+for every final-head reconciliation: old commit/tree identities, final commit/tree
+identities, base/merge-base identities, changed paths and cause, affected judgment
+questions, the rationale, whether fresh judgment is required, and the named owner.
 This record is final-head provenance, not rewritten old evidence.
 
-After a Reviewer finding is repaired, always gate the repaired candidate. Request a
-fresh Reviewer only when the repair affects the judgment question; otherwise record
-the scoped no-new-judgment rationale in the reconciliation without rewriting the
-old-head review. Apply the same rule after a rebase, merge, or other integration:
-gate the exact integrated head, request fresh Reviewer or Tester judgment when the
-integration affects its judgment question, and otherwise preserve old evidence only
-as context alongside the explicit final-head reconciliation provenance.
+After a Reviewer finding is repaired, always gate the repaired candidate. Request
+fresh Reviewer judgment for each changed review question and fresh Test Designer
+judgment for each changed behavior/test-design question; when neither is affected,
+record the scoped no-new-judgment rationale in the reconciliation without rewriting
+old-head judgments. Apply the same rule after a rebase, merge, or other integration:
+gate the exact integrated head, request fresh Reviewer and/or Test Designer judgment
+for each affected question, and otherwise preserve old evidence only as context
+alongside the explicit final-head reconciliation provenance.
 
 ### Coder — `gpt-5.6-sol`, low
 
