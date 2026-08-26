@@ -28,7 +28,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-DIR="$(rzr_resolve_driver_dir "$DRIVER")"
+TARGET="$(rzr_resolve_driver_target "$DRIVER")"
+DRIVER_ID="$(printf '%s' "$TARGET" | jq -r '.driver_id // empty')"
+DIR="$(rzr_driver_dir "$DRIVER_ID")"
+RZR_DRIVER_EXPECTED_IDENTITY="$(printf '%s' "$TARGET" | jq -r '.__rzr_driver_identity // empty | if type == "array" then join(":") else empty end')"; export RZR_DRIVER_EXPECTED_IDENTITY
+rzr_driver_dir_open "$DIR" || rzr_die "watchtower directory changed"
 
 if [ "${ROZORO_LEGACY_DIAGNOSTIC:-0}" != 1 ]; then
   args=(reconcile --driver "$(basename "$DIR")")

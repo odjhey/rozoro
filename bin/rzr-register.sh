@@ -89,6 +89,7 @@ case "$BACKEND" in
       BACKEND=herdr; IDENTITY="$HERDR_PANE_ID"
     fi ;;
 esac
+rzr_validate_wt_metadata "$IDENTITY" "wake target identity"
 
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
 rzr_validate_task_component "$DRIVER_ID" "driver id"
@@ -145,23 +146,15 @@ def cleanup_owned(parent, name, identity):
     finally:
         if entry_fd is not None: os.close(entry_fd)
         fcntl.flock(parent, fcntl.LOCK_UN)
-def publish_from_fd(parent, source_fd, destination):
-    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|nofollow,0o600,dir_fd=parent)
-    try:
-        info=os.fstat(target_fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1:
-            raise SystemExit("unsafe registration target")
-        os.fchmod(target_fd,0o600)
-        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
-        while True:
-            chunk=os.read(source_fd,65536)
-            if not chunk: break
-            write_all(target_fd,chunk)
-        os.fsync(target_fd)
-        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1:
-            raise SystemExit("registration target publication drifted")
-    finally: os.close(target_fd)
+def replace_owned(parent, source, destination, identity, source_fd):
+    owned=os.fstat(source_fd)
+    if (owned.st_dev,owned.st_ino)!=identity or owned.st_nlink!=1: raise SystemExit("registration temporary source drifted")
+    current=os.stat(source,dir_fd=parent,follow_symlinks=False)
+    if (current.st_dev,current.st_ino)!=identity: raise SystemExit("registration temporary changed during write")
+    os.replace(source,destination,src_dir_fd=parent,dst_dir_fd=parent)
+    published=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+    if (published.st_dev,published.st_ino)!=identity or os.fstat(source_fd).st_nlink!=1:
+        raise SystemExit("registration target publication drifted")
 data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
         "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
         "identity": os.environ["RZR_REG_IDENTITY"], "owner_pid": os.environ["RZR_REG_OWNER"],
@@ -201,7 +194,8 @@ try:
         fd=os.open(tmp_name,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
         tmp_created=True; tmp_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
         payload=json.dumps(data,indent=2).encode(); write_all(fd,payload); os.fsync(fd)
-        publish_from_fd(dirfd,fd,target_name)
+        replace_owned(dirfd,tmp_name,target_name,tmp_identity,fd)
+        tmp_created=False
         os.fsync(dirfd)
         append_fd=os.open("registrations.jsonl",flags,dir_fd=dirfd)
         append_info=os.fstat(append_fd); current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)

@@ -575,22 +575,14 @@ def cleanup_owned(parent, name, identity):
     finally:
         if entry_fd is not None: os.close(entry_fd)
         fcntl.flock(parent, fcntl.LOCK_UN)
-def publish_from_fd(parent, source_fd, destination):
-    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=parent)
-    try:
-        info=os.fstat(target_fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1: raise SystemExit("unsafe Claude destination")
-        os.fchmod(target_fd,0o600)
-        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
-        while True:
-            chunk=os.read(source_fd,65536)
-            if not chunk: break
-            view=memoryview(chunk)
-            while view: view=view[os.write(target_fd,view):]
-        os.fsync(target_fd)
-        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
-    finally: os.close(target_fd)
+def replace_owned(parent, source, destination, identity, source_fd):
+    owned=os.fstat(source_fd)
+    if (owned.st_dev,owned.st_ino)!=identity or owned.st_nlink!=1: raise SystemExit("Claude temporary source drifted")
+    current=os.stat(source,dir_fd=parent,follow_symlinks=False)
+    if (current.st_dev,current.st_ino)!=identity: raise SystemExit("Claude temporary changed during write")
+    os.replace(source,destination,src_dir_fd=parent,dst_dir_fd=parent)
+    published=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+    if (published.st_dev,published.st_ino)!=identity or os.fstat(source_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
 name = "claude-event-settings.json"; expected=os.path.join(home,"watchtowers",driver,name)
 if path != expected: raise SystemExit("watchtower settings path does not match driver capability")
 flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
@@ -601,7 +593,9 @@ try:
     if (ti.st_dev,ti.st_ino)!=(os.fstat(towers).st_dev,os.fstat(towers).st_ino): os.close(towers); raise SystemExit("watchtowers directory changed during open")
     try:
         di=os.stat(driver,dir_fd=towers,follow_symlinks=False); fd=os.open(driver,flags,dir_fd=towers)
-        if (di.st_dev,di.st_ino)!=(os.fstat(fd).st_dev,os.fstat(fd).st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
+        opened=os.fstat(fd)
+        expected=os.environ.get("RZR_DRIVER_EXPECTED_IDENTITY","")
+        if (di.st_dev,di.st_ino)!=(opened.st_dev,opened.st_ino) or (expected and f"{opened.st_dev}:{opened.st_ino}" != expected): os.close(fd); raise SystemExit("watchtower directory changed during open")
     finally: os.close(towers)
 finally: os.close(root)
 try:
@@ -628,7 +622,8 @@ try:
         os.fsync(proof_fd)
         current=os.stat(proof_tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
-        publish_from_fd(fd,proof_fd,proof_name)
+        replace_owned(fd,proof_tmp,proof_name,proof_identity,proof_fd)
+        proof_created=False
     finally:
         if proof_created and proof_fd is not None:
             cleanup_owned(fd,proof_tmp,proof_identity)
@@ -645,7 +640,8 @@ try:
         os.fsync(out)
         current=os.stat(tmp,dir_fd=fd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(tmp_identity[0],tmp_identity[1]) or os.fstat(out).st_nlink != 1: raise SystemExit("Claude settings temporary changed during write")
-        publish_from_fd(fd,out,name)
+        replace_owned(fd,tmp,name,tmp_identity,out)
+        tmp_created=False
         os.fsync(fd)
     finally:
         if tmp_created and out is not None:
@@ -675,22 +671,14 @@ def cleanup_owned(parent, name, identity):
     finally:
         if entry_fd is not None: os.close(entry_fd)
         fcntl.flock(parent, fcntl.LOCK_UN)
-def publish_from_fd(parent, source_fd, destination):
-    target_fd=os.open(destination,os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=parent)
-    try:
-        info=os.fstat(target_fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1: raise SystemExit("unsafe Claude destination")
-        os.fchmod(target_fd,0o600)
-        os.lseek(source_fd,0,os.SEEK_SET); os.ftruncate(target_fd,0)
-        while True:
-            chunk=os.read(source_fd,65536)
-            if not chunk: break
-            view=memoryview(chunk)
-            while view: view=view[os.write(target_fd,view):]
-        os.fsync(target_fd)
-        current=os.stat(destination,dir_fd=parent,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino) or os.fstat(target_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
-    finally: os.close(target_fd)
+def replace_owned(parent, source, destination, identity, source_fd):
+    owned=os.fstat(source_fd)
+    if (owned.st_dev,owned.st_ino)!=identity or owned.st_nlink!=1: raise SystemExit("Claude temporary source drifted")
+    current=os.stat(source,dir_fd=parent,follow_symlinks=False)
+    if (current.st_dev,current.st_ino)!=identity: raise SystemExit("Claude temporary changed during write")
+    os.replace(source,destination,src_dir_fd=parent,dst_dir_fd=parent)
+    published=os.stat(destination,dir_fd=parent,follow_symlinks=False)
+    if (published.st_dev,published.st_ino)!=identity or os.fstat(source_fd).st_nlink!=1: raise SystemExit("Claude destination publication drifted")
 expected = os.path.join(home, "tasks", task, "claude-event-settings.json")
 if path != expected: raise SystemExit("Claude settings path does not match task capability")
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -740,7 +728,8 @@ try:
         os.fsync(proof_fd)
         current=os.stat(proof_tmp,dir_fd=dirfd,follow_symlinks=False)
         if (current.st_dev,current.st_ino)!=(proof_identity[0],proof_identity[1]) or os.fstat(proof_fd).st_nlink != 1: raise SystemExit("Claude capability proof changed during write")
-        publish_from_fd(dirfd,proof_fd,proof_name)
+        replace_owned(dirfd,proof_tmp,proof_name,proof_identity,proof_fd)
+        proof_created=False
     finally:
         if proof_created and proof_fd is not None:
             cleanup_owned(dirfd,proof_tmp,proof_identity)
@@ -772,7 +761,8 @@ try:
         current = os.stat(temporary, dir_fd=dirfd, follow_symlinks=False)
         if (current.st_dev, current.st_ino) != temporary_identity or os.fstat(fd).st_nlink != 1:
             raise SystemExit("Claude settings temporary changed during write")
-        publish_from_fd(dirfd,fd,name)
+        replace_owned(dirfd,temporary,name,temporary_identity,fd)
+        temporary_created=False
         os.fsync(dirfd)
     finally:
         if temporary_created and fd is not None:
@@ -970,7 +960,7 @@ rzr_driver_dir_prepare() {  # <driver-id> -> path
   RZR_DRIVER_HOME="$RZR_HOME" RZR_DRIVER_ID="$id" python3 - <<'PY'
 import os, stat
 home=os.environ["RZR_DRIVER_HOME"]; expected=os.environ.get("RZR_DRIVER_EXPECTED_IDENTITY","")
-def directory(parent, name):
+def directory(parent, name, check_expected=False):
     try: info=os.stat(name,dir_fd=parent,follow_symlinks=False)
     except FileNotFoundError:
         os.mkdir(name,0o700,dir_fd=parent); info=os.stat(name,dir_fd=parent,follow_symlinks=False)
@@ -979,7 +969,7 @@ def directory(parent, name):
     fd=os.open(name,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0),dir_fd=parent)
     opened=os.fstat(fd)
     if (info.st_dev,info.st_ino)!=(opened.st_dev,opened.st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
-    if name==os.environ["RZR_DRIVER_ID"] and expected and f"{opened.st_dev}:{opened.st_ino}" != expected:
+    if check_expected and expected and f"{opened.st_dev}:{opened.st_ino}" != expected:
         os.close(fd); raise SystemExit("watchtower directory identity changed")
     os.fchmod(fd,0o700)
     return fd
@@ -987,7 +977,7 @@ root=os.open(home,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW
 try:
     towers=directory(root,"watchtowers")
     try:
-        driver=directory(towers,os.environ["RZR_DRIVER_ID"]); os.close(driver)
+        driver=directory(towers,os.environ["RZR_DRIVER_ID"],True); os.close(driver)
     finally: os.close(towers)
 finally: os.close(root)
 print(os.path.join(home,"watchtowers",os.environ["RZR_DRIVER_ID"]))
@@ -1046,6 +1036,17 @@ PY
 rzr_driver_dir_identity_matches() {
   [ -z "${RZR_DRIVER_EXPECTED_IDENTITY:-}" ] || [ "$(rzr_driver_dir_identity "$1")" = "$RZR_DRIVER_EXPECTED_IDENTITY" ]
 }
+rzr_driver_dir_open() {
+  exec 9<&- 2>/dev/null || true
+  exec 9< "$1" || return 1
+  RZR_LEDGER_DIR_FD=9; export RZR_LEDGER_DIR_FD
+  RZR_LEDGER_EXPECTED="${RZR_DRIVER_EXPECTED_IDENTITY:-}" python3 - <<'PY'
+import os
+fd=9; expected=os.environ["RZR_LEDGER_EXPECTED"]
+info=os.fstat(fd)
+if expected and f"{info.st_dev}:{info.st_ino}" != expected: raise SystemExit("watchtower directory changed")
+PY
+}
 rzr_driver_entry_exists() {
   RZR_DRIVER_DIR_PATH="$1" RZR_DRIVER_ENTRY_NAME="$2" RZR_DRIVER_EXPECTED="${RZR_DRIVER_EXPECTED_IDENTITY:-}" python3 - <<'PY'
 import os, stat
@@ -1080,11 +1081,36 @@ rzr_ledger_int() {  # <driver-dir> <generation|delivered|ack>
   local dir="$1" field="$2"
   rzr_driver_dir_identity_matches "$dir" || return 1
   if [ "$field" = ack ]; then
-    local v; v=$(cat "$dir/ack" 2>/dev/null || echo 0)
-    case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+    if [ -n "${RZR_LEDGER_DIR_FD:-}" ]; then
+      RZR_LEDGER_FIELD=ack python3 - <<'PY'
+import os
+try:
+    fd=os.open("ack",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=9)
+    try: value=os.read(fd,4096).decode()
+    finally: os.close(fd)
+    print(value if value.strip().isdigit() else 0)
+except OSError: print(0)
+PY
+    else
+      local v; v=$(cat "$dir/ack" 2>/dev/null || echo 0)
+      case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+    fi
     return 0
   fi
-  RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_FIELD="$field" python3 - <<'PY'
+  if [ -n "${RZR_LEDGER_DIR_FD:-}" ]; then
+    RZR_LEDGER_FIELD="$field" python3 - <<'PY'
+import json, os
+try:
+    fd=os.open("pending.json",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=9)
+    try: d=json.load(os.fdopen(fd))
+    finally:
+        try: os.close(fd)
+        except OSError: pass
+    print(int(d.get(os.environ["RZR_LEDGER_FIELD"],0)))
+except Exception: print(0)
+PY
+  else
+    RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_FIELD="$field" python3 - <<'PY'
 import json, os
 try:
     d = json.load(open(os.environ["RZR_LEDGER_PENDING"]))
@@ -1092,6 +1118,7 @@ try:
 except Exception:
     print(0)
 PY
+  fi
 }
 
 # Record one semantic action edge. An edge ID makes overlapping watchers
@@ -1104,14 +1131,28 @@ rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+dfd = int(os.environ["RZR_LEDGER_DIR_FD"]) if os.environ.get("RZR_LEDGER_DIR_FD") else None
+def open_pending(flags): return os.open("pending.json",flags,dir_fd=dfd) if dfd is not None else os.open(p,flags)
+def open_lock(flags): return os.open("pending.json.lock",flags,0o600,dir_fd=dfd) if dfd is not None else os.open(p+".lock",flags,0o600)
+def replace_pending(source):
+    if dfd is not None: os.replace(source,"pending.json",src_dir_fd=dfd,dst_dir_fd=dfd)
+    else: os.replace(source,p)
 authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(authority_fd, fcntl.LOCK_SH)
-os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
-if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+if dfd is None: os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+try:
+    if dfd is not None: os.stat(".event-bus-authority",dir_fd=dfd,follow_symlinks=False)
+    else: os.stat(os.path.join(os.path.dirname(p), ".event-bus-authority"),follow_symlinks=False)
     raise SystemExit("legacy generation refused: driver is event-bus authoritative; explicitly disable authority before fallback")
-lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+except FileNotFoundError: pass
+lock_fd = open_lock(os.O_CREAT | os.O_RDWR)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-try:    d = json.load(open(p))
+try:
+    pending_fd=open_pending(os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+    try: d=json.load(os.fdopen(pending_fd))
+    finally:
+        try: os.close(pending_fd)
+        except OSError: pass
 except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {},
          "delivery_state": "idle", "retries": 0, "last_error": "", "updated": ""}
@@ -1125,10 +1166,14 @@ d["tasks"][os.environ["RZR_LEDGER_ID"]] = {
     "status": os.environ["RZR_LEDGER_STATUS"], "edge_id": edge or None,
     "updated": os.environ["RZR_LEDGER_TS"]}
 d["updated"] = os.environ["RZR_LEDGER_TS"]
-tmp = p + ".tmp.%d" % os.getpid()
+tmp_name = ".pending.json.tmp.%d" % os.getpid() if dfd is not None else p + ".tmp.%d" % os.getpid()
 os.umask(0o077)
-json.dump(d, open(tmp, "w"), indent=2)
-os.replace(tmp, p)
+if dfd is None:
+    json.dump(d, open(tmp_name, "w"), indent=2)
+else:
+    tmp_fd=os.open(tmp_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=dfd)
+    with os.fdopen(tmp_fd,"w") as stream: json.dump(d,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+replace_pending(tmp_name)
 os.close(lock_fd)
 os.close(authority_fd)
 PY
@@ -1148,13 +1193,27 @@ rzr_ledger_record() {  # <driver-dir> <state> [error-text] [attempted-generation
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
 p = os.environ["RZR_LEDGER_PENDING"]
+dfd = int(os.environ["RZR_LEDGER_DIR_FD"]) if os.environ.get("RZR_LEDGER_DIR_FD") else None
+def open_pending(flags): return os.open("pending.json",flags,dir_fd=dfd) if dfd is not None else os.open(p,flags)
+def open_lock(flags): return os.open("pending.json.lock",flags,0o600,dir_fd=dfd) if dfd is not None else os.open(p+".lock",flags,0o600)
+def replace_pending(source):
+    if dfd is not None: os.replace(source,"pending.json",src_dir_fd=dfd,dst_dir_fd=dfd)
+    else: os.replace(source,p)
 authority_fd = os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"), os.O_CREAT | os.O_RDWR, 0o600)
 fcntl.flock(authority_fd, fcntl.LOCK_SH)
-if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+try:
+    if dfd is not None: os.stat(".event-bus-authority",dir_fd=dfd,follow_symlinks=False)
+    else: os.stat(os.path.join(os.path.dirname(p), ".event-bus-authority"),follow_symlinks=False)
     raise SystemExit("legacy delivery refused: driver is event-bus authoritative; explicitly disable authority before fallback")
-lock_fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+except FileNotFoundError: pass
+lock_fd = open_lock(os.O_CREAT | os.O_RDWR)
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-try:    d = json.load(open(p))
+try:
+    pending_fd=open_pending(os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+    try: d=json.load(os.fdopen(pending_fd))
+    finally:
+        try: os.close(pending_fd)
+        except OSError: pass
 except Exception:
     d = {"schema": 1, "generation": 0, "delivered": 0, "tasks": {}, "retries": 0}
 state = os.environ["RZR_LEDGER_STATE"]
@@ -1170,10 +1229,14 @@ else:
     d["last_error"] = os.environ["RZR_LEDGER_ERR"]
 d["delivery_state"] = state
 d["updated"] = os.environ["RZR_LEDGER_TS"]
-tmp = p + ".tmp.%d" % os.getpid()
+tmp_name = ".pending.json.tmp.%d" % os.getpid() if dfd is not None else p + ".tmp.%d" % os.getpid()
 os.umask(0o077)
-json.dump(d, open(tmp, "w"), indent=2)
-os.replace(tmp, p)
+if dfd is None:
+    json.dump(d, open(tmp_name, "w"), indent=2)
+else:
+    tmp_fd=os.open(tmp_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=dfd)
+    with os.fdopen(tmp_fd,"w") as stream: json.dump(d,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+replace_pending(tmp_name)
 os.close(lock_fd)
 os.close(authority_fd)
 PY
@@ -1183,7 +1246,7 @@ PY
 rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
   local dir="$1" g a d
   rzr_driver_dir_identity_matches "$dir" || return 1
-  [ ! -e "$dir/.event-bus-authority" ] && [ ! -L "$dir/.event-bus-authority" ] || return 1
+  if rzr_driver_entry_exists "$dir" .event-bus-authority; then return 1; fi
   g=$(rzr_ledger_int "$dir" generation); a=$(rzr_ledger_int "$dir" ack); d=$(rzr_ledger_int "$dir" delivered)
   [ "$g" -gt "$a" ] && [ "$d" -le "$a" ]
 }
@@ -1193,24 +1256,44 @@ rzr_ledger_ack() {  # <driver-dir> <generation>
   local dir="$1"; rzr_driver_dir_identity_matches "$dir" || return 1; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
   RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
 import fcntl, json, os
-p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"])
+p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"]); dfd=int(os.environ["RZR_LEDGER_DIR_FD"]) if os.environ.get("RZR_LEDGER_DIR_FD") else None
 authority_fd=os.open(os.path.join(os.path.dirname(os.path.dirname(p)), ".authority.lock"),os.O_CREAT|os.O_RDWR,0o600)
 fcntl.flock(authority_fd,fcntl.LOCK_SH)
-os.makedirs(os.path.dirname(p),mode=0o700,exist_ok=True)
-if os.path.lexists(os.path.join(os.path.dirname(p), ".event-bus-authority")):
+if dfd is None: os.makedirs(os.path.dirname(p),mode=0o700,exist_ok=True)
+try:
+    if dfd is not None: os.stat(".event-bus-authority",dir_fd=dfd,follow_symlinks=False)
+    else: os.stat(os.path.join(os.path.dirname(p), ".event-bus-authority"),follow_symlinks=False)
     raise SystemExit("legacy ACK refused: driver is event-bus authoritative; explicitly disable authority before fallback")
-pending=os.path.join(os.path.dirname(p),"pending.json")
-lock_fd=os.open(pending+".lock",os.O_CREAT|os.O_RDWR,0o600); fcntl.flock(lock_fd,fcntl.LOCK_EX)
-try: data=json.load(open(pending))
+except FileNotFoundError: pass
+pending="pending.json" if dfd is not None else os.path.join(os.path.dirname(p),"pending.json")
+lock_fd=os.open("pending.json.lock" if dfd is not None else pending+".lock",os.O_CREAT|os.O_RDWR,0o600,**({"dir_fd":dfd} if dfd is not None else {})); fcntl.flock(lock_fd,fcntl.LOCK_EX)
+try:
+    pending_fd=os.open("pending.json",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=dfd) if dfd is not None else os.open(pending,os.O_RDONLY)
+    try: data=json.load(os.fdopen(pending_fd))
+    finally:
+        try: os.close(pending_fd)
+        except OSError: pass
 except FileNotFoundError: data={"schema":1,"generation":0,"delivered":0,"tasks":{}}
 if value>int(data.get("generation",0)): raise SystemExit("legacy ACK exceeds generation")
 data["delivered"]=max(int(data.get("delivered",0)),value)
-os.umask(0o077); pending_tmp=pending+f".tmp.{os.getpid()}"
-with open(pending_tmp,"w") as stream: json.dump(data,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
-os.replace(pending_tmp,pending)
-tmp=p+f".tmp.{os.getpid()}"
-with open(tmp,"w") as stream: stream.write(str(value)+"\n"); stream.flush(); os.fsync(stream.fileno())
-os.replace(tmp,p); os.close(lock_fd); os.close(authority_fd)
+os.umask(0o077)
+pending_tmp=(".pending.json.tmp.%d"%os.getpid()) if dfd is not None else pending+f".tmp.{os.getpid()}"
+if dfd is None:
+    with open(pending_tmp,"w") as stream: json.dump(data,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+    os.replace(pending_tmp,pending)
+else:
+    tmpfd=os.open(pending_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=dfd)
+    with os.fdopen(tmpfd,"w") as stream: json.dump(data,stream,indent=2); stream.flush(); os.fsync(stream.fileno())
+    os.replace(pending_tmp,"pending.json",src_dir_fd=dfd,dst_dir_fd=dfd)
+tmp=(".ack.tmp.%d"%os.getpid()) if dfd is not None else p+f".tmp.{os.getpid()}"
+if dfd is None:
+    with open(tmp,"w") as stream: stream.write(str(value)+"\n"); stream.flush(); os.fsync(stream.fileno())
+    os.replace(tmp,p)
+else:
+    tmpfd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=dfd)
+    with os.fdopen(tmpfd,"w") as stream: stream.write(str(value)+"\n"); stream.flush(); os.fsync(stream.fileno())
+    os.replace(tmp,"ack",src_dir_fd=dfd,dst_dir_fd=dfd)
+os.close(lock_fd); os.close(authority_fd)
 PY
 }
 

@@ -71,6 +71,7 @@ case "$WAKE_REQUEST" in
     WAKE_DRIVER="$(printf '%s' "$WAKE_TARGET" | jq -r '.driver_id // empty')"
     DRIVER_DIR="$(rzr_driver_dir_prepare "$WAKE_DRIVER")"
     RZR_DRIVER_EXPECTED_IDENTITY="$(rzr_driver_dir_identity "$DRIVER_DIR")"; export RZR_DRIVER_EXPECTED_IDENTITY
+    rzr_driver_dir_open "$DRIVER_DIR" || rzr_die "watchtower directory changed"
     WAKE_BACKEND="$(rzr_target_field "$DRIVER_DIR" backend "$WAKE_TARGET")"
     WAKE_IDENTITY="$(rzr_target_field "$DRIVER_DIR" identity "$WAKE_TARGET")"
     [ -n "$WAKE_DRIVER" ] && [ -n "$WAKE_BACKEND" ] && [ -n "$WAKE_IDENTITY" ] || rzr_die "registered target is missing driver/backend/identity" ;;
