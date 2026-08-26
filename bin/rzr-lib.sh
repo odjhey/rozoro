@@ -293,7 +293,7 @@ rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
 import hashlib, json, math, os, stat
 root = os.open(os.environ["RZR_WTP_DIR"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
 try:
-    fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=root)
+    fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=root)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
@@ -338,7 +338,7 @@ rzr_wtpreset_validate() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
 
 rzr_file_identity() { python3 - "$1" <<'PY'
 import hashlib, os, stat, sys
-fd=os.open(sys.argv[1], os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+fd=os.open(sys.argv[1], os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0))
 try:
     info=os.fstat(fd)
     if not stat.S_ISREG(info.st_mode): raise SystemExit("not a regular file")
@@ -383,7 +383,7 @@ try:
                 if not private_dir(info): continue
                 driver=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=towers)
                 try:
-                    fd=os.open("target.json",os.O_RDONLY|nofollow,dir_fd=driver)
+                    fd=os.open("target.json",os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=driver)
                     info=os.fstat(fd)
                     if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)&0o077:
                         os.close(fd); continue

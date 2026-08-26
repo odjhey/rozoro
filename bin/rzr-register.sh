@@ -141,7 +141,7 @@ record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
           "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
-flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 logfd = os.open("registrations.jsonl", flags, 0o600, dir_fd=dirfd)
 try:
     info = os.fstat(logfd)
