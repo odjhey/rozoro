@@ -1,16 +1,16 @@
 ---
 name: watchtower-policy-status
-description: Explain the current applicable Watchtower policies and rules. Use when the operator asks “what are the current Watchtower policies?”, “what rules are you following?”, “what is your current policy?”, or asks which Watchtower instructions apply now.
+description: Explain current applicable Watchtower policies and rules with verified source scope. Use when the operator asks “what are the current Watchtower policies?”, “what rules are you following?”, “what is your current policy?”, or which Watchtower instructions apply now. Route archive or comparison requests to watchtower-policy-snapshot and /afk state questions to afk.
 ---
 
 # Watchtower policy status
 
-Answer from the current applicable sources; do not reconstruct policy from memory.
+Verify activation before reading or summarizing a candidate policy body; do not reconstruct policy from memory.
 
-1. Read the active Watchtower policy supplied by the current harness. In this checkout, verify harness coverage before treating `templates/watchtower.md` as active; `watchtower-policy-snapshot` documents and can capture that source for Pi.
-2. Read applicable repository instructions for the current target checkout, plus explicit operator instructions. Read machine-local routing policy only when it exists and is relevant.
-3. Summarize the rules that answer the question and identify their source and scope. If sources conflict, follow their actual precedence and call out the conflict rather than blending them.
-4. Distinguish **explicit policy** from **runtime/project state**. Branches, task verdicts, `/afk` state, active crews, assurance results, and provider status are observations or state, not policy text. Verify them separately when requested.
-5. State unknown or uncovered harness policy conservatively. Do not claim that a repository file applies to a harness merely because the file exists.
+1. Establish current-process activation evidence first. Call `templates/watchtower.md` active only when the current invocation has verified Watchtower-launcher or system-prompt injection evidence. Pi's name, this repository or checkout, the operator's wording, file presence, and a launcher's capability do not prove that this process consumed the file.
+2. If current-process injection is not verified, describe `templates/watchtower.md` only as an **available source with activation unverified**. Do not read or summarize its body as applicable policy. A policy snapshot can establish source and launcher coverage, but not by itself that this invocation used the launcher.
+3. After activation scope is established, read only the verified applicable sources needed for the question: active Watchtower policy, applicable target-repository instructions, explicit operator instructions, and relevant machine-local routing policy. Follow actual precedence and identify conflicts rather than blending them.
+4. For an ordinary answer, give one short source/scope statement and at most three key rules from verified applicable sources. Do not inventory a candidate source's rules, all sources, or all rules unless the operator explicitly requests an inventory.
+5. Distinguish **explicit policy** from **runtime/project state**. Branches, task verdicts, active crews, assurance results, provider status, and `/afk` state are observations or state, not policy text; verify them separately.
 
-Keep the answer practical and concise. Use `watchtower-policy-snapshot` only when the operator asks to persist, archive, or compare an immutable policy record; ordinary policy questions do not require creating an artifact.
+Route requests to persist, archive, or compare policy to `watchtower-policy-snapshot`; requests to generate or save a durable fleet report to `watchtower-progress-report`; and `/afk` state or changes to `afk`. Ordinary policy answers create no artifact.

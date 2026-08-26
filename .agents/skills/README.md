@@ -19,7 +19,7 @@ evidence this crew needs**. Repository-local rules come from the crew's `--cwd`.
 | `get-me-up-to-speed` | Give a concise evidence-based summary of completed, current, and next work; also triggered by `gmuts`. |
 | `no-mistakes-observatory` | Maintain the optional human visualization surface for active no-mistakes runs. |
 | `watchtower-attention-ledger` | Record/supersede attention items during reconcile, note handling decisions as you route, and `prime` a fresh/resumed session from disk. |
-| `watchtower-policy-status` | Explain the currently applicable Watchtower rules from active policy sources. |
+| `watchtower-policy-status` | Explain applicable Watchtower rules with activation-verified source scope. |
 
 Skills are orchestration guidance, not prompt blocks to paste into crew sessions.
 
