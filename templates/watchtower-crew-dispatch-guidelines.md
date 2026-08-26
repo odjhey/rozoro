@@ -52,20 +52,23 @@ or discovery tasks rather than being treated as settled.
 ## Verification ordering
 
 Mechanics precede judgment. When a Coder reports a committed candidate, the
-No-Mistakes Runner is the default first verification hop for that exact head.
-Reviewer and Tester normally follow only after the gate reports green for the
-exact final head reported by the run, which may differ from the submitted head
-when the pipeline changes the candidate. Watchtower may explicitly dispatch
-judgment on a red candidate for a suspected design dead end, contract ambiguity,
-acceptance risk, or another question the gate cannot answer; that exception does
-not turn red into green or authorize redundant suite execution.
+No-Mistakes Runner must be the first post-Coder verification hop for that exact
+head. Reviewer and Tester normally follow only after the gate reports green for
+the exact final head reported by the run, which may differ from the submitted
+head when the pipeline changes the candidate. Watchtower may explicitly dispatch
+an explicitly labeled red-candidate judgment for a suspected design dead end,
+contract ambiguity, acceptance risk, or another question the gate cannot answer;
+that judgment is not a verification hop, does not bypass or replace No-Mistakes,
+and does not turn red into green or authorize redundant suite execution.
 
 Every repair, gate fix, test contribution, integration, or other candidate-changing
-action creates a new exact candidate and re-enters verification through the gate.
-Old gate evidence remains bound to its old head. Fresh Reviewer or Tester judgment
-is needed only when the changed candidate creates a new judgment question, not
-merely to repeat mechanical checks. The Workset Merger consumes assurance for the
-exact integrated head and must reroute for assurance when integration changes it.
+action creates a new exact candidate, invalidates prior No-Mistakes gate and
+Reviewer/Tester attestations for that new head, and re-enters verification through
+the gate. Old attestations remain context bound only to their old head and must
+not be reused as assurance for the new head. Any required assurance must be newly
+produced for, or explicitly reconciled and bound to, the final exact head. The
+Workset Merger consumes assurance for the exact integrated head and must reroute
+for assurance when integration changes it.
 
 ### Coder — `gpt-5.6-sol`, low
 
