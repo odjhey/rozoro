@@ -113,7 +113,9 @@ start_event_server() {
   mode="$1"; shift
   python3 "$REPO_ROOT/tests/test_helper/event_server.py" "$FAKE_HERDR_SOCKET" "$FAKE_HERDR_ROOT/request.json" "$mode" "$@" 3>&- &
   register_pid "$!"
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  # Parallel Bats runs can briefly starve the helper process before it binds.
+  # Allow a bounded startup window long enough for the pinned CI container.
+  for _ in $(seq 1 100); do
     [ -S "$FAKE_HERDR_SOCKET" ] && return 0
     sleep 0.05
   done
