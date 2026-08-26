@@ -49,7 +49,15 @@ GEN="$(rzr_ledger_int "$DIR" generation)"
 # still-known task, take a real status snapshot; a task with no folder vanished.
 STATUSES="$(RZR_RC_PENDING="$DIR/pending.json" python3 - <<'PY'
 import json, os
-try:    d = json.load(open(os.environ["RZR_RC_PENDING"]))
+dfd = int(os.environ["RZR_LEDGER_DIR_FD"]) if os.environ.get("RZR_LEDGER_DIR_FD") else None
+try:
+    if dfd is not None:
+        fd=os.open("pending.json",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=dfd)
+        try: d=json.load(os.fdopen(fd))
+        finally:
+            try: os.close(fd)
+            except OSError: pass
+    else: d=json.load(open(os.environ["RZR_RC_PENDING"]))
 except Exception: d = {}
 for tid in sorted((d.get("tasks") or {}).keys()):
     print(tid)

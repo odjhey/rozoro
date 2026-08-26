@@ -609,7 +609,9 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
+    proof_name=name+".capability.json"; legacy_proof_tmp=proof_name+".tmp"; proof_tmp=proof_name+"."+secrets.token_hex(12)+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
+    try: os.stat(legacy_proof_tmp,dir_fd=fd,follow_symlinks=False); raise SystemExit("Claude capability proof temporary already exists")
+    except FileNotFoundError: pass
     try:
         proof_fd=os.open(proof_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
@@ -626,7 +628,7 @@ try:
         proof_created=False
     finally:
         if proof_created and proof_fd is not None:
-            cleanup_owned(fd,proof_tmp,proof_identity)
+            pass
         if proof_fd is not None: os.close(proof_fd)
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]
@@ -645,7 +647,7 @@ try:
         os.fsync(fd)
     finally:
         if tmp_created and out is not None:
-            cleanup_owned(fd,tmp,tmp_identity)
+            pass
         if out is not None: os.close(out)
 finally: os.close(fd)
 PY
@@ -718,7 +720,9 @@ try:
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
-    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
+    proof_name=name+".capability.json"; legacy_proof_tmp=proof_name+".tmp"; proof_tmp=proof_name+"."+secrets.token_hex(12)+".tmp"; proof_created=False; proof_identity=None; proof_fd=None
+    try: os.stat(legacy_proof_tmp,dir_fd=dirfd,follow_symlinks=False); raise SystemExit("Claude capability proof temporary already exists")
+    except FileNotFoundError: pass
     try:
         proof_fd=os.open(proof_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dirfd)
         proof_created=True; proof_identity=(os.fstat(proof_fd).st_dev,os.fstat(proof_fd).st_ino)
@@ -732,7 +736,7 @@ try:
         proof_created=False
     finally:
         if proof_created and proof_fd is not None:
-            cleanup_owned(dirfd,proof_tmp,proof_identity)
+            pass
         if proof_fd is not None: os.close(proof_fd)
     command = shlex.join([
         "env",  "ROZORO_ROLE=crew",
@@ -766,7 +770,7 @@ try:
         os.fsync(dirfd)
     finally:
         if temporary_created and fd is not None:
-            cleanup_owned(dirfd,temporary,temporary_identity)
+            pass
         if fd is not None: os.close(fd)
 finally:
     os.close(dirfd)
@@ -1126,7 +1130,7 @@ PY
 rzr_ledger_bump() {  # <driver-dir> <task-id> <status> [edge-id]
   local dir="$1"
   rzr_driver_dir_identity_matches "$dir" || return 1
-  mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
+  if [ -z "${RZR_LEDGER_DIR_FD:-}" ]; then mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true; fi
   RZR_LEDGER_PENDING="$dir/pending.json" RZR_LEDGER_ID="$2" RZR_LEDGER_STATUS="$3" RZR_LEDGER_EDGE="${4:-}" \
   RZR_LEDGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, os
@@ -1253,7 +1257,7 @@ rzr_ledger_should_deliver() {  # <driver-dir> -> 0 (yes) / 1 (no)
 
 # Advance the driver's ack to the given generation (single-writer file, atomic).
 rzr_ledger_ack() {  # <driver-dir> <generation>
-  local dir="$1"; rzr_driver_dir_identity_matches "$dir" || return 1; mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true
+  local dir="$1"; rzr_driver_dir_identity_matches "$dir" || return 1; if [ -z "${RZR_LEDGER_DIR_FD:-}" ]; then mkdir -p "$(rzr_watchtowers_dir)"; chmod 700 "$(rzr_watchtowers_dir)" 2>/dev/null || true; fi
   RZR_LEDGER_ACK="$dir/ack" RZR_LEDGER_VALUE="$2" python3 - <<'PY'
 import fcntl, json, os
 p=os.environ["RZR_LEDGER_ACK"]; value=int(os.environ["RZR_LEDGER_VALUE"]); dfd=int(os.environ["RZR_LEDGER_DIR_FD"]) if os.environ.get("RZR_LEDGER_DIR_FD") else None

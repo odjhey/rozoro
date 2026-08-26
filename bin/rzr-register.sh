@@ -127,7 +127,10 @@ try: towers=child(root,"watchtowers")
 finally: os.close(root)
 try: dirfd=child(towers,os.environ["RZR_REG_ID"])
 finally: os.close(towers)
-tmp_name = ".target.%d.tmp" % os.getpid(); target_name="target.json"
+legacy_tmp = ".target.%d.tmp" % os.getpid(); target_name="target.json"
+try: os.stat(legacy_tmp,dir_fd=dirfd,follow_symlinks=False); raise SystemExit("registration temporary already exists")
+except FileNotFoundError: pass
+tmp_name = ".target.%d.%s.tmp" % (os.getpid(), __import__("secrets").token_hex(12))
 os.umask(0o077)
 def write_all(fd, payload):
     view = memoryview(payload)
@@ -176,7 +179,7 @@ record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
 if "policy_sha256" in data: record["policy_sha256"] = data["policy_sha256"]
-flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 try:
     logfd = os.open("registrations.jsonl", flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dirfd)
 except FileExistsError:
@@ -189,7 +192,7 @@ try:
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1: raise SystemExit("unsafe registrations log")
     log_identity=(info.st_dev,info.st_ino)
     os.fchmod(logfd, 0o600)
-    tmp_created=False; tmp_identity=None; fd=None; append_fd=None
+    tmp_created=False; tmp_identity=None; fd=None
     try:
         fd=os.open(tmp_name,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
         tmp_created=True; tmp_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
@@ -197,20 +200,26 @@ try:
         replace_owned(dirfd,tmp_name,target_name,tmp_identity,fd)
         tmp_created=False
         os.fsync(dirfd)
-        append_fd=os.open("registrations.jsonl",flags,dir_fd=dirfd)
-        append_info=os.fstat(append_fd); current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
-        if (append_info.st_dev,append_info.st_ino)!=(log_identity[0],log_identity[1]) or append_info.st_nlink != 1 or (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]):
-            raise SystemExit("registrations log changed before append")
-        write_all(append_fd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(append_fd)
+        log_tmp=".registrations.%d.%s.tmp" % (os.getpid(), __import__("secrets").token_hex(12))
+        log_tmp_fd=os.open(log_tmp,os.O_RDWR|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
+        os.lseek(logfd,0,os.SEEK_SET)
+        while True:
+            chunk=os.read(logfd,65536)
+            if not chunk: break
+            write_all(log_tmp_fd,chunk)
+        write_all(log_tmp_fd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(log_tmp_fd)
         current=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
-        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(append_fd).st_nlink != 1:
-            raise SystemExit("registrations log changed during append")
+        if (current.st_dev,current.st_ino)!=(log_identity[0],log_identity[1]) or os.fstat(logfd).st_nlink != 1:
+            raise SystemExit("registrations log changed before publication")
+        log_tmp_identity=(os.fstat(log_tmp_fd).st_dev,os.fstat(log_tmp_fd).st_ino)
+        os.replace(log_tmp,"registrations.jsonl",src_dir_fd=dirfd,dst_dir_fd=dirfd)
+        published=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+        if (published.st_dev,published.st_ino)!=log_tmp_identity: raise SystemExit("registrations log publication drifted")
+        os.close(log_tmp_fd)
     finally:
         if fd is not None:
-            if tmp_created:
-                cleanup_owned(dirfd,tmp_name,tmp_identity)
+            if tmp_created: pass
             os.close(fd)
-        if append_fd is not None: os.close(append_fd)
 finally:
     os.close(logfd); os.close(dirfd)
 PY
