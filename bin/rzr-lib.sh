@@ -363,7 +363,7 @@ rzr_watchtower_target_json() {  # [driver-id]
   local selected="${1:-}"
   [ -z "$selected" ] || rzr_validate_task_component "$selected" "driver id"
   RZR_TARGET_HOME="$RZR_HOME" RZR_TARGET_DRIVER="$selected" python3 - <<'PY' 2>/dev/null
-import json, os, stat
+import json, math, os, stat
 nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
 def private_dir(info): return stat.S_ISDIR(info.st_mode) and info.st_uid==os.geteuid() and not stat.S_IMODE(info.st_mode)&0o077
 def safe(value): return isinstance(value,str) and len(value)<=120 and not any(c in value for c in "\r\n\t=")
@@ -401,9 +401,9 @@ try:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue
                     if any(key in preset and not isinstance(preset[key],str) for key in ("name","sha256","policy_sha256","model","effort")): continue
-                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool) or len(str(preset["version"]))>120): continue
+                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool) or (isinstance(preset["version"],float) and not math.isfinite(preset["version"])) or len(str(preset["version"]))>120): continue
                     if any(isinstance(preset.get(key),str) and not safe(preset[key]) for key in ("name","version","sha256","policy_sha256","model","effort")): continue
-                print(json.dumps(data,separators=(",",":")))
+                print(json.dumps(data,separators=(",",":"),allow_nan=False))
             except (OSError,ValueError,TypeError,AttributeError): continue
     finally: os.close(towers)
 finally: os.close(root)
