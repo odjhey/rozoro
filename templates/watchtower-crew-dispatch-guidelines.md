@@ -62,13 +62,25 @@ that judgment is not a verification hop, does not bypass or replace No-Mistakes,
 and does not turn red into green or authorize redundant suite execution.
 
 Every repair, gate fix, test contribution, integration, or other candidate-changing
-action creates a new exact candidate, invalidates prior No-Mistakes gate and
-Reviewer/Tester attestations for that new head, and re-enters verification through
-the gate. Old attestations remain context bound only to their old head and must
-not be reused as assurance for the new head. Any required assurance must be newly
-produced for, or explicitly reconciled and bound to, the final exact head. The
-Workset Merger consumes assurance for the exact integrated head and must reroute
-for assurance when integration changes it.
+action creates a new exact candidate and must re-enter No-Mistakes. A mechanical-only
+change still requires that gate rerun, but does not require fresh Reviewer or Tester
+judgment unless it creates or changes a design, contract, correctness, acceptance,
+behavior/test-design, or other judgment question.
+
+Old gate and Reviewer/Tester observations remain context bound only to their old
+head; never relabel them as observations of, or assurance produced for, a new head.
+The Workset Merger, or an owner it explicitly routes, records the final-head
+reconciliation decision: old and final head identities, changed paths and cause,
+affected judgment questions, the rationale, and whether fresh judgment is required.
+This record is final-head provenance, not rewritten old evidence.
+
+After a Reviewer finding is repaired, always gate the repaired candidate. Request a
+fresh Reviewer only when the repair affects the judgment question; otherwise record
+the scoped no-new-judgment rationale in the reconciliation without rewriting the
+old-head review. Apply the same rule after a rebase, merge, or other integration:
+gate the exact integrated head, request fresh Reviewer or Tester judgment when the
+integration affects its judgment question, and otherwise preserve old evidence only
+as context alongside the explicit final-head reconciliation provenance.
 
 ### Coder — `gpt-5.6-sol`, low
 
