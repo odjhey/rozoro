@@ -252,13 +252,13 @@ Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`
   "version": 3,
   "harness": "pi",
   "model": "luna",
-  "effort": "high",
-  "permission_mode": "",
-  "notes": "luna/high experiment"
+  "effort": "high"
 }
 ```
 
-Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; the driver id remains transport-derived.
+Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; launchers derive the driver id from transport identity.
+
+The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited watchtower attribution before applying the command-line options, so an unpreset launch cannot reuse stale name, preset, hash, model, effort, or driver values.
 
 ## Operator artifact skills
 

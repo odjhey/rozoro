@@ -1,6 +1,6 @@
 # Current vs target
 
-Last reconciled with `master`: 2026-08-24.
+Last reconciled with `master` and this branch: 2026-08-26.
 
 PR #46 originally described several event-bus capabilities as target architecture. Since then, the event-bus stack shipped through the implementation sequence culminating in the production cutover. The current README also pauses further lower-level extraction while ACP/acpx and existing tooling are evaluated. This page separates shipped substrate from required product capabilities without prematurely deciding who must implement them.
 
@@ -20,6 +20,7 @@ PR #46 originally described several event-bus capabilities as target architectur
 | Generation membership | A generation retains the affected task IDs, actionable reasons, and immutable projection snapshots needed for exact reconciliation. |
 | ACK separation | `reconcile` ACKs a delivered generation; task `ack` resolves surfaced handoff/open-item state separately. |
 | Production cutover | The legacy watcher is diagnostic/compatibility only for daemon-managed Pi and supported Claude operation. |
+| Named watchtower attribution | Optional versioned Pi/Claude presets and watchtower names are captured in filesystem-only registration metadata; driver ids remain transport-derived. |
 
 The current implementation therefore already satisfies much of the original #46 event/projection/notification architecture. Those concepts are foundations, not aspirational features.
 

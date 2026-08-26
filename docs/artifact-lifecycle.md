@@ -22,6 +22,9 @@ sequenceDiagram
     Note over H: CREATE native harness session + live host binding
     R->>R: persist exact session link
 
+    W->>H: launch named watchtower (optional preset)
+    Note over W: CAPTURE preset version/hash and transport-derived driver id
+
     H-->>D: normalized lifecycle events
     Note over D: APPEND Event Log
     D->>D: UPDATE Session / Task Projections
@@ -66,6 +69,9 @@ The target attention layer is a capability contract. Its implementation may live
 | Native harness session | crew/watchtower launch | harness-specific | resumable where supported | shipped |
 | Live host binding | launch/resume | host changes/restarts | no | shipped |
 | Exact session link | successful task/session binding | refresh when native conversation changes | yes | shipped |
+| Watchtower preset | operator-created JSON under `watchtower-presets/` | operator edits bytes/version | yes | shipped |
+| Watchtower registration target | watchtower registration | replaced with current attribution | yes | shipped |
+| Registration history | watchtower registration | append-only per registration | yes | shipped |
 | Producer spool item | event reservation before daemon ACK | removed after durable import/ACK | until imported | shipped |
 | Event Log record | accepted normalized event | append-only | yes | shipped |
 | Session Projection | first registered/evidenced session state | relevant lifecycle events | yes | shipped |
