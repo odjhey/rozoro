@@ -25,9 +25,23 @@ load test_helper/common
   target="$ROZORO_HOME/watchtowers/$output/target.json"; log="${target%/target.json}/registrations.jsonl"
   [ "$(jq -r '.watchtower_name' "$target")" = north ]
   [ "$(jq -r '.preset | [.name,.version,.sha256,.policy_sha256,.model,.effort] | join(":")' "$target")" = 'luna:3:abc:def:luna:high' ]
+  [ "$(jq -r '.policy_sha256' "$target")" = def ]
   [ "$(wc -l < "$log" | tr -d ' ')" = 1 ]; [ "$(file_perm "$log")" = 600 ]
   run rzr-register.sh --harness pi; assert_success
   [ "$(wc -l < "$log" | tr -d ' ')" = 2 ]
+}
+
+@test "named unpreset Pi registration records policy provenance" {
+  export HERDR_PANE_ID=driver-pane ROZORO_WT_NAME=north ROZORO_WT_POLICY_SHA256=def
+  fake_pane driver-pane idle pi true
+  run rzr-register.sh --harness pi
+  assert_success
+  target="$ROZORO_HOME/watchtowers/$output/target.json"
+  log="${target%/target.json}/registrations.jsonl"
+  [ "$(jq -r '.watchtower_name' "$target")" = north ]
+  [ "$(jq -r '.policy_sha256' "$target")" = def ]
+  [ "$(jq 'has("preset")' "$target")" = false ]
+  [ "$(jq -r '.policy_sha256' "$log")" = def ]
 }
 
 @test "registration without watchtower env preserves legacy target shape" {

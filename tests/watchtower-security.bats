@@ -155,15 +155,17 @@ SH
   mkdir -p "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":NaN}' > "$ROZORO_HOME/watchtower-presets/nan.json"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":Infinity}' > "$ROZORO_HOME/watchtower-presets/infinity.json"
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":"v=1"}' > "$ROZORO_HOME/watchtower-presets/delimiter.json"
   long121="$(printf '%0121d' 0)"; printf '%s\n' "{\"harness\":\"pi\",\"model\":\"$long121\",\"effort\":\"low\"}" > "$ROZORO_HOME/watchtower-presets/long.json"
   exact120="$(printf '%0120d' 0)"; printf '%s\n' "{\"harness\":\"pi\",\"model\":\"$exact120\",\"effort\":\"low\",\"unknown\":{\"large\":\"$long121\"}}" > "$ROZORO_HOME/watchtower-presets/valid.json"
-  for preset in nan infinity long; do
+  for preset in nan infinity delimiter long; do
     run rozoro watchtower show "$preset"; assert_failure
   done
   run rozoro watchtower show valid; assert_success
   export HERDR_PANE_ID=pane
   run rzr-pi-watchtower.sh --preset nan; assert_failure
   run rzr-pi-watchtower.sh --preset infinity; assert_failure
+  run rzr-pi-watchtower.sh --preset delimiter; assert_failure
   run rzr-pi-watchtower.sh --preset long; assert_failure
 }
 

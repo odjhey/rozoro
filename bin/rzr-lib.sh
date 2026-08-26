@@ -327,6 +327,8 @@ for key in ("schema", "version"):
 if "version" in doc:
     version=doc["version"]
     if len(str(version)) > 120: raise SystemExit("preset version is too long")
+    if isinstance(version,str) and any(char in version for char in "\r\n\t="):
+        raise SystemExit("preset version contains unsafe metadata characters")
     if isinstance(version,(int,float)) and abs(version) > 2**53-1: raise SystemExit("preset version exceeds JSON numeric precision")
 if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
@@ -395,8 +397,8 @@ try:
                 if not isinstance(data,dict) or data.get("driver_id") != name or not safe(data.get("driver_id")): continue
                 if "schema" in data and (not isinstance(data["schema"],int) or isinstance(data["schema"],bool) or data["schema"]!=1): continue
                 if "owner_pid" in data and (not isinstance(data["owner_pid"],str) or not data["owner_pid"].isdigit() or not 1<=int(data["owner_pid"])<=2**63-1): continue
-                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created")): continue
-                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created")): continue
+                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256")): continue
+                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256")): continue
                 if "preset" in data:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue
@@ -573,6 +575,7 @@ try:
             os.write(proof_fd,payload); os.fsync(proof_fd)
         finally: os.close(proof_fd)
         os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
+        proof_created=False
     finally:
         if proof_created:
             try: os.unlink(proof_tmp,dir_fd=fd)
@@ -637,6 +640,7 @@ try:
             os.fsync(proof_fd)
         finally: os.close(proof_fd)
         os.replace(proof_tmp,proof_name,src_dir_fd=dirfd,dst_dir_fd=dirfd)
+        proof_created=False
     finally:
         if proof_created:
             try: os.unlink(proof_tmp,dir_fd=dirfd)

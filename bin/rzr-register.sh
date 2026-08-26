@@ -92,11 +92,11 @@ esac
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
 rzr_validate_task_component "$DRIVER_ID" "driver id"
 [ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
+[ -z "${ROZORO_WT_POLICY_SHA256:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_POLICY_SHA256" "watchtower policy SHA"
 if [ -n "${ROZORO_WT_PRESET:-}" ]; then
   rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
   rzr_validate_wt_metadata "${ROZORO_WT_PRESET_VERSION:-}" "watchtower preset version"
   rzr_validate_wt_metadata "${ROZORO_WT_PRESET_SHA256:-}" "watchtower preset SHA"
-  rzr_validate_wt_metadata "${ROZORO_WT_POLICY_SHA256:-}" "watchtower policy SHA"
   rzr_validate_wt_metadata "${ROZORO_WT_MODEL:-}" "watchtower model"
   rzr_validate_wt_metadata "${ROZORO_WT_EFFORT:-}" "watchtower effort"
 fi
@@ -137,10 +137,13 @@ if os.environ["RZR_REG_PRESET"]:
                       "effort": os.environ["RZR_REG_EFFORT"]}
     if os.environ["RZR_REG_POLICY_SHA"]:
         data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
+if os.environ["RZR_REG_POLICY_SHA"]:
+    data["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
 record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
           "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
+if "policy_sha256" in data: record["policy_sha256"] = data["policy_sha256"]
 flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 logfd = os.open("registrations.jsonl", flags, 0o600, dir_fd=dirfd)
 try:
