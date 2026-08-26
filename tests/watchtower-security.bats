@@ -125,6 +125,8 @@ SH
   make_target nan '{"driver_id":"nan","identity":"bad-pane","preset":{"version":NaN}}'
   make_target infinity '{"driver_id":"infinity","identity":"bad-pane","preset":{"version":Infinity}}'
   make_target overflow '{"driver_id":"overflow","identity":"overflow-pane","preset":{"name":"luna","version":1e999}}'
+  make_target unsafe-integer '{"driver_id":"unsafe-integer","identity":"unsafe-pane","preset":{"version":9007199254740993}}'
+  make_target oversized-float '{"driver_id":"oversized-float","identity":"oversized-pane","preset":{"version":1e20}}'
   make_target schema-string '{"driver_id":"schema-string","schema":"1"}'
   make_target schema-bool '{"driver_id":"schema-bool","schema":true}'
   make_target schema-negative '{"driver_id":"schema-negative","schema":-1}'
@@ -140,7 +142,7 @@ SH
   run env ROZORO_HOME="$home" RZR_HOME="$home" rozoro watchtower registered
   assert_success
   [ "$(printf '%s\n' "$output" | grep -c '^valid[[:space:]]')" -eq 1 ]
-  [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" != *overflow* ]]; [[ "$output" == *'luna@3'* ]]
+  [[ "$output" != *long121* ]]; [[ "$output" != *long10k* ]]; [[ "$output" != *overflow* ]]; [[ "$output" != *unsafe-integer* ]]; [[ "$output" != *oversized-float* ]]; [[ "$output" == *'luna@3'* ]]
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=nan bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
   assert_success; [ -z "$output" ]
   run env ROZORO_HOME="$home" RZR_HOME="$home" ROZORO_WT_DRIVER=overflow bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"

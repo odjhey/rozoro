@@ -401,7 +401,12 @@ try:
                     preset=data["preset"]
                     if not isinstance(preset,dict): continue
                     if any(key in preset and not isinstance(preset[key],str) for key in ("name","sha256","policy_sha256","model","effort")): continue
-                    if "version" in preset and (not isinstance(preset["version"],(str,int,float)) or isinstance(preset["version"],bool) or (isinstance(preset["version"],float) and not math.isfinite(preset["version"])) or len(str(preset["version"]))>120): continue
+                    def safe_version(value):
+                        if isinstance(value,str): return len(value)<=120
+                        if isinstance(value,bool) or not isinstance(value,(int,float)): return False
+                        if isinstance(value,float) and not math.isfinite(value): return False
+                        return abs(value)<=2**53-1 and len(str(value))<=120
+                    if "version" in preset and not safe_version(preset["version"]): continue
                     if any(isinstance(preset.get(key),str) and not safe(preset[key]) for key in ("name","version","sha256","policy_sha256","model","effort")): continue
                 print(json.dumps(data,separators=(",",":"),allow_nan=False))
             except (OSError,ValueError,TypeError,AttributeError): continue
