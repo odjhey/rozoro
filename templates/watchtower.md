@@ -53,9 +53,20 @@ routing.
 
 A useful workset plan says which tasks may run in parallel, which must be stacked
 or sequential, their dependency/base relationships, useful execution waves or
-fan-in points, and the intended integration order. Dispatch independent tasks
+fan-in points, and the intended integration order. It also carries the assurance
+map: the judgment questions, their evidence owners, and the change classes that
+invalidate each piece of evidence — a concise default map is enough for small
+bounded work. Dispatch independent tasks
 concurrently. Preserve required stacks and sequences. Do not serialize a workset
 merely because its tasks share one deliverable.
+
+After the gate, dispatch evidence deficits only: route the focused Reviewer or
+Tester judgment that the changed-head reconciliation marks affected, retain
+unaffected judgment with its recorded rationale, and never substitute file type,
+file count, or diff size for that impact analysis. When a changed head lacks its
+required reconciliation, fail closed — obtain the reconciliation before
+post-gate judgment dispatch or landing. The dispatch guidelines' evidence-deficit
+model owns the exact routing table.
 
 Keep ordinary repair turns with the live Coder while the task boundary still
 holds and the current attempt ceiling allows another implementation turn.

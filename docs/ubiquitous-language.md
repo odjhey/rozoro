@@ -31,6 +31,9 @@ Use these terms consistently in code, docs, prompts, issues, and reviews. Prefer
 | **Attention item** | Target stable identity for one task-scoped reason requiring watchtower attention. | generation membership row |
 | **Attention-item handled state** | Target per-item observed/handled status. | task resolution |
 | **Watchtower Mailbox** | Product shorthand for the capability to retain and independently handle task-scoped attention items. Implementation ownership is open. | necessarily a Rozoro-owned subsystem, general actor mailbox, prompt queue |
+| **Assurance map** | Planner-recorded mapping from acceptance/judgment questions to evidence owners, required evidence, and the change classes that invalidate it. | full planning artifact, test plan |
+| **Changed-head reconciliation** | Named-owner record after a candidate-changing action: old/new commit/tree/base/merge-base, changed paths and cause, affected judgment questions, current vs stale evidence, and minimum next checks. | daemon `reconcile`, rewritten old evidence |
+| **Evidence deficit** | Assurance work justified by an affected judgment question or missing/stale evidence at the current exact head. | full rerun, diff size, file count |
 | **Acceptance** | Operator decision that the result is satisfactory. | crew `done`, quiescence |
 | **Reap** | Remove live hosting while retaining durable task/session artifacts. | delete task history |
 | **Resume** | Reopen the exact durable native conversation into a new live host binding. | start a new task |

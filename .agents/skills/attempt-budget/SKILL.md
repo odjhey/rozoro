@@ -124,6 +124,12 @@ the lineage budget.
 ## Routing consequences
 
 - Quick Coder is for the bounded fast path, not repeated repair loops.
+- Assurance-only reruns — gate, Reviewer, or Tester turns dispatched for
+  evidence deficits — never consume Coder attempts when no candidate-writing
+  Coder turn occurred.
+- Two repeated failures with the same root cause trigger an ownership/authority
+  checkpoint — Replanner, an ownership change, or an operator decision — rather
+  than a blind third attempt down the same route.
 - Replanning is allowed before exhaustion when scope/dependency/contract evidence
   changes the task boundary or the implementation direction is not converging.
 - A Workset Merger may retry a provider/transient integration or landing operation

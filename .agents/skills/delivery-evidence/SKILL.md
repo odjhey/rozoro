@@ -16,13 +16,17 @@ examined.
 For a workset, retain:
 
 1. **Intent and prerequisites** — target outcome, dependency/stacking constraints,
-   repository policy, and required checks.
+   repository policy, required checks, and the Planner's assurance map (judgment
+   questions, evidence owners, invalidating change classes) when one exists.
 2. **Candidate identities** — task branches/heads, integrated workset head, PR
    head, and actual landed identity.
 3. **Assurance** — reviewer/tester attestations, no-mistakes run IDs/outcomes,
    exact-head CI, and relevant artifacts.
-4. **Decision** — what evidence is current, what became stale, and what action is
-   now justified.
+4. **Decision** — what evidence is current, what became stale, which judgment
+   questions are affected, and the minimum next checks — the evidence deficits —
+   now justified. Route those deficits only; a change with no affected judgment
+   question justifies no redundant Reviewer/Tester rerun, and an apparently
+   small change earns no skipped check its affected questions require.
 
 Green CI or an agent verdict is one piece of evidence, not a substitute for
 matching the exact head and required scope.
@@ -33,6 +37,11 @@ The Workset Merger owns dependency/stacking order and integration mutations.
 Whenever integration creates a new head, compare that head with every assurance
 artifact required by repository policy. Mark mismatched evidence stale and route
 the new head through the assurance that actually applies.
+
+Any candidate-changing action requires the named-owner changed-head
+reconciliation before post-gate Reviewer/Tester judgment is dispatched for the
+new head. Missing or incomplete reconciliation fails closed: hold judgment
+dispatch and readiness until it exists.
 
 No-mistakes findings whose meaning depends on the integrated workset should be
 read by the Workset Merger alongside the plan/dependency graph and other crew
