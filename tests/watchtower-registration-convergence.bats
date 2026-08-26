@@ -75,6 +75,82 @@ load test_helper/common
   cmp "$target" "$TEST_ROOT/before-target"; cmp "$log" "$TEST_ROOT/before-log"
 }
 
+@test "unsafe target-ahead metadata never appends recovery or publishes" {
+  export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
+  cases='schema_true schema_float schema_missing schema_string json_nan json_infinity json_negative_infinity version_null version_bool version_object version_array version_nan version_infinity version_oversized version_unsafe_integer top_null top_bool top_object top_long top_control nested_null nested_bool nested_object nested_long owner_text owner_bool owner_zero owner_large'
+  for fixture in $cases; do
+    rm -rf "$ROZORO_HOME/watchtowers"; run rzr-register.sh --harness pi --quiet; assert_success
+    target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"; log="${target%/target.json}/registrations.jsonl"
+    FIXTURE="$fixture" TARGET="$target" python3 - <<'PY'
+import json, os
+path=os.environ["TARGET"]; fixture=os.environ["FIXTURE"]
+with open(path) as stream: data=json.load(stream)
+data["registration_id"]="target-ahead-"+fixture
+data["preset"]={"name":"luna","version":3,"sha256":"abc","model":"luna","effort":"high"}
+if fixture == "schema_true": data["schema"]=True
+elif fixture == "schema_float": data["schema"]=1.0
+elif fixture == "schema_missing": data.pop("schema")
+elif fixture == "schema_string": data["schema"]="1"
+elif fixture == "json_nan": data["created"]=float("nan")
+elif fixture == "json_infinity": data["created"]=float("inf")
+elif fixture == "json_negative_infinity": data["created"]=-float("inf")
+elif fixture == "version_null": data["preset"]["version"]=None
+elif fixture == "version_bool": data["preset"]["version"]=True
+elif fixture == "version_object": data["preset"]["version"]={}
+elif fixture == "version_array": data["preset"]["version"]=[]
+elif fixture == "version_nan": data["preset"]["version"]=float("nan")
+elif fixture == "version_infinity": data["preset"]["version"]=float("inf")
+elif fixture == "version_oversized": data["preset"]["version"]=1e20
+elif fixture == "version_unsafe_integer": data["preset"]["version"]=9007199254740993
+elif fixture == "top_null": data["watchtower_name"]=None
+elif fixture == "top_bool": data["identity"]=True
+elif fixture == "top_object": data["policy_sha256"]={}
+elif fixture == "top_long": data["created"]="x"*121
+elif fixture == "top_control": data["harness"]="pi\nforged"
+elif fixture == "nested_null": data["preset"]["name"]=None
+elif fixture == "nested_bool": data["preset"]["model"]=False
+elif fixture == "nested_object": data["preset"]["sha256"]={}
+elif fixture == "nested_long": data["preset"]["effort"]="x"*121
+elif fixture == "owner_text": data["owner_pid"]="pid"
+elif fixture == "owner_bool": data["owner_pid"]=True
+elif fixture == "owner_zero": data["owner_pid"]="0"
+elif fixture == "owner_large": data["owner_pid"]="999999999999999999999999999"
+with open(path,"w") as stream: json.dump(data,stream,allow_nan=True)
+PY
+    chmod 600 "$target"; cp "$target" "$TEST_ROOT/before-target"; cp "$log" "$TEST_ROOT/before-log"
+    run rzr-register.sh --harness pi --quiet; assert_failure
+    cmp "$target" "$TEST_ROOT/before-target"; cmp "$log" "$TEST_ROOT/before-log"
+    [ -z "$(find "${target%/target.json}" -name '.target.*.tmp' -print -quit)" ]; [ "$(cat "$SENTINEL")" = untouched ]
+  done
+}
+
+@test "valid target-ahead boundaries recover once as standard JSON" {
+  export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
+  for version in string integer float; do
+    rm -rf "$ROZORO_HOME/watchtowers"; run rzr-register.sh --harness pi --quiet; assert_success
+    target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"; log="${target%/target.json}/registrations.jsonl"; valid120="$(printf '%0120d' 0)"
+    VERSION="$version" VALID120="$valid120" TARGET="$target" python3 - <<'PY'
+import json,os
+path=os.environ["TARGET"]
+with open(path) as stream: data=json.load(stream)
+data.update({"registration_id":"valid-ahead-"+os.environ["VERSION"],"watchtower_name":os.environ["VALID120"],"unknown":{"future":True}})
+versions={"string":os.environ["VALID120"],"integer":3,"float":3.5}
+data["preset"]={"name":"luna","version":versions[os.environ["VERSION"]],"sha256":"abc","model":"luna","effort":"high","future":True}
+with open(path,"w") as stream: json.dump(data,stream,allow_nan=False)
+PY
+    chmod 600 "$target"; recovered="valid-ahead-$version"
+    run rzr-register.sh --harness pi --quiet; assert_success
+    run rzr-register.sh --harness pi --quiet; assert_success
+    [ "$(jq -r --arg id "$recovered" 'select(.registration_id == $id and .recovered == true) | .registration_id' "$log" | wc -l | tr -d ' ')" = 1 ]
+    python3 - "$target" "$log" <<'PY'
+import json,sys
+with open(sys.argv[1]) as stream: json.load(stream,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+with open(sys.argv[2]) as stream:
+    for line in stream: json.loads(line,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+PY
+  done
+}
+
 @test "a valid 120-byte registration ID is recoverable" {
   export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
   run rzr-register.sh --harness pi --quiet; assert_success

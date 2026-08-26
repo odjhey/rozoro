@@ -115,7 +115,7 @@ RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_
 RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
 RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
-import fcntl, json, os, secrets, stat
+import fcntl, json, math, os, secrets, stat
 
 nofollow = getattr(os, "O_NOFOLLOW", 0)
 directory = getattr(os, "O_DIRECTORY", 0)
@@ -171,6 +171,18 @@ def safe_string(value):
 def valid_registration_id(value):
     return safe_string(value) and bool(value)
 
+def reject_constant(value):
+    raise ValueError("non-standard JSON constant: " + value)
+
+def valid_version(value):
+    if isinstance(value, str):
+        return safe_string(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return abs(value) <= 2**53 - 1 and len(str(value)) <= 120
+
 def write_all(fd, payload):
     view = memoryview(payload)
     while view:
@@ -180,14 +192,17 @@ def write_all(fd, payload):
         view = view[count:]
 
 def record_from_target(data, *, recovered=False):
+    if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != 1:
+        raise SystemExit("invalid registration schema")
     registration_id = data.get("registration_id")
-    if data.get("schema") == 1 and not valid_registration_id(registration_id):
-        raise SystemExit("invalid registration id")
     if not valid_registration_id(registration_id):
-        return None
+        raise SystemExit("invalid registration id")
     copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256")
     if any(key in data and not safe_string(data[key]) for key in copied):
         raise SystemExit("invalid existing registration metadata")
+    owner_pid = data.get("owner_pid")
+    if owner_pid is not None and (not isinstance(owner_pid, str) or not owner_pid.isdigit() or not 1 <= int(owner_pid) <= 2**63 - 1):
+        raise SystemExit("invalid existing registration owner pid")
     preset = data.get("preset")
     if preset is not None:
         if not isinstance(preset, dict):
@@ -195,8 +210,7 @@ def record_from_target(data, *, recovered=False):
         for key in ("name", "sha256", "policy_sha256", "model", "effort"):
             if key in preset and not safe_string(preset[key]):
                 raise SystemExit("invalid existing registration preset")
-        version = preset.get("version")
-        if version is not None and not safe_string(str(version)):
+        if "version" in preset and not valid_version(preset["version"]):
             raise SystemExit("invalid existing registration preset")
     record = {
         "schema": 1,
@@ -224,7 +238,7 @@ def last_history_registration_id(logfd):
     try:
         for line in stream:
             try:
-                item = json.loads(line)
+                item = json.loads(line, parse_constant=reject_constant)
             except (UnicodeError, ValueError):
                 raise SystemExit("invalid registrations history")
             if not isinstance(item, dict) or not valid_registration_id(item.get("registration_id")):
@@ -242,10 +256,8 @@ def read_current_target(dirfd):
     try:
         require_owned_regular(fd, "registration target")
         with os.fdopen(os.dup(fd), "r", encoding="utf-8") as stream:
-            data = json.load(stream)
-        if not isinstance(data, dict) or data.get("driver_id") != os.environ["RZR_REG_ID"]:
-            raise SystemExit("invalid existing registration target")
-        if data.get("schema") == 1 and not valid_registration_id(data.get("registration_id")):
+            data = json.load(stream, parse_constant=reject_constant)
+        if not isinstance(data, dict) or data.get("driver_id") != os.environ["RZR_REG_ID"] or not safe_string(data.get("driver_id")):
             raise SystemExit("invalid existing registration target")
         record_from_target(data)
         return data
@@ -275,7 +287,7 @@ tmp_fd = None
 tmp_name = None
 tmp_created = False
 try:
-    lockfd = open_state_file(dirfd, ".registration.lock", os.O_RDWR, "registration lock")
+    lockfd = open_state_file(dirfd, ".registration.lock", os.O_RDWR | nonblock, "registration lock")
     fcntl.flock(lockfd, fcntl.LOCK_EX)
 
     logfd = open_state_file(dirfd, "registrations.jsonl", os.O_RDWR | os.O_APPEND | nonblock, "registrations log")
@@ -285,7 +297,7 @@ try:
     if current is not None:
         recovery = record_from_target(current, recovered=True)
         if recovery is not None and recovery["registration_id"] != last_history_id:
-            write_all(logfd, (json.dumps(recovery, separators=(",", ":")) + "\n").encode())
+            write_all(logfd, (json.dumps(recovery, separators=(",", ":"), allow_nan=False) + "\n").encode())
             os.fsync(logfd)
 
     registration_id = secrets.token_hex(16)
@@ -319,7 +331,7 @@ try:
     os.umask(0o077)
     tmp_fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600, dir_fd=dirfd)
     tmp_created = True
-    write_all(tmp_fd, json.dumps(data, indent=2).encode())
+    write_all(tmp_fd, json.dumps(data, indent=2, allow_nan=False).encode())
     os.fsync(tmp_fd)
     os.close(tmp_fd)
     tmp_fd = None
@@ -329,7 +341,7 @@ try:
     tmp_created = False
     os.fsync(dirfd)
 
-    write_all(logfd, (json.dumps(record, separators=(",", ":")) + "\n").encode())
+    write_all(logfd, (json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n").encode())
     os.fsync(logfd)
 finally:
     if tmp_fd is not None:

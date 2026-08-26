@@ -31,4 +31,16 @@ assert target["registration_id"] in ids
 for iteration in range(1, iterations + 1):
     assert {row["watchtower_name"] for row in rows if row["watchtower_name"] in (f"north-{iteration}", f"south-{iteration}")} == {f"north-{iteration}", f"south-{iteration}"}
 PY
-printf 'registration concurrency probe: %s/%s writer pairs passed\n' "$iterations" "$iterations"
+sentinel="$tmp/outside-sentinel"; printf 'unchanged\n' > "$sentinel"
+export HERDR_PANE_ID=fifo-pane
+printf 'idle\n' > "$FAKE_HERDR_ROOT/status.fifo-pane"; printf 'pi\n' > "$FAKE_HERDR_ROOT/kind.fifo-pane"; printf 'true\n' > "$FAKE_HERDR_ROOT/ready.fifo-pane"
+fifo_driver="$ROZORO_HOME/watchtowers/herdr-fifo-pane"; mkdir -p "$fifo_driver"; chmod 700 "$fifo_driver"
+mkfifo "$fifo_driver/.registration.lock"; chmod 600 "$fifo_driver/.registration.lock"
+rzr-register.sh --harness pi --quiet >"$tmp/fifo.out" 2>&1 & fifo_pid=$!
+count=0
+while kill -0 "$fifo_pid" 2>/dev/null && [ "$count" -lt 50 ]; do sleep 0.1; count=$((count + 1)); done
+if kill -0 "$fifo_pid" 2>/dev/null; then kill "$fifo_pid" 2>/dev/null || true; wait "$fifo_pid" 2>/dev/null || true; echo 'registration lock FIFO hung' >&2; exit 1; fi
+if wait "$fifo_pid"; then echo 'registration lock FIFO unexpectedly succeeded' >&2; exit 1; fi
+[ ! -e "$fifo_driver/target.json" ] && [ ! -e "$fifo_driver/registrations.jsonl" ]
+[ "$(cat "$sentinel")" = unchanged ]
+printf 'registration concurrency probe: %s/%s writer pairs and lock-FIFO fail-closed passed\n' "$iterations" "$iterations"
