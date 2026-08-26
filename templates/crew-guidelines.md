@@ -4,9 +4,18 @@ You are working in a repo whose changes are validated by an expensive review
 pipeline (no-mistakes). Every defect you prevent here is minutes saved there.
 These rules encode that pipeline's most-repeated findings in this repo.
 
+### Review/test execution boundary
+
+When acting as a Reviewer or Tester, do not execute the repository test suite as
+your verification step; the No-Mistakes gate owns execution evidence bound to the
+exact head. Reviewers provide judgment only. Testers may drive focused behavior
+exploratorily and design or write new or extended tests that join the repository
+suite; the gate enforces those tests on future candidates.
+
 ### Before every commit
 
-Run the deterministic checks yourself and fix what they report:
+For implementation and repair work, run the deterministic checks yourself and fix
+what they report:
 
     shellcheck -x <changed .sh files>
     uvx ruff check <changed .py files or dirs>   # picks up repo ruff.toml
