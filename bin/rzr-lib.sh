@@ -294,11 +294,15 @@ rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
   local name="$1"; rzr_validate_wtpreset_name "$name"
   RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
 import hashlib, json, math, os, stat
-root = os.open(os.environ["RZR_WTP_DIR"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+path=os.environ["RZR_WTP_DIR"]; before=os.stat(path,follow_symlinks=False)
+root = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("preset directory changed during open")
 try:
-    fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=root)
+    filename=os.environ["RZR_WTP_FILE"]; before=os.stat(filename,dir_fd=root,follow_symlinks=False)
+    fd = os.open(filename, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=root)
     try:
         info = os.fstat(fd)
+        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit("preset changed during open")
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
             raise SystemExit("preset is not a singly-linked owned regular file")
         chunks = []
@@ -375,13 +379,17 @@ def private_dir(info): return stat.S_ISDIR(info.st_mode) and info.st_uid==os.get
 def safe(value):
     return isinstance(value,str) and len(value)<=120 and "=" not in value and not any(ord(c)<32 or ord(c)==127 for c in value)
 def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
-try: root=os.open(os.environ["RZR_TARGET_HOME"],os.O_RDONLY|directory|nofollow)
+try:
+    home=os.environ["RZR_TARGET_HOME"]; before=os.stat(home,follow_symlinks=False)
+    root=os.open(home,os.O_RDONLY|directory|nofollow)
+    if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise OSError
 except OSError: raise SystemExit
 try:
     try:
         info=os.stat("watchtowers",dir_fd=root,follow_symlinks=False)
         if not private_dir(info): raise SystemExit
         towers=os.open("watchtowers",os.O_RDONLY|directory|nofollow,dir_fd=root)
+        if (info.st_dev,info.st_ino)!=(os.fstat(towers).st_dev,os.fstat(towers).st_ino): os.close(towers); raise OSError
     except OSError: raise SystemExit
     try:
         selected=os.environ["RZR_TARGET_DRIVER"]
@@ -392,10 +400,12 @@ try:
                 info=os.stat(name,dir_fd=towers,follow_symlinks=False)
                 if not private_dir(info): continue
                 driver=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=towers)
+                if (info.st_dev,info.st_ino)!=(os.fstat(driver).st_dev,os.fstat(driver).st_ino): os.close(driver); continue
                 try:
+                    before=os.stat("target.json",dir_fd=driver,follow_symlinks=False)
                     fd=os.open("target.json",os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=driver)
                     info=os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)&0o077:
+                    if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino) or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)&0o077:
                         os.close(fd); continue
                     with os.fdopen(fd) as stream: data=json.load(stream,parse_constant=reject_constant)
                 finally: os.close(driver)
@@ -554,10 +564,14 @@ path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
 name = "claude-event-settings.json"; expected=os.path.join(home,"watchtowers",driver,name)
 if path != expected: raise SystemExit("watchtower settings path does not match driver capability")
 flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
-root=os.open(home,flags)
+before=os.stat(home,follow_symlinks=False); root=os.open(home,flags)
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("watchtower home changed during open")
 try:
-    towers=os.open("watchtowers",flags,dir_fd=root)
-    try: fd=os.open(driver,flags,dir_fd=towers)
+    ti=os.stat("watchtowers",dir_fd=root,follow_symlinks=False); towers=os.open("watchtowers",flags,dir_fd=root)
+    if (ti.st_dev,ti.st_ino)!=(os.fstat(towers).st_dev,os.fstat(towers).st_ino): os.close(towers); raise SystemExit("watchtowers directory changed during open")
+    try:
+        di=os.stat(driver,dir_fd=towers,follow_symlinks=False); fd=os.open(driver,flags,dir_fd=towers)
+        if (di.st_dev,di.st_ino)!=(os.fstat(fd).st_dev,os.fstat(fd).st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
     finally: os.close(towers)
 finally: os.close(root)
 try:
@@ -615,7 +629,10 @@ import json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, task, session, binary = sys.argv[1:]
 parent, name = os.path.split(path)
 flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+before = os.stat(parent, follow_symlinks=False)
 dirfd = os.open(parent, flags)
+if (before.st_dev,before.st_ino)!=(os.fstat(dirfd).st_dev,os.fstat(dirfd).st_ino):
+    os.close(dirfd); raise SystemExit("Claude settings directory changed during open")
 try:
     info = os.fstat(dirfd)
     if info.st_uid != os.geteuid() or not stat.S_ISDIR(info.st_mode):
@@ -663,20 +680,24 @@ try:
     data = (json.dumps(settings, sort_keys=True, separators=(",", ":")) + "\n").encode()
     temporary = ".claude-settings-" + secrets.token_hex(12) + ".tmp"
     file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
+    temporary_created = False
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view):]
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        fd = os.open(temporary, file_flags, 0o600, dir_fd=dirfd)
+        temporary_created = True
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(temporary, name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+        temporary_created = False
         os.fsync(dirfd)
     finally:
-        try: os.unlink(temporary, dir_fd=dirfd)
-        except FileNotFoundError: pass
+        if temporary_created:
+            try: os.unlink(temporary, dir_fd=dirfd)
+            except FileNotFoundError: pass
 finally:
     os.close(dirfd)
 PY

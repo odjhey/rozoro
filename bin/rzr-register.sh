@@ -116,8 +116,12 @@ def child(parent,name):
     except FileExistsError: pass
     info=os.stat(name,dir_fd=parent,follow_symlinks=False)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid(): raise SystemExit("unsafe watchtower directory")
-    fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent); os.fchmod(fd,0o700); return fd
-root=os.open(os.environ["RZR_REG_HOME"],os.O_RDONLY|directory|nofollow)
+    fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent)
+    if (info.st_dev,info.st_ino)!=(os.fstat(fd).st_dev,os.fstat(fd).st_ino): os.close(fd); raise SystemExit("watchtower directory changed during open")
+    os.fchmod(fd,0o700); return fd
+home=os.environ["RZR_REG_HOME"]; before=os.stat(home,follow_symlinks=False)
+root=os.open(home,os.O_RDONLY|directory|nofollow)
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("watchtower home changed during open")
 try: towers=child(root,"watchtowers")
 finally: os.close(root)
 try: dirfd=child(towers,os.environ["RZR_REG_ID"])
@@ -145,8 +149,14 @@ record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
 if "policy_sha256" in data: record["policy_sha256"] = data["policy_sha256"]
-flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-logfd = os.open("registrations.jsonl", flags, 0o600, dir_fd=dirfd)
+flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+try:
+    logfd = os.open("registrations.jsonl", flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dirfd)
+except FileExistsError:
+    before=os.stat("registrations.jsonl",dir_fd=dirfd,follow_symlinks=False)
+    logfd=os.open("registrations.jsonl",flags,dir_fd=dirfd)
+    if (before.st_dev,before.st_ino)!=(os.fstat(logfd).st_dev,os.fstat(logfd).st_ino):
+        os.close(logfd); raise SystemExit("registrations log changed during open")
 try:
     info = os.fstat(logfd)
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1: raise SystemExit("unsafe registrations log")
