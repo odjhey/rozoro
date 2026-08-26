@@ -37,6 +37,7 @@ load test_helper/common
 @test "spawn best-effort stamps its registered dispatcher" {
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-driver-pane"
   printf '%s\n' '{"schema":1,"driver_id":"herdr-driver-pane","identity":"driver-pane","watchtower_name":"north","preset":{"name":"luna","version":"3","sha256":"abc"}}' > "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/herdr-driver-pane"; chmod 600 "$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"
   run env HERDR_PANE_ID=driver-pane ROZORO_WT_DRIVER=herdr-driver-pane "$REPO_ROOT/bin/rzr-spawn.sh" task --cwd "$TEST_ROOT" --no-agent
   assert_success
   meta="$ROZORO_HOME/state/task.meta"

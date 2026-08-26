@@ -342,54 +342,76 @@ PY
 }
 rzr_sha256_file() { rzr_file_identity "$1" | awk -F: '{print $5}'; }
 
-# Parse a target without following its final entry and reject values unsafe for
-# the line-oriented task metadata store.
-rzr_dispatcher_target_json() {  # <target-path>
-  python3 - "$1" <<'PY' 2>/dev/null
-import json, os, stat, sys
-fd=os.open(sys.argv[1],os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
-try:
-    if not stat.S_ISREG(os.fstat(fd).st_mode): raise SystemExit
-    with os.fdopen(fd) as stream: data=json.load(stream)
-except Exception: raise SystemExit
+# Enumerate only records reached through owned, private, no-follow directory
+# descriptors. An optional driver id selects one record. Malformed/unsafe state
+# is skipped so read-only attribution remains best-effort.
+rzr_watchtower_target_json() {  # [driver-id]
+  local selected="${1:-}"
+  [ -z "$selected" ] || rzr_validate_task_component "$selected" "driver id"
+  RZR_TARGET_HOME="$RZR_HOME" RZR_TARGET_DRIVER="$selected" python3 - <<'PY' 2>/dev/null
+import json, os, stat
+nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
+def private_dir(info): return stat.S_ISDIR(info.st_mode) and info.st_uid==os.geteuid() and not stat.S_IMODE(info.st_mode)&0o077
 def safe(value): return isinstance(value,str) and not any(c in value for c in "\r\n\t=")
-if not safe(data.get("driver_id")): raise SystemExit
-for value in (data.get("watchtower_name", ""), *(data.get("preset") or {}).values()):
-    if isinstance(value, str) and not safe(value): raise SystemExit
-print(json.dumps(data,separators=(",",":")))
+try: root=os.open(os.environ["RZR_TARGET_HOME"],os.O_RDONLY|directory|nofollow)
+except OSError: raise SystemExit
+try:
+    try:
+        info=os.stat("watchtowers",dir_fd=root,follow_symlinks=False)
+        if not private_dir(info): raise SystemExit
+        towers=os.open("watchtowers",os.O_RDONLY|directory|nofollow,dir_fd=root)
+    except OSError: raise SystemExit
+    try:
+        selected=os.environ["RZR_TARGET_DRIVER"]
+        names=[selected] if selected else sorted(os.listdir(towers))
+        for name in names:
+            if not name or name in (".","..") or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for c in name): continue
+            try:
+                info=os.stat(name,dir_fd=towers,follow_symlinks=False)
+                if not private_dir(info): continue
+                driver=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=towers)
+                try:
+                    fd=os.open("target.json",os.O_RDONLY|nofollow,dir_fd=driver)
+                    info=os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
+                        os.close(fd); continue
+                    with os.fdopen(fd) as stream: data=json.load(stream)
+                finally: os.close(driver)
+                if data.get("driver_id") != name or not safe(data.get("driver_id")): continue
+                values=(data.get("watchtower_name",""),*(data.get("preset") or {}).values())
+                if any(isinstance(value,str) and not safe(value) for value in values): continue
+                print(json.dumps(data,separators=(",",":")))
+            except (OSError,ValueError,TypeError): continue
+    finally: os.close(towers)
+finally: os.close(root)
 PY
 }
+rzr_dispatcher_target_json() { rzr_watchtower_target_json "$1" | head -n 1; }
 
 # Best-effort dispatcher discovery. Explicit driver wins; identity-derived and
 # scan candidates are deduplicated and accepted only when unambiguous.
 rzr_dispatcher_lookup() {
-  local cand target json; local -a dispatcher_candidates=()
+  local candidate json; local -a dispatcher_candidates=()
   if [ -n "${ROZORO_WT_DRIVER:-}" ]; then
-    cand="$(rzr_driver_dir "$ROZORO_WT_DRIVER" 2>/dev/null || true)"
-    if [ -s "$cand/target.json" ]; then
-      json="$(rzr_dispatcher_target_json "$cand/target.json" || true)"
-      [ -z "$json" ] || printf '%s\n' "$json"
-      return 0
-    fi
+    json="$(rzr_dispatcher_target_json "$ROZORO_WT_DRIVER" || true)"
+    if [ -n "$json" ]; then printf '%s\n' "$json"; return 0; fi
   fi
   if [ -n "${HERDR_PANE_ID:-}" ]; then
-    cand="$(rzr_driver_dir "$(rzr_driver_id_for herdr "$HERDR_PANE_ID")" 2>/dev/null || true)"
-    [ -z "$(rzr_dispatcher_target_json "$cand/target.json" || true)" ] || dispatcher_candidates+=("$cand")
+    candidate="$(rzr_driver_id_for herdr "$HERDR_PANE_ID")"
+    [ -z "$(rzr_dispatcher_target_json "$candidate" || true)" ] || dispatcher_candidates+=("$candidate")
   fi
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
-    cand="$(rzr_driver_dir "$(rzr_driver_id_for codex "$CODEX_THREAD_ID")" 2>/dev/null || true)"
-    [ -z "$(rzr_dispatcher_target_json "$cand/target.json" || true)" ] || dispatcher_candidates+=("$cand")
+    candidate="$(rzr_driver_id_for codex "$CODEX_THREAD_ID")"
+    [ -z "$(rzr_dispatcher_target_json "$candidate" || true)" ] || dispatcher_candidates+=("$candidate")
   fi
   if [ "${#dispatcher_candidates[@]}" -eq 0 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-    for target in "$(rzr_watchtowers_dir)"/*/target.json; do
-      json="$(rzr_dispatcher_target_json "$target" || true)"; [ -n "$json" ] || continue
+    while IFS= read -r json; do
       [ "$(printf '%s' "$json" | jq -r '.identity // empty')" = "$HERDR_PANE_ID" ] || continue
-      cand="${target%/target.json}"
-      dispatcher_candidates+=("$cand")
-    done
+      dispatcher_candidates+=("$(printf '%s' "$json" | jq -r '.driver_id')")
+    done < <(rzr_watchtower_target_json || true)
   fi
   [ "${#dispatcher_candidates[@]}" -eq 1 ] || return 0
-  rzr_dispatcher_target_json "${dispatcher_candidates[0]}/target.json" || true
+  rzr_dispatcher_target_json "${dispatcher_candidates[0]}" || true
   return 0
 }
 

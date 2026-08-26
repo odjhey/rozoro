@@ -89,7 +89,7 @@ case "$BACKEND" in
 esac
 
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
-DIR="$(rzr_driver_dir_prepare "$DRIVER_ID")"
+rzr_validate_task_component "$DRIVER_ID" "driver id"
 [ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
 if [ -n "${ROZORO_WT_PRESET:-}" ]; then
   rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
@@ -100,17 +100,27 @@ if [ -n "${ROZORO_WT_PRESET:-}" ]; then
   rzr_validate_wt_metadata "${ROZORO_WT_EFFORT:-}" "watchtower effort"
 fi
 
-RZR_REG_OUT="$DIR/target.json" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
+RZR_REG_HOME="$RZR_HOME" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
 RZR_REG_WT_NAME="${ROZORO_WT_NAME:-}" RZR_REG_PRESET="${ROZORO_WT_PRESET:-}" \
 RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_SHA256:-}" \
 RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
-RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" RZR_REG_LOG="$DIR/registrations.jsonl" \
+RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import json, os, stat
-directory, target_name = os.path.split(os.environ["RZR_REG_OUT"])
-dirfd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-tmp_name = ".target.%d.tmp" % os.getpid()
+nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
+def child(parent,name):
+    try: os.mkdir(name,0o700,dir_fd=parent)
+    except FileExistsError: pass
+    info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid(): raise SystemExit("unsafe watchtower directory")
+    fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent); os.fchmod(fd,0o700); return fd
+root=os.open(os.environ["RZR_REG_HOME"],os.O_RDONLY|directory|nofollow)
+try: towers=child(root,"watchtowers")
+finally: os.close(root)
+try: dirfd=child(towers,os.environ["RZR_REG_ID"])
+finally: os.close(towers)
+tmp_name = ".target.%d.tmp" % os.getpid(); target_name="target.json"
 os.umask(0o077)
 data = {"schema": 1, "driver_id": os.environ["RZR_REG_ID"],
         "harness": os.environ["RZR_REG_HARNESS"], "backend": os.environ["RZR_REG_BACKEND"],
@@ -126,33 +136,28 @@ if os.environ["RZR_REG_PRESET"]:
                       "effort": os.environ["RZR_REG_EFFORT"]}
     if os.environ["RZR_REG_POLICY_SHA"]:
         data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
-try:
-    fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=dirfd)
-    try:
-        payload = json.dumps(data, indent=2).encode()
-        os.write(fd, payload); os.fsync(fd)
-    finally: os.close(fd)
-    os.replace(tmp_name, target_name, src_dir_fd=dirfd, dst_dir_fd=dirfd)
-    os.fsync(dirfd)
-finally:
-    try: os.unlink(tmp_name, dir_fd=dirfd)
-    except FileNotFoundError: pass
 record = {"ts": os.environ["RZR_REG_TS"], "driver_id": data["driver_id"],
           "harness": data["harness"], "backend": data["backend"], "identity": data["identity"]}
 if "watchtower_name" in data: record["watchtower_name"] = data["watchtower_name"]
 if "preset" in data: record["preset"] = data["preset"]
 flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-log_name = os.path.basename(os.environ["RZR_REG_LOG"])
-fd = os.open(log_name, flags, 0o600, dir_fd=dirfd)
+logfd = os.open("registrations.jsonl", flags, 0o600, dir_fd=dirfd)
 try:
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-        raise SystemExit("unsafe registrations log")
-    os.fchmod(fd, 0o600)
-    os.write(fd, (json.dumps(record, separators=(",", ":")) + "\n").encode())
-    os.fsync(fd)
+    info = os.fstat(logfd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid(): raise SystemExit("unsafe registrations log")
+    os.fchmod(logfd, 0o600)
+    try:
+        fd=os.open(tmp_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)
+        try:
+            payload=json.dumps(data,indent=2).encode(); os.write(fd,payload); os.fsync(fd)
+        finally: os.close(fd)
+        os.replace(tmp_name,target_name,src_dir_fd=dirfd,dst_dir_fd=dirfd); os.fsync(dirfd)
+        os.write(logfd,(json.dumps(record,separators=(",",":"))+"\n").encode()); os.fsync(logfd)
+    finally:
+        try: os.unlink(tmp_name,dir_fd=dirfd)
+        except FileNotFoundError: pass
 finally:
-    os.close(fd); os.close(dirfd)
+    os.close(logfd); os.close(dirfd)
 PY
 
 [ "$QUIET" -eq 1 ] || echo "$DRIVER_ID"

@@ -30,11 +30,11 @@ case "$cmd" in
     rzr_wtpreset_path "$2" ;;
   registered)
     printf '%-24s %-18s %-20s %-8s %-8s %s\n' DRIVER NAME PRESET@VERSION HARNESS BACKEND CREATED
-    for f in "$(rzr_watchtowers_dir)"/*/target.json; do
-      [ -s "$f" ] || continue
-      jq -r '[.driver_id // "-", .watchtower_name // "-", (if .preset.name then (.preset.name + "@" + ((.preset.version // "0")|tostring)) else "-" end), .harness // "-", .backend // "-", .created // "-"] | @tsv' "$f" |
-        while IFS=$'\t' read -r driver name preset harness backend created; do printf '%-24s %-18s %-20s %-8s %-8s %s\n' "$driver" "$name" "$preset" "$harness" "$backend" "$created"; done
-    done ;;
+    rzr_watchtower_target_json |
+      while IFS= read -r json; do
+        printf '%s' "$json" | jq -r '[.driver_id // "-", .watchtower_name // "-", (if .preset.name then (.preset.name + "@" + ((.preset.version // "0")|tostring)) else "-" end), .harness // "-", .backend // "-", .created // "-"] | @tsv' |
+          while IFS=$'\t' read -r driver name preset harness backend created; do printf '%-24s %-18s %-20s %-8s %-8s %s\n' "$driver" "$name" "$preset" "$harness" "$backend" "$created"; done
+      done ;;
   -h|--help) echo "usage: ./bin/rozoro watchtower list|show <name>|path <name>|registered" ;;
   *) rzr_die "unknown command '$cmd' (list | show <name> | path <name> | registered)" ;;
 esac

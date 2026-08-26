@@ -11,6 +11,7 @@ make_preset() { mkdir -p "$ROZORO_HOME/watchtower-presets"; printf '%s\n' "$2" >
   run rozoro watchtower path luna; assert_success; [ "$output" = "$ROZORO_HOME/watchtower-presets/luna.json" ]
   mkdir -p "$ROZORO_HOME/watchtowers/herdr-p1"
   printf '%s\n' '{"schema":1,"driver_id":"herdr-p1","watchtower_name":"north","preset":{"name":"luna","version":"3"},"harness":"pi","backend":"herdr","created":"now"}' > "$ROZORO_HOME/watchtowers/herdr-p1/target.json"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/herdr-p1"; chmod 600 "$ROZORO_HOME/watchtowers/herdr-p1/target.json"
   run rozoro watchtower registered; assert_success; assert_output_contains north; assert_output_contains 'luna@3'
 }
 
