@@ -200,11 +200,13 @@ def record_from_target(data, *, recovered=False):
     copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256")
     if any(key in data and not safe_string(data[key]) for key in copied):
         raise SystemExit("invalid existing registration metadata")
-    owner_pid = data.get("owner_pid")
-    if owner_pid is not None and (not isinstance(owner_pid, str) or not owner_pid.isdigit() or not 1 <= int(owner_pid) <= 2**63 - 1):
-        raise SystemExit("invalid existing registration owner pid")
-    preset = data.get("preset")
-    if preset is not None:
+    if "owner_pid" in data:
+        owner_pid = data["owner_pid"]
+        if not isinstance(owner_pid, str) or not owner_pid.isdigit() or not 1 <= int(owner_pid) <= 2**63 - 1:
+            raise SystemExit("invalid existing registration owner pid")
+    projected_preset = None
+    if "preset" in data:
+        preset = data["preset"]
         if not isinstance(preset, dict):
             raise SystemExit("invalid existing registration preset")
         for key in ("name", "sha256", "policy_sha256", "model", "effort"):
@@ -212,6 +214,7 @@ def record_from_target(data, *, recovered=False):
                 raise SystemExit("invalid existing registration preset")
         if "version" in preset and not valid_version(preset["version"]):
             raise SystemExit("invalid existing registration preset")
+        projected_preset = {key: preset[key] for key in ("name", "version", "sha256", "policy_sha256", "model", "effort") if key in preset}
     record = {
         "schema": 1,
         "ts": data.get("created", "unknown"),
@@ -223,8 +226,8 @@ def record_from_target(data, *, recovered=False):
     }
     if "watchtower_name" in data:
         record["watchtower_name"] = data["watchtower_name"]
-    if preset is not None:
-        record["preset"] = preset
+    if projected_preset is not None:
+        record["preset"] = projected_preset
     if "policy_sha256" in data:
         record["policy_sha256"] = data["policy_sha256"]
     if recovered:

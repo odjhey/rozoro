@@ -77,7 +77,7 @@ load test_helper/common
 
 @test "unsafe target-ahead metadata never appends recovery or publishes" {
   export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
-  cases='schema_true schema_float schema_missing schema_string json_nan json_infinity json_negative_infinity version_null version_bool version_object version_array version_nan version_infinity version_oversized version_unsafe_integer top_null top_bool top_object top_long top_control nested_null nested_bool nested_object nested_long owner_text owner_bool owner_zero owner_large'
+  cases='schema_true schema_float schema_missing schema_string json_nan json_infinity json_negative_infinity version_null version_bool version_object version_array version_nan version_infinity version_oversized version_unsafe_integer top_null top_bool top_object top_long top_control preset_null nested_null nested_bool nested_object nested_long owner_null owner_text owner_bool owner_zero owner_large'
   for fixture in $cases; do
     rm -rf "$ROZORO_HOME/watchtowers"; run rzr-register.sh --harness pi --quiet; assert_success
     target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"; log="${target%/target.json}/registrations.jsonl"
@@ -107,10 +107,12 @@ elif fixture == "top_bool": data["identity"]=True
 elif fixture == "top_object": data["policy_sha256"]={}
 elif fixture == "top_long": data["created"]="x"*121
 elif fixture == "top_control": data["harness"]="pi\nforged"
+elif fixture == "preset_null": data["preset"]=None
 elif fixture == "nested_null": data["preset"]["name"]=None
 elif fixture == "nested_bool": data["preset"]["model"]=False
 elif fixture == "nested_object": data["preset"]["sha256"]={}
 elif fixture == "nested_long": data["preset"]["effort"]="x"*121
+elif fixture == "owner_null": data["owner_pid"]=None
 elif fixture == "owner_text": data["owner_pid"]="pid"
 elif fixture == "owner_bool": data["owner_pid"]=True
 elif fixture == "owner_zero": data["owner_pid"]="0"
@@ -135,13 +137,18 @@ path=os.environ["TARGET"]
 with open(path) as stream: data=json.load(stream)
 data.update({"registration_id":"valid-ahead-"+os.environ["VERSION"],"watchtower_name":os.environ["VALID120"],"unknown":{"future":True}})
 versions={"string":os.environ["VALID120"],"integer":3,"float":3.5}
-data["preset"]={"name":"luna","version":versions[os.environ["VERSION"]],"sha256":"abc","model":"luna","effort":"high","future":True}
+data["preset"]={"name":"luna","version":versions[os.environ["VERSION"]],"sha256":"abc","policy_sha256":"policy","model":"luna","effort":"high","future":True}
 with open(path,"w") as stream: json.dump(data,stream,allow_nan=False)
 PY
     chmod 600 "$target"; recovered="valid-ahead-$version"
     run rzr-register.sh --harness pi --quiet; assert_success
     run rzr-register.sh --harness pi --quiet; assert_success
     [ "$(jq -r --arg id "$recovered" 'select(.registration_id == $id and .recovered == true) | .registration_id' "$log" | wc -l | tr -d ' ')" = 1 ]
+    recovered_row="$(jq -c --arg id "$recovered" 'select(.registration_id == $id and .recovered == true)' "$log")"
+    [ "$(printf '%s' "$recovered_row" | jq -r 'has("unknown")')" = false ]
+    [ "$(printf '%s' "$recovered_row" | jq -r '.preset | keys | sort | join(":")')" = 'effort:model:name:policy_sha256:sha256:version' ]
+    [ "$(printf '%s' "$recovered_row" | jq -r '[.preset.name,.preset.sha256,.preset.policy_sha256,.preset.model,.preset.effort] | join(":")')" = 'luna:abc:policy:luna:high' ]
+    case "$version" in string) [ "$(printf '%s' "$recovered_row" | jq -r '.preset.version | length')" = 120 ];; integer) [ "$(printf '%s' "$recovered_row" | jq -r .preset.version)" = 3 ];; float) [ "$(printf '%s' "$recovered_row" | jq -r .preset.version)" = 3.5 ];; esac
     python3 - "$target" "$log" <<'PY'
 import json,sys
 with open(sys.argv[1]) as stream: json.load(stream,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
@@ -149,6 +156,18 @@ with open(sys.argv[2]) as stream:
     for line in stream: json.loads(line,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
 PY
   done
+}
+
+@test "target-ahead recovery accepts absent owner and preset and projects empty preset" {
+  export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
+  run rzr-register.sh --harness pi --quiet; assert_success
+  target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"; log="${target%/target.json}/registrations.jsonl"
+  jq 'del(.owner_pid,.preset) | .registration_id="absent-optionals"' "$target" > "$target.tmp"; mv "$target.tmp" "$target"; chmod 600 "$target"
+  run rzr-register.sh --harness pi --quiet; assert_success
+  [ "$(jq -r 'select(.registration_id == "absent-optionals" and .recovered == true) | has("preset")' "$log")" = false ]
+  jq 'del(.owner_pid) | .preset={} | .registration_id="empty-preset"' "$target" > "$target.tmp"; mv "$target.tmp" "$target"; chmod 600 "$target"
+  run rzr-register.sh --harness pi --quiet; assert_success
+  [ "$(jq -c 'select(.registration_id == "empty-preset" and .recovered == true) | .preset' "$log")" = '{}' ]
 }
 
 @test "a valid 120-byte registration ID is recoverable" {
