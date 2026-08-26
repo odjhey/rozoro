@@ -16,8 +16,10 @@ evidence this crew needs**. Repository-local rules come from the crew's `--cwd`.
 | `delivery-evidence` | Reconcile exact-head assurance and delivery evidence when deciding what runs next. |
 | `attempt-budget` | Track cumulative Coder attempts and Replanner turns, extend bounded lineages through replanning, and defer exhausted work. |
 | `afk` | Read or change unattended merge authority. `/afk` is ON by default. |
+| `get-me-up-to-speed` | Give a concise evidence-based summary of completed, current, and next work; also triggered by `gmuts`. |
 | `no-mistakes-observatory` | Maintain the optional human visualization surface for active no-mistakes runs. |
 | `watchtower-attention-ledger` | Record/supersede attention items during reconcile, note handling decisions as you route, and `prime` a fresh/resumed session from disk. |
+| `watchtower-policy-status` | Explain the currently applicable Watchtower rules from active policy sources. |
 
 Skills are orchestration guidance, not prompt blocks to paste into crew sessions.
 
