@@ -296,8 +296,8 @@ try:
     fd = os.open(os.environ["RZR_WTP_FILE"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=root)
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-            raise SystemExit("preset is not an owned regular file")
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+            raise SystemExit("preset is not a singly-linked owned regular file")
         chunks = []
         while True:
             chunk = os.read(fd, 65536)
@@ -385,7 +385,7 @@ try:
                 try:
                     fd=os.open("target.json",os.O_RDONLY|nofollow,dir_fd=driver)
                     info=os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)&0o077:
                         os.close(fd); continue
                     with os.fdopen(fd) as stream: data=json.load(stream,parse_constant=reject_constant)
                 finally: os.close(driver)
@@ -437,10 +437,16 @@ rzr_dispatcher_lookup() {
       dispatcher_candidates+=("$candidate"); dispatcher_backends+=(codex); dispatcher_identities+=("$CODEX_THREAD_ID")
     fi
   fi
-  if [ "${#dispatcher_candidates[@]}" -eq 0 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  if [ -n "${HERDR_PANE_ID:-}" ]; then
     while IFS= read -r json; do
       rzr_dispatcher_candidate_matches "$json" herdr "$HERDR_PANE_ID" || continue
-      dispatcher_candidates+=("$(printf '%s' "$json" | jq -r '.driver_id')")
+      candidate="$(printf '%s' "$json" | jq -r '.driver_id')"
+      local seen=0 existing
+      if [ "${#dispatcher_candidates[@]}" -gt 0 ]; then
+        for existing in "${dispatcher_candidates[@]}"; do [ "$existing" != "$candidate" ] || seen=1; done
+      fi
+      [ "$seen" -eq 1 ] && continue
+      dispatcher_candidates+=("$candidate")
       dispatcher_backends+=(herdr); dispatcher_identities+=("$HERDR_PANE_ID")
     done < <(rzr_watchtower_target_json || true)
   fi
@@ -520,22 +526,36 @@ rzr_claude_watchtower_settings() {  # <output-path> <driver-id> <adapter-session
   python3 - "$target" "$RZR_REPO/hooks/claude-rozoro-event.py" "$RZR_HOME" "$driver" "$session" "$native" "$pane" "$binary" <<'PY' || return 1
 import json, os, secrets, shlex, stat, subprocess, sys
 path, hook, home, driver, session, native, pane, binary = sys.argv[1:]
-parent, name = os.path.split(path); fd=os.open(parent,os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0))
+name = "claude-event-settings.json"; expected=os.path.join(home,"watchtowers",driver,name)
+if path != expected: raise SystemExit("watchtower settings path does not match driver capability")
+flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
+root=os.open(home,flags)
+try:
+    towers=os.open("watchtowers",flags,dir_fd=root)
+    try: fd=os.open(driver,flags,dir_fd=towers)
+    finally: os.close(towers)
+finally: os.close(root)
 try:
     info=os.fstat(fd)
     if info.st_uid!=os.geteuid() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)&0o077: raise SystemExit("watchtower settings directory must be owner-private")
-    old=os.stat(name,dir_fd=fd,follow_symlinks=False) if os.path.lexists(path) else None
-    if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid()): raise SystemExit("refusing unsafe watchtower settings destination")
+    try: old=os.stat(name,dir_fd=fd,follow_symlinks=False)
+    except FileNotFoundError: old=None
+    if old is not None and (not stat.S_ISREG(old.st_mode) or old.st_uid!=os.geteuid() or old.st_nlink!=1): raise SystemExit("refusing unsafe watchtower settings destination")
     version=subprocess.run([binary,"--version"],capture_output=True,text=True,timeout=15,check=True).stdout.strip().split(maxsplit=1)[0]
     match=__import__("re").fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
     if not match or not ((2, 1, 240) <= tuple(map(int, match.groups())) < (2, 2, 0)):
         raise SystemExit("Claude capability drift")
     real=os.path.realpath(binary); bi=os.stat(real); proof=path+".capability.json"
+    proof_name=name+".capability.json"; proof_tmp=proof_name+".tmp"
     try:
-        with open(proof+".tmp","w") as out: json.dump({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]},out); out.flush(); os.fsync(out.fileno())
-        os.chmod(proof+".tmp",0o600); os.replace(proof+".tmp",proof)
+        proof_fd=os.open(proof_tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=fd)
+        try:
+            payload=json.dumps({"version":version,"binary":real,"identity":[bi.st_dev,bi.st_ino]}).encode()
+            os.write(proof_fd,payload); os.fsync(proof_fd)
+        finally: os.close(proof_fd)
+        os.replace(proof_tmp,proof_name,src_dir_fd=fd,dst_dir_fd=fd)
     finally:
-        try: os.unlink(proof+".tmp")
+        try: os.unlink(proof_tmp,dir_fd=fd)
         except FileNotFoundError: pass
     command=shlex.join(["env","ROZORO_ROLE=watchtower",f"ROZORO_DRIVER_ID={driver}",f"ROZORO_SESSION_ID={session}",f"ROZORO_NATIVE_SESSION_ID={native}",f"ROZORO_HERDR_PANE_ID={pane}",f"ROZORO_HOME={home}","python3",hook,"--claude-binary",binary,"--capability-proof",proof])
     entry=[{"hooks":[{"type":"command","command":command,"timeout":2}]}]

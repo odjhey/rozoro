@@ -145,7 +145,7 @@ flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
 logfd = os.open("registrations.jsonl", flags, 0o600, dir_fd=dirfd)
 try:
     info = os.fstat(logfd)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid(): raise SystemExit("unsafe registrations log")
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1: raise SystemExit("unsafe registrations log")
     os.fchmod(logfd, 0o600)
     try:
         fd=os.open(tmp_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=dirfd)

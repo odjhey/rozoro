@@ -171,3 +171,46 @@ SH
     assert_failure
   done
 }
+
+@test "overflow versions and hardlinked preset and target files are rejected" {
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtowers/herdr-pane"
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":1e999}' > "$ROZORO_HOME/watchtower-presets/overflow.json"
+  run rozoro watchtower show overflow; assert_failure
+  printf '%s\n' '{"harness":"pi","model":"x","effort":"low"}' > "$TEST_ROOT/hardlink.json"
+  ln "$TEST_ROOT/hardlink.json" "$ROZORO_HOME/watchtower-presets/hardlink.json"
+  run rozoro watchtower show hardlink; assert_failure
+
+  printf '%s\n' '{"driver_id":"herdr-pane","identity":"pane","backend":"herdr"}' > "$TEST_ROOT/target.json"
+  ln "$TEST_ROOT/target.json" "$ROZORO_HOME/watchtowers/herdr-pane/target.json"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/herdr-pane"; chmod 600 "$TEST_ROOT/target.json"
+  run env HERDR_PANE_ID=pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ -z "$output" ]
+}
+
+@test "duplicate valid targets sharing the canonical identity are ambiguous" {
+  mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane" "$ROZORO_HOME/watchtowers/claude-session"
+  printf '%s\n' '{"driver_id":"herdr-pane","identity":"pane","backend":"herdr"}' > "$ROZORO_HOME/watchtowers/herdr-pane/target.json"
+  printf '%s\n' '{"driver_id":"claude-session","identity":"pane","backend":"herdr"}' > "$ROZORO_HOME/watchtowers/claude-session/target.json"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers"/*; chmod 600 "$ROZORO_HOME/watchtowers"/*/target.json
+  run env HERDR_PANE_ID=pane bash -c '. "$1/bin/rzr-lib.sh"; rzr_dispatcher_lookup' _ "$REPO_ROOT"
+  assert_success; [ -z "$output" ]
+}
+
+@test "registration refuses a hardlinked registrations log" {
+  export HERDR_PANE_ID=pane; fake_pane pane idle pi true
+  mkdir -p "$ROZORO_HOME/watchtowers/herdr-pane"
+  printf 'untouched\n' > "$TEST_ROOT/sentinel"
+  ln "$TEST_ROOT/sentinel" "$ROZORO_HOME/watchtowers/herdr-pane/registrations.jsonl"
+  run rzr-register.sh --harness pi --quiet
+  assert_failure; [ "$(cat "$TEST_ROOT/sentinel")" = untouched ]
+}
+
+@test "Claude settings capability write rejects a swapped watchtowers path" {
+  mkdir -p "$ROZORO_HOME/watchtowers/claude-session" "$TEST_ROOT/outside/claude-session"
+  chmod 700 "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers/claude-session" "$TEST_ROOT/outside" "$TEST_ROOT/outside/claude-session"
+  mv "$ROZORO_HOME/watchtowers" "$ROZORO_HOME/watchtowers-original"
+  ln -s "$TEST_ROOT/outside" "$ROZORO_HOME/watchtowers"
+  run bash -c '. "$1/bin/rzr-lib.sh"; rzr_claude_watchtower_settings "$RZR_HOME/watchtowers/claude-session/claude-event-settings.json" claude-session adapter native pane' _ "$REPO_ROOT"
+  assert_failure
+  [ -z "$(find "$TEST_ROOT/outside" -type f -print -quit)" ]
+}
