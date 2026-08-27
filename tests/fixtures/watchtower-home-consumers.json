@@ -33,39 +33,44 @@
     }
   },
   "inherited_explicit_only": {
-    "bin/rzr-claude-watchtower-poll.py": [
-      "--home"
-    ],
-    "bin/rzr-pi-watchtower.sh": [
-      "ROZORO_HOME",
-      "EFFECTIVE_HOME"
-    ],
-    "bin/rzr-claude-watchtower.sh": [
-      "--home",
-      "RZR_HOME"
-    ],
-    "bin/rzr-register.sh": [
-      "rzr-lib.sh"
-    ],
-    "hooks/claude-rozoro-event.py": [
-      "ProducerClient"
-    ],
-    "hooks/codex-rozoro-event.py": [
-      "ProducerClient"
-    ],
-    "lib/rozoro_monitor/server.py": [
-      "home",
-      "_open_home"
-    ],
-    "lib/rozoro_monitor/store.py": [
-      "path",
-      "sqlite3.Connection"
-    ]
+    "bin/rzr-claude-watchtower-poll.py": {
+      "kind": "python_argument",
+      "value": "--home"
+    },
+    "bin/rzr-pi-watchtower.sh": {
+      "kind": "shell_export",
+      "value": "ROZORO_HOME"
+    },
+    "bin/rzr-claude-watchtower.sh": {
+      "kind": "shell_argument",
+      "value": "--home"
+    },
+    "bin/rzr-register.sh": {
+      "kind": "shell_source",
+      "value": "rzr-lib.sh"
+    },
+    "hooks/claude-rozoro-event.py": {
+      "kind": "python_call",
+      "value": "ProducerClient"
+    },
+    "hooks/codex-rozoro-event.py": {
+      "kind": "python_call",
+      "value": "ProducerClient"
+    },
+    "lib/rozoro_monitor/server.py": {
+      "kind": "python_call",
+      "value": "_open_home"
+    },
+    "lib/rozoro_monitor/store.py": {
+      "kind": "python_parameter",
+      "value": "path"
+    }
   },
   "excluded": {
-    "bin/rzr-codex-event-adapter.py": [
-      "--store"
-    ]
+    "bin/rzr-codex-event-adapter.py": {
+      "kind": "python_argument",
+      "value": "--store"
+    }
   },
   "tracked_executable_sources": [
     ".agents/skills/watchtower-attention-ledger/scripts/ledger.py",
