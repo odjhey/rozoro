@@ -151,7 +151,13 @@ fi
 # --- the mutation: serialize spawns behind the home lock -------------------
 do_spawn() {
   local ws; ws="$(rzr_workspace)"
-  local create_args=(tab create --cwd "$CWD" --label "$LABEL" --no-focus)
+  # Pin the crew to the home that spawned it. Herdr's server launches the pane
+  # process, so the crew would otherwise inherit the server's ROZORO_HOME (usually
+  # unset -> ~/.rozoro) and publish its events to a different event bus than the
+  # one holding its task folder. Claude and Codex crews already get this through
+  # their hook command line; `agent start` has no --env, so the tab is the only
+  # injection point.
+  local create_args=(tab create --cwd "$CWD" --label "$LABEL" --no-focus --env "ROZORO_HOME=$RZR_HOME")
   [ -n "$ws" ] && create_args+=(--workspace "$ws")
 
   local out
