@@ -21,6 +21,9 @@ constraints still apply to the target work.
 - [Proportional assurance](proportional-assurance.md) — dispatch only the
   evidence deficits a changed-head reconciliation identifies, with worked
   pipeline-fix and integration examples.
+- [Eager delivery mission](eager-delivery.md) — run a one-hop fleet with a
+  single Ship Crew per deliverable, and when to prefer it over the delivery
+  mission.
 
 ## How to use them
 
