@@ -54,7 +54,14 @@ class SafeDirectory:
         require_owner: bool = True,
         private: bool = False,
     ) -> "SafeDirectory":
-        absolute = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+        raw = os.fspath(path)
+        try:
+            expanded = os.path.expanduser(raw)
+        except RuntimeError as exc:
+            raise UnsafePath(f"unresolved user path: {raw}") from exc
+        if raw.startswith("~") and expanded.startswith("~"):
+            raise UnsafePath(f"unresolved user path: {raw}")
+        absolute = Path(os.path.abspath(expanded))
         parts = absolute.parts
         if not absolute.is_absolute() or not parts:
             raise UnsafePath(f"path must resolve lexically to an absolute path: {path}")

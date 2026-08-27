@@ -295,7 +295,7 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
+    repo_path = normalized_path(args.repo_root or SCRIPT_REPO)
     try:
         with SafeDirectory.open_path(SCRIPT_REPO, create=False, require_owner=True) as shipped_repo:
             shipped_identity = (shipped_repo.stat().st_dev, shipped_repo.stat().st_ino)

@@ -16,6 +16,15 @@ POLL = importlib.util.module_from_spec(SPEC); assert SPEC.loader; SPEC.loader.ex
 
 
 class PollerTests(unittest.TestCase):
+    def test_selected_home_is_expanded_and_lexically_normalized_once(self):
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"HOME": td}):
+            with mock.patch.object(POLL.os.path, "expanduser", wraps=os.path.expanduser) as expand:
+                self.assertEqual(POLL.normalized_path("~/parent/../home"), Path(td) / "home")
+                expand.assert_called_once_with("~/parent/../home")
+        unresolved = "~rozoro-user-that-does-not-exist-129/home"
+        with self.assertRaisesRegex(ValueError, "unresolved user path"):
+            POLL.normalized_path(unresolved)
+
     def test_late_generation_waits_for_quiescence_then_confirms_exactly(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td); sock = home / "monitor.sock"; ready = threading.Event()

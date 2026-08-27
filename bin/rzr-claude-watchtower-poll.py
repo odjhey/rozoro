@@ -16,6 +16,17 @@ from typing import Any
 FIXED = "Rozoro notification pending; run ./bin/rozoro reconcile."
 
 
+def normalized_path(value: str | os.PathLike[str]) -> Path:
+    raw = os.fspath(value)
+    try:
+        expanded = os.path.expanduser(raw)
+    except RuntimeError as exc:
+        raise ValueError(f"unresolved user path: {raw}") from exc
+    if raw.startswith("~") and expanded.startswith("~"):
+        raise ValueError(f"unresolved user path: {raw}")
+    return Path(os.path.abspath(expanded))
+
+
 def frame(kind: str, **fields: Any) -> bytes:
     return (json.dumps({"v": 1, "type": kind, "request_id": uuid.uuid4().hex, **fields},
                        separators=(",", ":")) + "\n").encode()
@@ -86,7 +97,7 @@ def run(home: Path, driver: str, session: str, pane: str, *, parent: int = 0,
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--home", required=True, type=Path)
+    parser.add_argument("--home", required=True)
     parser.add_argument("--driver", required=True)
     parser.add_argument("--session", required=True)
     parser.add_argument("--pane", required=True)
@@ -96,7 +107,11 @@ def main() -> int:
     args = parser.parse_args()
     if args.poll <= 0: parser.error("--poll must be positive")
     try:
-        return run(args.home, args.driver, args.session, args.pane, parent=args.parent,
+        home = normalized_path(args.home)
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        return run(home, args.driver, args.session, args.pane, parent=args.parent,
                    poll=args.poll, ready_file=args.ready_file)
     finally:
         if args.ready_file is not None:

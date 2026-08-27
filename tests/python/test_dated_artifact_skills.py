@@ -218,6 +218,36 @@ class DatedArtifactSkillTests(unittest.TestCase):
                                         capture_output=True, text=True, check=False, timeout=3)
                 self.assertNotEqual(result.returncode, 0, label)
 
+    def test_source_regular_to_fifo_swap_is_bounded_on_actual_opened_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "delivery.md"
+            source.write_text("mission\n")
+            probe = root / "probe.py"
+            probe.write_text("""
+import os, sys
+from pathlib import Path
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath
+root=Path(sys.argv[1]); original=os.open; swapped=False
+def racing_open(path, flags, *args, **kwargs):
+    global swapped
+    if path == 'delivery.md' and kwargs.get('dir_fd') is not None and not swapped:
+        swapped=True; (root/path).unlink(); os.mkfifo(root/path)
+    return original(path, flags, *args, **kwargs)
+os.open=racing_open
+try:
+    with SafeDirectory.open_path(root, create=False) as directory:
+        directory.read_source_regular('delivery.md')
+except UnsafePath:
+    raise SystemExit(0)
+raise SystemExit(9)
+""")
+            env = dict(os.environ, PYTHONPATH=str(REPO))
+            result = subprocess.run(["python3", str(probe), str(root)], env=env,
+                                    capture_output=True, text=True, timeout=2, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(stat.S_ISFIFO(source.lstat().st_mode))
+
     def test_policy_pair_grammar_matrix(self) -> None:
         import runpy
         checker = runpy.run_path(str(POLICY_SCRIPT))["pi_launcher_contract_has_policy"]
@@ -662,6 +692,11 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertNotEqual(policy_alias_result.returncode, 0)
             self.assertIn("symlink", policy_alias_result.stderr)
             self.assertFalse((real / "policy-artifacts").exists())
+
+    def test_safe_directory_rejects_unresolved_leading_user_expression(self) -> None:
+        unresolved = "~rozoro-user-that-does-not-exist-129/artifacts"
+        with self.assertRaisesRegex(Exception, "unresolved user path"):
+            SafeDirectory.open_path(unresolved, create=True)
 
     def test_directory_descriptors_resist_pathname_swap_after_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

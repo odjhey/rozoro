@@ -26,7 +26,7 @@ Default destination:
 $ROZORO_HOME/artifacts/watchtower-policy-snapshots/YYYY-MM-DD/YYYYMMDDTHHMMSS.ffffffZ-<nonce>/
 ```
 
-If `ROZORO_HOME` is unset, it defaults to `~/.rozoro`. Every invocation reserves a fresh UTC timestamp-plus-nonce directory; never replace an earlier run.
+The one shared home namespace is the first nonempty of public `ROZORO_HOME`, legacy `RZR_HOME`, and `$HOME/.rozoro`. Every selected or explicit path receives leading `~`/supported `~user` expansion and one lexical absolute normalization. Every invocation reserves a fresh UTC timestamp-plus-nonce directory; never replace an earlier run.
 
 ## Return to the operator
 
