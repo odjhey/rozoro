@@ -189,6 +189,47 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             store.reconcile_herdr_liveness('task-d',pane_exists=True,adapter_connected=False)
             self.assertEqual(store.health_snapshot()['generation'],after)
 
+    def test_missing_report_liveness_changes_do_not_repeat_same_action_edge(self):
+        db = self.state / 'missing-report.db'; task = self.state / 'tasks' / 'task-m'; task.mkdir(parents=True)
+        base = {"v":1,"session_id":"session-m","harness":"claude","role":"crew","task_id":"task-m"}
+        with EventStore(db) as store:
+            store.accept_event({**base,"type":"session.register","event_id":"register-m","producer_seq":1})
+            store.accept_event({**base,"type":"turn.start","event_id":"start-m","producer_seq":2})
+            generation = store.health_snapshot()['generation']
+            self.assertEqual(store.task_projection('task-m')['actionable_reason'],'missing-report')
+
+            store.reconcile_herdr_liveness('task-m', pane_exists=False)
+            store.reconcile_herdr_liveness('task-m', pane_exists=True)
+            store.reconcile_herdr_liveness('task-m', pane_exists=False)
+            store.reconcile_herdr_liveness('task-m', pane_exists=True)
+
+            projection = store.task_projection('task-m')
+            self.assertEqual((projection['availability'], projection['actionable_reason']),('busy','missing-report'))
+            self.assertEqual(store.health_snapshot()['generation'],generation)
+
+    def test_changed_liveness_reason_emits_on_gone_and_reappearance(self):
+        db = self.state / 'liveness-edge.db'; task = self.state / 'tasks' / 'tasks-edge'; task.mkdir(parents=True)
+        (task / 'handoff.md').write_text(
+            '## turn 1 — action\nverdict: needs-action\nreason: choose\ndid: work\n'
+            'pending: choose\ninputs-needed: choose\nartifacts: none\n'
+        )
+        base = {"v":1,"session_id":"session-edge","harness":"claude","role":"crew","task_id":"tasks-edge"}
+        with EventStore(db) as store:
+            store.accept_event({**base,"type":"session.register","event_id":"register-edge","producer_seq":1})
+            store.accept_event({**base,"type":"turn.start","event_id":"start-edge","producer_seq":2,"turn_id":"turn-edge"})
+            generation = store.health_snapshot()['generation']
+            self.assertEqual(store.task_projection('tasks-edge')['actionable_reason'],'needs-action')
+
+            store.reconcile_herdr_liveness('tasks-edge', pane_exists=False)
+            self.assertEqual(store.health_snapshot()['generation'], generation + 1)
+            self.assertEqual(store.task_projection('tasks-edge')['actionable_reason'], 'gone')
+            store.reconcile_herdr_liveness('tasks-edge', pane_exists=False)
+            self.assertEqual(store.health_snapshot()['generation'], generation + 1)
+
+            store.reconcile_herdr_liveness('tasks-edge', pane_exists=True)
+            self.assertEqual(store.health_snapshot()['generation'], generation + 2)
+            self.assertEqual(store.task_projection('tasks-edge')['actionable_reason'], 'needs-action')
+
     def test_store_gone_reappear_is_unknown_and_never_clears_native_active(self):
         db = self.state / 'monitor.db'; task = self.state / 'tasks' / 'task-1'; task.mkdir(parents=True)
         base = {"v":1,"session_id":"session-1","harness":"claude","role":"crew","task_id":"task-1"}
@@ -206,6 +247,6 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             detail = __import__('json').loads(projection['projection_json'])
             self.assertEqual(projection['availability'],'waiting-background')
             self.assertEqual(detail['background'],'active')
-            self.assertEqual(store.health_snapshot()['generation'],generation + 2)
+            self.assertEqual(store.health_snapshot()['generation'],generation)
 
 if __name__ == '__main__': unittest.main()

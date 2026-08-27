@@ -118,6 +118,65 @@ artifacts: none
             self.assertEqual((after["verdict"], after["actionable_reason"]), ("done", "none"))
             self.assertEqual(after["projection_json"]["report"]["acked_through"], 1)
 
+    def test_changed_report_detail_with_same_reason_still_wakes(self):
+        self.write_handoff("""## turn 1 — action
+verdict: needs-action
+reason: choose
+did: ignored
+pending: first choice
+inputs-needed: first choice
+artifacts: none
+""")
+        with EventStore(self.db) as store:
+            self.register(store)
+            before = self.projection(store)
+            generation = store.health_snapshot()['generation']
+            runtime = tuple(before['projection_json'][key]
+                            for key in ('foreground', 'background', 'background_count', 'availability'))
+            before_report = before['projection_json']['report']
+            self.assertEqual(before['actionable_reason'], 'needs-action')
+            self.assertEqual(before_report['latest_verdict'], 'needs-action')
+            self.assertEqual(before_report['open_items'], [{
+                'index': 1, 'turn': 1, 'heading': 'turn 1 — action',
+                'verdict': 'needs-action', 'inputs_needed': 'first choice',
+            }])
+
+            self.write_handoff("""## turn 1 — action
+verdict: needs-action
+reason: choose
+did: ignored
+pending: second choice
+inputs-needed: second choice
+artifacts: none
+
+## turn 2 — done
+verdict: done
+reason: continued
+did: work
+pending: none
+inputs-needed: none
+artifacts: none
+""")
+            # A second registration is accepted but does not change lifecycle
+            # availability; only the filesystem report projection changed.
+            accepted = store.accept_event(event('register-again', 2, 'session.register'))
+            self.assertFalse(accepted.duplicate)
+            self.assertEqual(accepted.generation, generation + 1)
+
+            after = self.projection(store)
+            after_report = after['projection_json']['report']
+            self.assertEqual(tuple(after['projection_json'][key]
+                                   for key in ('foreground', 'background', 'background_count', 'availability')),
+                             runtime)
+            self.assertEqual(after['actionable_reason'], 'needs-action')
+            self.assertEqual(after_report['latest_verdict'], 'done')
+            self.assertEqual(after_report['heading'], 'turn 2 — done')
+            self.assertEqual(after_report['unresolved'], 1)
+            self.assertEqual(after_report['open_items'], [{
+                'index': 1, 'turn': 1, 'heading': 'turn 1 — action',
+                'verdict': 'needs-action', 'inputs_needed': 'second choice',
+            }])
+
     def test_structured_reasons_cover_invalid_failed_blocked_and_gone(self):
         cases = [
             ("## turn 2 — bad\nverdict: done\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "turn.stop", {"background_active": False}, "malformed-report"),

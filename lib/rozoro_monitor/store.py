@@ -866,11 +866,10 @@ class EventStore:
                         "UPDATE task_projections SET availability=?,actionable_reason=?,projection_json=? WHERE task_id=?",
                         (state.availability, reason, json.dumps(detail, sort_keys=True, separators=(",", ":")), task_id),
                     )
-                    # Host/silence transitions are durable actionable edges,
-                    # deduped by the prior projection reason and availability.
-                    old_detail = {} if before is None else json.loads(before["projection_json"])
-                    projection_changed = (before is None or before["actionable_reason"] != reason
-                                          or old_detail.get("availability") != state.availability)
+                    # Notify only when the protocol-visible actionable edge changes.
+                    # Availability remains current projection detail, but must not
+                    # repeatedly re-emit an unchanged report-axis reason.
+                    projection_changed = before is None or before["actionable_reason"] != reason
                     disconnected_edge = adapter_connected is False and was_adapter_connected
                     if (reason != "none" and projection_changed) or disconnected_edge:
                         edge_reason = "unknown" if disconnected_edge and reason == "none" else reason
