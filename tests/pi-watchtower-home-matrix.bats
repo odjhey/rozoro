@@ -12,6 +12,7 @@ set -euo pipefail
 printf 'home=%s\ncwd=%s\n' "$ROZORO_HOME" "$PWD" > "$PI_OBSERVED"
 printf 'policy=%s:%s:%s:%s:%s\n' "$ROZORO_WT_POLICY_SHA256" "$ROZORO_WT_POLICY_CORE_SHA256" "$ROZORO_WT_POLICY_MISSION_NAME" "$ROZORO_WT_POLICY_MISSION_SOURCE" "$ROZORO_WT_POLICY_MISSION_SHA256" >> "$PI_OBSERVED"
 printf 'arg=%s\n' "$@" >> "$PI_OBSERVED"
+[ "${PI_FORCE_FAIL:-0}" != 1 ] || { printf 'forced-failure\n' >> "$PI_OBSERVED"; exit 73; }
 "$REPO_ROOT/bin/rzr-register.sh" --harness pi --quiet
 SH
   chmod +x "$TEST_ROOT/bin/pi"
@@ -29,7 +30,7 @@ PY
 }
 
 snapshot_decoys() {
-  label=$1 selected=$2; shift 2
+  local label=$1 selected=$2 path; shift 2
   : > "$BATS_TEST_TMPDIR/decoys-$label.before"
   for path in "$@"; do
     [ -n "$path" ] || continue
@@ -41,7 +42,7 @@ snapshot_decoys() {
 }
 
 assert_decoys_unchanged() {
-  label=$1 selected=$2; shift 2
+  local label=$1 selected=$2 path; shift 2
   : > "$BATS_TEST_TMPDIR/decoys-$label.after"
   for path in "$@"; do
     [ -n "$path" ] || continue
@@ -54,7 +55,7 @@ assert_decoys_unchanged() {
 }
 
 assert_projection_only_in() {
-  selected=$1
+  local selected=$1 target history
   target="$selected/watchtowers/herdr-home-matrix-pane/target.json"
   history="${target%/target.json}/registrations.jsonl"
   [ -f "$target" ] && [ -f "$history" ]
@@ -66,7 +67,7 @@ assert_projection_only_in() {
 }
 
 assert_pi_observation() {
-  label=$1 expected=$2 cwd=$3
+  local label=$1 expected=$2 cwd=$3
   grep -Fx "home=$expected" "$PI_OBSERVED"
   grep -Fx "cwd=$cwd" "$PI_OBSERVED"
   grep -E '^policy=[0-9a-f]{64}:[0-9a-f]{64}:delivery:shipped:[0-9a-f]{64}$' "$PI_OBSERVED"
@@ -76,7 +77,7 @@ assert_pi_observation() {
 }
 
 run_home_row() {
-  label=$1 public=$2 legacy=$3 expected=$4
+  local label=$1 public=$2 legacy=$3 expected=$4 xdg default
   xdg="$TEST_ROOT/xdg-$label" default="$HOME/.rozoro"
   mkdir -p "$expected" "$TEST_ROOT/work-$label"; chmod 700 "$expected"
   snapshot_decoys "$label" "$expected" "$public" "$legacy" "$xdg" "$default"
@@ -116,28 +117,36 @@ run_home_row() {
   run_home_row X '' '' "$HOME/.rozoro"
 }
 
-@test "supported named-user tilde selects an account-home child and cleans it exactly" {
+@test "supported named-user tilde uses a provisioned passwd home and cleans success and failure" {
   make_pi_registrar
-  account_record="$(python3 - <<'PY'
+  account_record="$(ROZORO_TEST_NAMED_USER="${ROZORO_TEST_NAMED_USER:-}" python3 - <<'PY'
 import os, pwd
-try:
-    row=pwd.getpwuid(os.getuid()); print(row.pw_name); print(row.pw_dir)
-except KeyError: pass
+requested=os.environ.get("ROZORO_TEST_NAMED_USER")
+rows=[]
+if requested:
+    try: rows=[pwd.getpwnam(requested)]
+    except KeyError: raise SystemExit(f"named-user gate account {requested!r} is absent from passwd")
+else:
+    rows=list(pwd.getpwall())
+for row in rows:
+    if row.pw_name and row.pw_name != str(row.pw_uid) and os.path.isdir(row.pw_dir) and os.access(row.pw_dir, os.W_OK|os.X_OK):
+        print(row.pw_name); print(row.pw_dir); break
+else:
+    raise SystemExit("named-user gate provisioning absent: set ROZORO_TEST_NAMED_USER to a passwd-backed account with a writable home")
 PY
 )"
-  account="$(printf '%s\n' "$account_record" | sed -n '1p')"
-  account_home="$(printf '%s\n' "$account_record" | sed -n '2p')"
-  if [ -z "$account_home" ] || [ ! -d "$account_home" ] || [ ! -w "$account_home" ]; then
-    [ -z "$account_home" ] || [ ! -w "$account_home" ]
-    skip "no writable account-backed home for uid $(id -u) in this runtime"
-  fi
-  unique=".rozoro-h1-${BATS_TEST_NUMBER}-$$"; selected="$account_home/$unique"
-  [ ! -e "$selected" ]
-  run bash -c 'set -euo pipefail; selected=$1; trap '\''rm -rf -- "$selected"'\'' EXIT; mkdir -m 700 "$selected"; env ROZORO_HOME="~'$account'/$2" RZR_HOME="$3" XDG_STATE_HOME="$4" HERDR_PANE_ID="$5" PI_OBSERVED="$6" FAKE_HERDR_ROOT="$7" FAKE_HERDR_LOG="$8" PATH="$9" REPO_ROOT="${10}" HOME="${11}" "${10}/bin/rzr-pi-watchtower.sh" --resume session-Tuser --cwd "${12}" -- --model model-Tuser passthrough-Tuser; test -f "$selected/watchtowers/herdr-home-matrix-pane/target.json"; test -f "$selected/watchtowers/herdr-home-matrix-pane/registrations.jsonl"' _ \
-    "$selected" "$unique" "$TEST_ROOT/legacy-Tuser" "$TEST_ROOT/xdg-Tuser" "$HERDR_PANE_ID" "$PI_OBSERVED" "$FAKE_HERDR_ROOT" "$FAKE_HERDR_LOG" "$PATH" "$REPO_ROOT" "$HOME" "$TEST_ROOT"
+  account="$(printf '%s\n' "$account_record" | sed -n '1p')"; account_home="$(printf '%s\n' "$account_record" | sed -n '2p')"
+  unique=".rozoro-h1-${BATS_TEST_NUMBER}-$$"; selected="$account_home/$unique"; failed="$account_home/$unique-fail"
+  legacy="$TEST_ROOT/legacy-Tuser"; xdg="$TEST_ROOT/xdg-Tuser"; default="$HOME/.rozoro"; public_decoy="$TEST_ROOT/public-decoy-Tuser"
+  sentinel="$account_home/.rozoro-h1-sentinel-${BATS_TEST_NUMBER}-$$"; printf 'preserve\n' > "$sentinel"
+  snapshot_decoys Tuser-pre /no-selected-home "$selected" "$failed" "$legacy" "$xdg" "$default" "$public_decoy" "$account_home"
+  run bash -c 'set -u; selected=$1; failed=$2; sentinel=$3; cleanup() { rc=$?; rm -rf -- "$selected" "$failed"; test ! -e "$selected"; test ! -e "$failed"; test "$(cat "$sentinel")" = preserve; exit "$rc"; }; trap cleanup EXIT HUP INT TERM; test ! -e "$selected"; test ! -e "$failed"; mkdir -m 700 "$selected" "$failed"; env ROZORO_HOME="~'$account'/$4" RZR_HOME="$5" XDG_STATE_HOME="$6" HERDR_PANE_ID="$7" PI_OBSERVED="$8" FAKE_HERDR_ROOT="$9" FAKE_HERDR_LOG="${10}" PATH="${11}" REPO_ROOT="${12}" HOME="${13}" "${12}/bin/rzr-pi-watchtower.sh" --resume session-Tuser --cwd "${14}" -- --model model-Tuser passthrough-Tuser || exit; test -f "$selected/watchtowers/herdr-home-matrix-pane/target.json"; test -f "$selected/watchtowers/herdr-home-matrix-pane/registrations.jsonl"; env PI_FORCE_FAIL=1 ROZORO_HOME="~'$account'/$4-fail" RZR_HOME="$5" XDG_STATE_HOME="$6" HERDR_PANE_ID="$7" PI_OBSERVED="${8}-failed" FAKE_HERDR_ROOT="$9" FAKE_HERDR_LOG="${10}" PATH="${11}" REPO_ROOT="${12}" HOME="${13}" "${12}/bin/rzr-pi-watchtower.sh" --cwd "${14}" && exit 90; test "$?" -eq 73; test -f "${8}-failed"; grep -Fx forced-failure "${8}-failed"; test ! -e "$failed/watchtowers"; test -z "$(find "$failed" -mindepth 1 -print -quit)"' _ \
+    "$selected" "$failed" "$sentinel" "$unique" "$legacy" "$xdg" "$HERDR_PANE_ID" "$PI_OBSERVED" "$FAKE_HERDR_ROOT" "$FAKE_HERDR_LOG" "$PATH" "$REPO_ROOT" "$HOME" "$TEST_ROOT"
   assert_success
-  [ ! -e "$selected" ]
+  [ ! -e "$selected" ] && [ ! -e "$failed" ]; [ "$(cat "$sentinel")" = preserve ]
   assert_pi_observation Tuser "$selected" "$TEST_ROOT"
+  assert_decoys_unchanged Tuser-pre /no-selected-home "$selected" "$failed" "$legacy" "$xdg" "$default" "$public_decoy" "$account_home"
+  rm -f "$sentinel"
 }
 
 @test "unresolved tilde user rejects before creating any home or state path" {
