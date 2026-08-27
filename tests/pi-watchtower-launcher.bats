@@ -217,7 +217,10 @@ SH
   chmod 755 "$dir"; rm -f "$PI_LOG"
   run rzr-pi-watchtower.sh --preset ok; assert_failure
   [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" -eq 1 ]; ! printf '%s' "$output" | grep -q Traceback
-  chmod 700 "$dir"; rm "$dir/ok.json"; mkfifo "$dir/ok.json"
+  chmod 700 "$dir"; chmod 644 "$dir/ok.json"
+  run rzr-pi-watchtower.sh --preset ok; assert_failure
+  [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" -eq 1 ]; ! printf '%s' "$output" | grep -q Traceback
+  rm "$dir/ok.json"; mkfifo "$dir/ok.json"
   run rzr-pi-watchtower.sh --preset ok; assert_failure
   [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" -eq 1 ]; ! printf '%s' "$output" | grep -q Traceback
   rm "$dir/ok.json"; printf '{bad\n' > "$dir/ok.json"

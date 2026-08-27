@@ -27,8 +27,6 @@
 # Prints the driver id (unless --quiet). Re-registration replaces the current
 # target and appends a fresh history record for the same identity.
 set -euo pipefail
-# shellcheck disable=SC1091 # The library path is resolved beside this script.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 HARNESS="" BACKEND="auto" DRIVER_ID="" AGENT_SESSION="" QUIET=0
 while [ $# -gt 0 ]; do
@@ -42,6 +40,30 @@ while [ $# -gt 0 ]; do
     *) rzr_die "unknown flag: $1" ;;
   esac
 done
+
+# Policy attribution is untrusted ingress. Validate it before sourcing the
+# shared library, which may initialize home/state for a valid registration.
+# Invalid tuples must therefore be a pure, no-write failure.
+register_die() { echo "rzr: $*" >&2; exit 1; }
+POLICY_FIELDS="${ROZORO_WT_POLICY_SHA256:-}|${ROZORO_WT_POLICY_CORE_SHA256:-}|${ROZORO_WT_POLICY_MISSION_NAME:-}|${ROZORO_WT_POLICY_MISSION_SOURCE:-}|${ROZORO_WT_POLICY_MISSION_SHA256:-}"
+if [ "$HARNESS" != pi ] && [ "$POLICY_FIELDS" != '||||' ]; then
+  register_die "Pi policy attribution is valid only for harness pi"
+fi
+case "$POLICY_FIELDS" in
+  '||||') ;;
+  *'|'*'|'*'|'*'|'*)
+    for digest in "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}"; do
+      printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || register_die "invalid watchtower policy digest"
+    done
+    case "${ROZORO_WT_POLICY_MISSION_SOURCE:-}" in shipped|operator) ;; *) register_die "invalid watchtower mission source" ;; esac
+    mission="${ROZORO_WT_POLICY_MISSION_NAME:-}"
+    case "$mission" in ''|.|..|*[!A-Za-z0-9._-]*) register_die "watchtower mission name '$mission' is unsafe; use letters, digits, '.', '_' or '-'" ;; esac
+    [ "${#mission}" -le 120 ] || register_die "watchtower mission name is too long (maximum 120 characters)" ;;
+  *) register_die "watchtower policy attribution must be an all-or-none five-field tuple" ;;
+esac
+
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 case "$HARNESS" in
   claude|codex|copilot|pi) ;;
@@ -99,18 +121,6 @@ rzr_validate_wt_metadata "$IDENTITY" "wake target identity"
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
 rzr_validate_task_component "$DRIVER_ID" "driver id"
 [ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
-POLICY_FIELDS="${ROZORO_WT_POLICY_SHA256:-}|${ROZORO_WT_POLICY_CORE_SHA256:-}|${ROZORO_WT_POLICY_MISSION_NAME:-}|${ROZORO_WT_POLICY_MISSION_SOURCE:-}|${ROZORO_WT_POLICY_MISSION_SHA256:-}"
-if [ "$HARNESS" != pi ] && [ "$POLICY_FIELDS" != '||||' ]; then
-  rzr_die "Pi policy attribution is valid only for harness pi"
-fi
-case "$POLICY_FIELDS" in '||||') ;; *'|'*'|'*'|'*'|'*)
-  for digest in "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}"; do
-    printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || rzr_die "invalid watchtower policy digest"
-  done
-  case "${ROZORO_WT_POLICY_MISSION_SOURCE:-}" in shipped|operator) ;; *) rzr_die "invalid watchtower mission source" ;; esac
-  rzr_validate_task_component "${ROZORO_WT_POLICY_MISSION_NAME:-}" "watchtower mission name" ;;
-  *) rzr_die "watchtower policy attribution must be an all-or-none five-field tuple" ;;
-esac
 if [ -n "${ROZORO_WT_PRESET:-}" ]; then
   rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
   rzr_validate_wt_metadata "${ROZORO_WT_PRESET_VERSION:-}" "watchtower preset version"

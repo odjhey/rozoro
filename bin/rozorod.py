@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from lib.rozoro_monitor.client import UnsafePathError
 from lib.rozoro_monitor.server import AlreadyRunningError, MonitorServer
 
 
@@ -51,7 +52,7 @@ def main() -> int:
     os.umask(0o077)
     try:
         return asyncio.run(run(args.home))
-    except AlreadyRunningError as exc:
+    except (AlreadyRunningError, UnsafePathError) as exc:
         print(f"rozorod: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

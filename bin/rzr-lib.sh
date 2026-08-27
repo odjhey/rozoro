@@ -329,12 +329,17 @@ try:
     filename=os.environ["RZR_WTP_FILE"]
     try: before=os.stat(filename,dir_fd=root,follow_symlinks=False)
     except FileNotFoundError: die("not found")
-    if not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or before.st_nlink!=1: die("storage is unsafe")
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or
+            before.st_nlink!=1 or stat.S_IMODE(before.st_mode)!=0o600):
+        die("storage is unsafe")
     try: fd=os.open(filename,os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=root)
     except OSError: die("storage is unsafe")
     try:
         info=os.fstat(fd)
-        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): die("storage is unsafe")
+        if ((before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino) or
+                not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or
+                info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=0o600):
+            die("storage is unsafe")
         chunks=[]
         while True:
             chunk=os.read(fd,65536)

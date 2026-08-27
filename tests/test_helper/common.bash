@@ -1,6 +1,9 @@
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
 setup() {
+  # Operator-state fixtures are private by default, matching the production
+  # contract. Tests for unsafe public modes chmod their fixture explicitly.
+  umask 077
   unset CODEX_THREAD_ID HERDR_PANE_ID FAKE_CODEX_HAS_QUEUE FAKE_CODEX_QUEUE_FAIL FAKE_HERDR_FAIL_MATCH
   export TEST_ROOT="$BATS_TEST_TMPDIR/fixture"
   export HOME="$TEST_ROOT/home"
