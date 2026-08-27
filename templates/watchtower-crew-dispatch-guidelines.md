@@ -18,9 +18,11 @@ authority and target preferences. Missing or unavailable assignments, ambiguous
 availability, conflicting constraints, and non-unique analogs block unless an
 explicitly authorized fallback exists.
 
-`$ROZORO_HOME/config/machine.md` is availability/capacity evidence, not role
-authority. A crew preset only realizes an already-authorized selection; launcher
-defaults and presets cannot supply missing policy. See ADR-0012.
+The precedence can be summarized as **operator > repository > durable policy >
+machine availability filter > compatible preset realization**. The machine profile
+and preset layers do not authorize a target: `$ROZORO_HOME/config/machine.md` is
+availability/capacity evidence, and a crew preset only realizes an already-authorized
+selection. Launcher defaults and presets cannot supply missing policy. See ADR-0012.
 
 ## Briefing style
 
@@ -338,13 +340,90 @@ landing/post-merge case.
 sufficient. `/afk off` stops the merger immediately before the final merge
 mutation and asks the operator to confirm.
 
+## Failure classification and repair specialists
+
+Watchtower classifies each actionable edge; crew recommendations are not
+self-authorizing. Exactly one of the following closed statuses applies per edge;
+separate edges may be routed independently:
+
+| Status | Exclusive definition for one actionable edge | Owner / route | Accounting |
+|---|---|---|---|
+| `DONE` | No required implementation, assurance, decision, repair, replan, external dependency, delivery, or required acceptance remains. | Watchtower records closure; operator acceptance remains where not delegated. | None |
+| `NEEDS_IMPLEMENTATION` | Product/repository behavior or code must change within the current task and direction. | Existing Coder; otherwise reclassify `NEEDS_REPLAN`. | Next candidate-writing Coder increments `attempt_count`. |
+| `NEEDS_TESTS` | Behavior exploration, test-design judgment, or durable test contribution is missing; no product defect is established. | Tester/Test Designer; a contribution creates a candidate and re-enters the gate. | No Coder attempt unless reclassified. |
+| `NEEDS_REVIEW` | Independent design/contract/correctness/scope judgment is missing. | Reviewer after a green exact-head gate, except labeled red-candidate advisory. | None |
+| `NEEDS_DECISION` | A policy, contract, scope, risk, priority, waiver, or authority choice is required. | Governing decision owner, else operator. | None merely for deciding. |
+| `NEEDS_REPLAN` | Evidence invalidates task, direction, dependency graph, stack/fan-in, or integration order. | Escalation Replanner. | Its turn increments `replan_count`. |
+| `NEEDS_INFRA_REPAIR` | A non-gate execution substrate (toolchain/workspace/harness runtime/corpus or fixture provisioning) is defective or absent. | Bounded Infrastructure Repair Specialist. | Mutating repair increments `infra_repair_count`. |
+| `NEEDS_GATE_REPAIR` | A required check, CI/no-mistakes configuration, adapter, or check fixture is defective, stale, or not meaningful; not a functioning check rejecting a defect. | Bounded Gate Repair Specialist; Runner retains rerun/green authority. | Mutating repair increments `gate_repair_count`. |
+| `BLOCKED_EXTERNAL` | No authorized internal repair/decision can clear the edge; an external actor, service, credential/quota, event, or execution target is required. | Watchtower records dependency, owner, and objective resume trigger; no blind retry. | None |
+
+For repair incidents: Every repair incident records `repair_lineage_id`, linked
+`implementation_lineage_id` when applicable, `infra_repair_count`,
+`gate_repair_count`, `repair_limit: 3`, and `caused_by`. Counts derive from durable
+history and never reset across actors, sessions, branches, worktrees, resumes, or
+reclassification. Only an authorized mutating repair increments exactly one repair
+counter; diagnosis/reruns/reports do not. The combined per-incident cap is
+`infra_repair_count + gate_repair_count <= 3`. Two unsuccessful same-root attempts
+require an ownership/authority checkpoint; attempt 3 needs a changed hypothesis
+and named owner. No fourth attempt is allowed. Repair counters never increment
+`attempt_count` or `replan_count`; product-code work is reclassified
+`NEEDS_IMPLEMENTATION`, while only a true plan change is `NEEDS_REPLAN`.
+
+### Infrastructure and Gate Repair Specialists
+
+The delivery mission explicitly opts in to these bounded ad-hoc roles. Infrastructure
+Repair owns only the declared non-gate substrate repair. Gate Repair owns only the
+declared check/configuration/adapter/fixture repair; the No-Mistakes Runner retains
+gate operation, rerun, and green determination. A reporting channel never determines
+classification.
+
+## Ad-hoc specialists
+
+A mission may dispatch one only when its mission text explicitly opts in. An opted-in ad-hoc role instance has one bounded work item and lasts until it
+reports `DONE`, hands back a classified unresolved edge, or is stopped. `send` may
+only finish that declared job; expanded scope, authority, or evidence shape needs
+a new declaration and instance. Before dispatch, record in the task/work item and
+attention ledger: `role_instance_id`, role name, mission, task/work-item ID,
+creation time, unowned-gap rationale, must/must-not boundary, stop condition,
+expected evidence, analogous standard role (or none), routing-policy source and
+selected/fallback target, creating Watchtower registration/policy attribution,
+and later termination/outcome.
+
+It may execute only that job and create a bounded repair artifact only when
+authorized. It may not absorb or waive operator priority/final acceptance;
+Watchtower classification/routing; repository contract/policy/scope decisions;
+Planner/Replanner strategy; Coder product implementation; Reviewer acceptance;
+Tester acceptance; Runner gate operation/green determination; or Merger
+integration/landing/post-merge authority. It may not merge, waive evidence, accept
+its own work, or broaden its brief.
+
+Count materially equivalent functions per mission (same purpose, authority
+boundary, and evidence shape; renaming does not reset). The third creation
+requires graduation review and may finish. A fourth dispatch is prohibited until
+the mission names a permanent role/contract or its decision authority records why
+it remains ad hoc and sets a new bounded review point.
+
+Ad-hoc routing uses the same fail-closed ADR-0012 precedence: **operator >
+repository > durable policy > machine availability filter > compatible preset
+realization**. Resolve an exact durable role entry, documented alias, or one unique
+nearest analog whose authority contains the bounded specialist; global denials and
+repository constraints remain binding. The machine profile only filters authorized
+candidates, and presets only realize them.
+
+Immediately before each fresh dispatch, verify launcher/harness, account/profile,
+exact model ID, effort/tier, required credentials, and capacity. Use only an
+operator/policy-authorized fallback when the selected target is unavailable;
+otherwise record attempted targets/reasons and classify `BLOCKED_EXTERNAL`, or
+`NEEDS_DECISION` only when an authorized policy choice can resolve the edge. A
+same-live-crew follow-up reselects only on lost availability or changed task kind.
+
 ## Quick Crew
 
-`quick-crew-routing` owns eligibility for the bounded fast path. Global denials
-apply to Quick Crew. Its target must be authorized by durable operator policy and
-freshly verified as available. When no eligible fast assignment exists, route to
-the appropriate standard role only if that role resolves independently;
-otherwise block. Never invent a fast target or inherit a standard role's target.
+`quick-crew-routing` owns eligibility for the bounded fast path. The Quick Crew
+model/effort target comes from durable operator policy and machine availability,
+like every other role; when no eligible fast target is available, route to the
+appropriate standard role instead of inventing another quick tier.
 
 Use Quick Crew for narrow, mechanical, low-risk work where latency matters.
 Eligibility depends on impact certainty and risk, never on apparent file count,
@@ -387,6 +466,11 @@ repair loop:
 attempt_count: 17
 attempt_limit: 20
 replan_count: 1
+repair_lineage_id: repair-example-1
+implementation_lineage_id: implementation-example-1
+infra_repair_count: 0
+gate_repair_count: 1
+repair_limit: 3
 caused_by: tester finding on retry/idempotency behavior
 ```
 

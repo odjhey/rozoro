@@ -44,6 +44,24 @@ Watchtower turns do not themselves consume Coder attempts. Integration/landing
 work consumes a Coder attempt only when a finding is routed back into a new Coder
 implementation turn.
 
+## Failure classification guards the budget
+
+Classify a blocker before charging any counter. **Only NEEDS_REPLAN
+increments `replan_count`.** Do not consume replan budget — and do not count
+a Coder implementation attempt — for:
+
+- package/workspace configuration repair;
+- CI, gate-check, or no-mistakes pipeline/configuration defects;
+- test-harness defects and missing fixture/copied-corpus problems;
+- other narrowly bounded infrastructure fixes.
+
+Route those as **NEEDS_INFRA_REPAIR** or **NEEDS_GATE_REPAIR**: a bounded
+repair brief whose attempts are tracked separately from the implementation
+lineage. A repair turn joins the lineage budget only when its findings route
+back into a candidate-writing Coder implementation turn on the product code.
+Three unrelated infrastructure problems must never exhaust a lineage's
+replan budget.
+
 ## Replanning extends the lineage
 
 Replanning is the bounded mechanism for extending a non-converging implementation
@@ -138,3 +156,31 @@ the lineage budget.
 - Integration or no-mistakes findings that require code changes route to
   Coder/Replanner and therefore participate in the same cumulative lineage budget.
 - Budget exhaustion of one lineage does not block unrelated worksets.
+
+
+## Repair incidents
+
+For every infrastructure or gate repair incident durably record
+`repair_lineage_id`, linked `implementation_lineage_id` when one exists,
+`infra_repair_count`, `gate_repair_count`, `repair_limit: 3`, and `caused_by`.
+Derive counts from task/session/turn history; they never reset across specialists,
+sessions, branches, worktrees, resumes, or reclassification. If old history is
+ambiguous, record the known lower bound and require a checkpoint before another
+same-root repair rather than assuming zero.
+
+A repair turn increments exactly one matching counter only when it performs an
+authorized repository, configuration, or environment mutation. Diagnosis, reports,
+and assurance reruns without repair mutation do not increment either counter. The
+per-incident hard boundary is `infra_repair_count + gate_repair_count <= 3`. After
+two unsuccessful same-root attempts, require an ownership/authority checkpoint;
+attempt 3 requires a changed hypothesis and named owner. After attempt 3, prohibit
+a fourth: route `NEEDS_DECISION` if internal authority can unblock,
+`BLOCKED_EXTERNAL` if only an external event can unblock, or `NEEDS_REPLAN` only
+when evidence invalidates the product plan. A genuinely unrelated root cause may
+receive a new `repair_lineage_id` with recorded rationale.
+
+Repair counters never increment `attempt_count` or `replan_count`. If repair
+evidence requires product-code implementation, close/reclassify that edge as
+`NEEDS_IMPLEMENTATION`; the next candidate-writing Coder turn increments the
+existing implementation lineage's `attempt_count`. Any candidate mutation still
+invalidates old exact-head evidence and re-enters the gate.
