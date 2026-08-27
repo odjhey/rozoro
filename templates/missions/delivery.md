@@ -110,6 +110,11 @@ strategy.
 
 ## No-mistakes Runner
 
+When briefing implementation, review, or test crews into a repository whose
+changes are validated by the no-mistakes gate, include the standing authoring
+rules from `templates/crew-guidelines.md` — they encode the gate's
+most-repeated findings and its input/output contract.
+
 When an exact committed candidate is ready for no-mistakes assurance, dispatch a
 fresh **No-Mistakes Runner**.
 
