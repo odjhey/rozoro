@@ -44,7 +44,19 @@ register_claude_driver() {
   start_event_server delayed 'p1,w1,done,claude' 'p1,w1,gone,claude'
   rzr-watch.sh --wake task > "$TEST_ROOT/watch.out" 2>&1 & watcher=$!
   register_pid "$watcher"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$FAKE_HERDR_ROOT/request.json" ] && break; sleep 0.03; done
+
+  # Do not mutate teardown state until this watcher has both established its
+  # subscription and completed the post-subscription authority snapshot. The
+  # initial projection is emitted only after those steps; waiting merely for
+  # the subscriber request races the watcher consuming its acknowledgement.
+  ready=0
+  for _ in $(seq 1 100); do
+    if grep -F $'task\tworking\t(initial)' "$TEST_ROOT/watch.out" >/dev/null 2>&1; then ready=1; break; fi
+    kill -0 "$watcher" 2>/dev/null || { cat "$TEST_ROOT/watch.out" >&2; false; }
+    sleep 0.05
+  done
+  [ "$ready" -eq 1 ] || { echo "watcher did not establish startup authority" >&2; cat "$TEST_ROOT/watch.out" >&2; false; }
+  [ -e "$FAKE_HERDR_ROOT/request.json" ]
   rm -f "$ROZORO_HOME/state/task.meta"
   wait "$watcher"
   ! grep -F $'CALL\tagent\tprompt\tdriver-pane' "$FAKE_HERDR_LOG"
