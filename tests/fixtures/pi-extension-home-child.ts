@@ -1,0 +1,88 @@
+import assert from "node:assert/strict";
+import { chmod, mkdir, readdir, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { createServer, type Server, type Socket } from "node:net";
+import extension from "../../.pi/extensions/rozoro-watchtower.ts";
+
+type Handler = (...args: any[]) => any;
+type Listener = { server: Server; sockets: Set<Socket>; connections: number };
+const delay = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const waitFor = async (predicate: () => boolean, timeout = 3000) => {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) { if (Date.now() >= deadline) throw new Error("socket connection timed out"); await delay(10); }
+};
+async function listen(home: string): Promise<Listener> {
+  await mkdir(home, { recursive: true, mode: 0o700 }); await chmod(home, 0o700);
+  const state: Listener = { server: undefined as unknown as Server, sockets: new Set(), connections: 0 };
+  state.server = createServer((socket) => {
+    state.connections++; state.sockets.add(socket); let buffered = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffered += chunk;
+      for (;;) {
+        const newline = buffered.indexOf("\n"); if (newline < 0) break;
+        const frame = JSON.parse(buffered.slice(0, newline)); buffered = buffered.slice(newline + 1);
+        if (["session.register", "turn.start", "turn.stop"].includes(frame.type))
+          socket.write(JSON.stringify({ v: 1, type: "ack", event_id: frame.event_id, durable_seq: frame.producer_seq }) + "\n");
+      }
+    });
+    socket.on("close", () => state.sockets.delete(socket));
+  });
+  await new Promise<void>((ok, fail) => state.server.listen(join(home, "monitor.sock"), ok).once("error", fail));
+  await chmod(join(home, "monitor.sock"), 0o600);
+  return state;
+}
+async function close(listener: Listener) {
+  for (const socket of listener.sockets) socket.destroy();
+  await new Promise<void>((done) => listener.server.close(() => done()));
+}
+
+const cell = process.argv[2];
+const root = process.env.ROZORO_HOME_FIXTURE_ROOT!;
+assert.ok(root, "ROZORO_HOME_FIXTURE_ROOT is required");
+const initial = join(root, "initial"), later = join(root, "later"), user = join(root, "user");
+const publicHome = join(initial, "public"), legacyHome = join(initial, "legacy");
+const defaultHome = join(user, ".rozoro"), relativeHome = join(initial, "relative"), tildeHome = join(user, "tilde");
+const xdgHome = join(root, "xdg", "rozoro"), homes = [publicHome, legacyHome, defaultHome, relativeHome, tildeHome, xdgHome];
+const expected: Record<string, string> = { P: publicHome, L: legacyHome, B: publicHome, E: legacyHome, D: defaultHome, R: relativeHome, T: tildeHome, X: publicHome };
+assert.ok(expected[cell], `unknown matrix cell ${cell}`);
+await mkdir(root, { recursive: true }); await Promise.all([mkdir(initial), mkdir(later), mkdir(user, { recursive: true })]);
+const listeners = new Map<string, Listener>();
+const oldCwd = process.cwd();
+try {
+  for (const home of homes) listeners.set(home, await listen(home));
+  delete process.env.ROZORO_HOME; delete process.env.RZR_HOME;
+  process.env.HOME = user; process.env.XDG_CONFIG_HOME = join(root, "xdg");
+  if (cell === "P") process.env.ROZORO_HOME = "public";
+  if (cell === "L") process.env.RZR_HOME = "legacy";
+  if (cell === "B") { process.env.ROZORO_HOME = "public"; process.env.RZR_HOME = "legacy"; }
+  if (cell === "E") { process.env.ROZORO_HOME = ""; process.env.RZR_HOME = "legacy"; }
+  if (cell === "R") process.env.ROZORO_HOME = "relative";
+  if (cell === "T") process.env.ROZORO_HOME = "~/tilde";
+  if (cell === "X") { process.env.ROZORO_HOME = "public"; process.env.RZR_HOME = "legacy"; }
+  process.chdir(initial);
+  const handlers = new Map<string, Handler[]>();
+  const pi = {
+    on(name: string, handler: Handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+    registerCommand() {}, sendMessage() {},
+    async exec() { return { code: 0, stdout: "", stderr: "" }; },
+  };
+  extension(pi as any); // registration is the point at which relative home must become absolute
+  if (cell === "R") process.chdir(later);
+  const ctx = { getSystemPrompt: () => "rozoro-task: task-home-matrix", sessionManager: { getSessionId: () => `session-${cell}` }, ui: { setStatus() {}, notify() {} } };
+  for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
+  await waitFor(() => listeners.get(expected[cell])!.connections === 1);
+  for (const handler of handlers.get("agent_start") ?? []) handler();
+  for (const handler of handlers.get("agent_settled") ?? []) handler();
+  await delay(30);
+  assert.equal(listeners.get(expected[cell])!.connections, 1);
+  for (const [home, listener] of listeners) if (home !== expected[cell]) assert.equal(listener.connections, 0, `connected to decoy ${home}`);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+  await waitFor(() => listeners.get(expected[cell])!.sockets.size === 0);
+  console.log(JSON.stringify({ cell, selected: resolve(expected[cell]), matrixResult: "pass" }));
+} finally {
+  process.chdir(oldCwd);
+  await Promise.allSettled([...listeners.values()].map(close));
+  await rm(root, { recursive: true, force: true });
+  assert.equal((await readdir(join(root, ".."))).includes(root.split("/").at(-1)!), false);
+}
