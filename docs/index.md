@@ -8,6 +8,7 @@ The README remains the operator-facing description of the current CLI. Implement
 
 - [Current vs target](current-vs-target.md) — what has already shipped and what remains intentionally ahead of implementation.
 - [Architecture](architecture.md) — product boundaries, ownership, and integration map.
+- [Control-plane contracts](control-plane-contracts.md) — target Watchtower/Rozoro identity, runtime/host/attention interfaces, zxro + Beads ownership split, and current-vs-target surface map.
 - [Artifact lifecycle](artifact-lifecycle.md) — when the major durable/runtime artifacts are created and what survives teardown.
 - [Dated Watchtower artifacts](dated-watchtower-artifacts.md) — immutable policy snapshots and conservative task-evidence progress reports.
 - [Ubiquitous language](ubiquitous-language.md) — canonical terms for code, prompts, issues, reviews, and docs.
