@@ -252,7 +252,8 @@ Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`
   "version": 3,
   "harness": "pi",
   "model": "luna",
-  "effort": "high"
+  "effort": "high",
+  "mission": "delivery"
 }
 ```
 
@@ -260,14 +261,17 @@ Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./b
 
 The preset launch is the **canonical operator path**. An unpreset launch that passes model flags manually (`./bin/rozoro pi-watchtower -- --model … --thinking …`) still works and still registers, but the registration carries no name, preset, version, preset hash, policy hash, or model/effort attribution. Do not combine `--preset` with manual model flags after `--`: trailing arguments are appended after the preset-derived flags, so the harness would receive the option twice while the registration records only the preset's values.
 
+A Pi preset may also name a **mission** (ADR-0013). Every Pi watchtower launch composes two policy files as system prompts: the VCS-owned mechanics core `templates/watchtower.md`, then exactly one mission policy that defines what the fleet is for. The mission comes from the preset's `mission` field and defaults to `delivery` (the shipped `templates/missions/delivery.md`), so unpreset and mission-less launches keep today's behavior. A mission name resolves to exactly one of `templates/missions/<name>.md` (shipped) or `$ROZORO_HOME/watchtower-missions/<name>.md` (operator-authored, for iterating on a new mission before it graduates into VCS); both existing is an error, as is neither. The recorded `policy_sha256` is the SHA-256 of the concatenated core+mission bytes actually delivered at launch.
+
 The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited watchtower attribution before applying the command-line options, so an unpreset launch cannot reuse stale name, preset, hash, model, effort, or driver values.
 
 #### Where watchtower configuration lives
 
-Watchtower instructions used to be entirely VCS-managed. Today they are split across three authorities (ADR-0011, ADR-0012):
+Watchtower instructions used to be entirely VCS-managed. Today they are split across these authorities (ADR-0011, ADR-0012, ADR-0013):
 
-- **policy content** stays in VCS: `templates/watchtower.md` is appended as the system prompt on every launch and hashed into the registration; presets have no policy override;
-- **launch selection** (harness, model, effort for the resident Watchtower itself) lives in `$ROZORO_HOME/watchtower-presets/<name>.json`;
+- **mechanics core** stays in VCS: `templates/watchtower.md` (CLI usage, event loop, crew lifetime) is appended as the first system prompt on every launch;
+- **mission policy** defines what the fleet is for and is appended after the core: shipped missions live in `templates/missions/`, operator-drafted missions in `$ROZORO_HOME/watchtower-missions/`, selected by the preset `mission` field (default `delivery`);
+- **launch selection** (harness, model, effort, mission for the resident Watchtower itself) lives in `$ROZORO_HOME/watchtower-presets/<name>.json`;
 - **operator role/model policy** for crew dispatch lives in `$ROZORO_HOME/watchtower-policies/`, with `$ROZORO_HOME/config/machine.md` as machine-availability input;
 - **crew presets** are execution configurations for crew targets already authorized by repository/operator policy.
 

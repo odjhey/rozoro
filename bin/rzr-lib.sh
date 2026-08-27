@@ -323,12 +323,17 @@ def finite_json(value):
     if isinstance(value, list): return all(finite_json(item) for item in value)
     return True
 if not finite_json(doc): raise SystemExit("preset contains a non-finite number")
-for key in ("harness", "model", "effort", "permission_mode", "notes"):
+for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
     if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
-for key in ("harness", "model", "effort", "permission_mode", "notes"):
+for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
     if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
     if "=" in doc.get(key, "") or any(ord(char) < 32 or ord(char) == 127 for char in doc.get(key, "")):
         raise SystemExit("preset field contains unsafe metadata characters")
+mission = doc.get("mission", "")
+if mission:
+    safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    if mission in (".", "..") or any(char not in safe for char in mission):
+        raise SystemExit("invalid preset mission name")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
         raise SystemExit("invalid preset field type")
@@ -365,6 +370,24 @@ finally: os.close(fd)
 PY
 }
 rzr_sha256_file() { rzr_file_identity "$1" | awk -F: '{print $5}'; }
+
+# SHA-256 of the exact concatenated bytes of the given files, in order. Used for
+# the composed watchtower policy (core + mission) delivered at launch.
+rzr_sha256_concat() { python3 - "$@" <<'PY'
+import hashlib, os, stat, sys
+digest = hashlib.sha256()
+for path in sys.argv[1:]:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode): raise SystemExit("not a regular file")
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            digest.update(chunk)
+    finally: os.close(fd)
+print(digest.hexdigest())
+PY
+}
 
 # Enumerate only records reached through owned, private, no-follow directory
 # descriptors. An optional driver id selects one record. Malformed/unsafe state
