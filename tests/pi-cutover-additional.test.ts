@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
@@ -11,7 +11,9 @@ const wait=async(f:()=>boolean)=>{for(let i=0;i<200;i++){if(f())return;await new
 
 test("Pi extension entrypoint honors relative legacy home once across cwd change", {concurrency:false}, async()=>{
  const root=await mkdtemp(join(tmpdir(),"rzr-pi-home-")); const initial=join(root,"initial"), later=join(root,"later"), selected=join(initial,"legacy");
- await Promise.all([import("node:fs/promises").then(fs=>fs.mkdir(initial)),import("node:fs/promises").then(fs=>fs.mkdir(later)),import("node:fs/promises").then(fs=>fs.mkdir(selected))]); await chmod(selected,0o700);
+ // Parent creation is deliberately ordered before its child.  A Promise.all
+ // here races initial/legacy against initial on native Node and Bun.
+ await Promise.all([mkdir(initial),mkdir(later)]); await mkdir(selected); await chmod(selected,0o700);
  const socket=join(selected,"monitor.sock"); let connected=false;
  const server=createServer(s=>{connected=true;s.on("error",()=>{});s.on("data",()=>{});}); await new Promise<void>(r=>server.listen(socket,r)); await chmod(socket,0o600);
  const old={cwd:process.cwd(),public:process.env.ROZORO_HOME,legacy:process.env.RZR_HOME}; process.chdir(initial); delete process.env.ROZORO_HOME; process.env.RZR_HOME="legacy";
