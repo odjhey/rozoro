@@ -2,6 +2,7 @@ import io
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -111,22 +112,26 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
             home.mkdir(); initial.mkdir(); later.mkdir()
             (initial / "tasks").mkdir()
             for script, expected_calls in ((SNAPSHOT, 3), (PROGRESS, 4)):
-                namespace = runpy.run_path(str(script))
-                original = namespace["normalized_path"]
-                calls = 0
+                main = runpy.run_path(str(script))["main"]
+                production_globals = main.__globals__
+                original = production_globals["normalized_path"]
+                resolved = []
                 def moving_normalizer(value):
-                    nonlocal calls
-                    result = original(value); calls += 1
-                    if calls == expected_calls:
+                    result = original(value)
+                    resolved.append(result)
+                    if len(resolved) == expected_calls:
                         os.chdir(later)
                     return result
-                namespace["normalized_path"] = moving_normalizer
                 argv = [str(script), "--repo-root", str(ROOT), "--artifact-root", "artifacts", "--now", NOW]
                 if script == PROGRESS:
                     argv += ["--tasks-root", "tasks"]
-                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()) as output:
-                    self.assertEqual(namespace["main"](), 0)
+                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.dict(production_globals, {"normalized_path": moving_normalizer}), redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(), 0)
                     artifact = Path(output.getvalue().strip())
+                    self.assertEqual(len(resolved), expected_calls)
+                    expected_paths = ([ROOT, home / ".rozoro", initial / "artifacts"] if script == SNAPSHOT else
+                                      [ROOT, home / ".rozoro", initial / "tasks", initial / "artifacts"])
+                    self.assertEqual(resolved, expected_paths)
                     self.assertTrue(artifact.is_relative_to(initial / "artifacts"))
                     self.assertFalse((later / "artifacts").exists())
                     if script == PROGRESS:
@@ -140,11 +145,20 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
             root = Path(td).resolve(); home = root / "home"; initial = root / "initial"
             home.mkdir(); initial.mkdir()
             bad = "~rozoro-no-such-user-h6/artifacts"
+            valid_tasks = root / "valid-tasks"
+            task = valid_tasks / "valid-task"; task.mkdir(parents=True)
+            (task / "identity.json").write_text("{}\n")
+            (task / "session.json").write_text("{}\n")
+            (task / "handoff.md").write_text(
+                "## turn 1 — complete\nverdict:       done\ndid:           test\npending:       none\n"
+                "inputs-needed: none\nartifacts:     none\n"
+            )
             cases = (
                 (SNAPSHOT, {"HOME": str(home), "ROZORO_HOME": bad}, []),
                 (PROGRESS, {"HOME": str(home), "ROZORO_HOME": bad}, []),
                 (SNAPSHOT, {"HOME": str(home)}, ["--artifact-root", bad]),
                 (PROGRESS, {"HOME": str(home)}, ["--artifact-root", bad, "--tasks-root", bad]),
+                (PROGRESS, {"HOME": str(home)}, ["--tasks-root", str(valid_tasks), "--artifact-root", bad]),
             )
             for script, env, args in cases:
                 with self.subTest(script=script.name, args=args):
@@ -153,6 +167,33 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
                     self.assertNotIn("Traceback", result.stderr)
                     self.assertFalse(any(root.rglob("watchtower-policy-snapshots")))
                     self.assertFalse(any(root.rglob("watchtower-progress-reports")))
+
+    def test_forced_write_failures_leave_no_fixture_residue(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve(); home = root / "home"; initial = root / "initial"
+            home.mkdir(); initial.mkdir()
+            tasks = root / "tasks"; tasks.mkdir()
+            for script in (SNAPSHOT, PROGRESS):
+                artifact_root = root / f"failed-{script.stem}"
+                main = runpy.run_path(str(script))["main"]
+                production_globals = main.__globals__
+                safe_directory = production_globals["SafeDirectory"]
+                argv = [str(script), "--repo-root", str(ROOT), "--artifact-root", str(artifact_root), "--now", NOW]
+                if script == PROGRESS:
+                    argv += ["--tasks-root", str(tasks)]
+                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.object(safe_directory, "write_exclusive", side_effect=OSError("forced write failure")):
+                    with self.assertRaisesRegex(SystemExit, "cannot create safe artifact: forced write failure"):
+                        main()
+                category = "watchtower-policy-snapshots" if script == SNAPSHOT else "watchtower-progress-reports"
+                runs = list((artifact_root / category).glob("*/*"))
+                self.assertEqual(len(runs), 1)
+                self.assertTrue(runs[0].is_dir())
+                self.assertEqual(list(runs[0].iterdir()), [])
+                # The product's failed reservation is observed above.  This
+                # test owns the root, so remove only its fixture and prove it
+                # cannot pollute a later matrix cell.
+                shutil.rmtree(artifact_root)
+                self.assertFalse(artifact_root.exists())
 
 
 if __name__ == "__main__":
