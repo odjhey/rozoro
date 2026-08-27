@@ -1,10 +1,12 @@
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -98,20 +100,34 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                 username = pwd.getpwuid(os.getuid()).pw_name
             except KeyError:
                 username = None
+            account_home_fixture = None
             if username:
-                cases.append(({"RZR_HOME": f"~{username}/rzr-entrypoint-matrix"},
-                              Path(pwd.getpwnam(username).pw_dir) / "rzr-entrypoint-matrix"))
+                account_home = Path(pwd.getpwnam(username).pw_dir)
+                account_home_fixture = account_home / f".rzr-entrypoint-matrix-{uuid.uuid4().hex}"
+                cases.append(({"RZR_HOME": f"~{username}/{account_home_fixture.name}"},
+                              account_home_fixture))
             for env_bits, selected in cases:
-                env = dict(os.environ, HOME=str(user_home), XDG_CONFIG_HOME=str(root / "xdg"))
-                env.pop("ROZORO_HOME", None); env.pop("RZR_HOME", None); env.update(env_bits)
-                (selected / "tasks").mkdir(parents=True, exist_ok=True)
-                for script, args in ((SNAPSHOT, ["--repo-root", str(ROOT)]),
-                                     (PROGRESS, ["--repo-root", str(ROOT), "--now", "2026-01-01T00:00:00Z"])):
-                    with self.subTest(script=script.name, env=env_bits):
-                        result = subprocess.run(["python3", str(script), *args], cwd=initial, env=env,
-                                                text=True, capture_output=True, timeout=20)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertTrue(Path(result.stdout.strip()).is_relative_to(selected / "artifacts"))
+                remove_selected = selected == account_home_fixture
+                created_selected = False
+                try:
+                    if remove_selected:
+                        self.assertFalse(selected.exists())
+                        selected.mkdir(mode=0o700)
+                        created_selected = True
+                    env = dict(os.environ, HOME=str(user_home), XDG_CONFIG_HOME=str(root / "xdg"))
+                    env.pop("ROZORO_HOME", None); env.pop("RZR_HOME", None); env.update(env_bits)
+                    (selected / "tasks").mkdir(parents=True, exist_ok=True)
+                    for script, args in ((SNAPSHOT, ["--repo-root", str(ROOT)]),
+                                         (PROGRESS, ["--repo-root", str(ROOT), "--now", "2026-01-01T00:00:00Z"])):
+                        with self.subTest(script=script.name, env=env_bits):
+                            result = subprocess.run(["python3", str(script), *args], cwd=initial, env=env,
+                                                    text=True, capture_output=True, timeout=20)
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            self.assertTrue(Path(result.stdout.strip()).is_relative_to(selected / "artifacts"))
+                finally:
+                    if created_selected:
+                        shutil.rmtree(selected)
+                        self.assertFalse(selected.exists())
             explicit = root / "explicit"
             env = dict(os.environ, HOME=str(user_home), ROZORO_HOME=str(root / "wrong"), RZR_HOME=str(root / "also-wrong"))
             # Exercise each public CLI override at the real main.  Progress must
