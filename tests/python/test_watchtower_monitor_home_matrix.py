@@ -65,7 +65,10 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         for lock in list(self.root.rglob("monitor.lock")) + list(ROOT.rglob("monitor.lock")):
             try:
                 record = json.loads(lock.read_text()); pid = record["pid"]
-                command = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True)
+                proc = Path(f"/proc/{pid}/cmdline")
+                if proc.exists(): command = proc.read_bytes().replace(b"\0", b" ").decode()
+                else: command = subprocess.check_output(
+                    ["ps", "-p", str(pid), "-o", "command="], text=True)
                 info = (lock.parent / "monitor.sock").lstat()
                 if (lock.resolve() not in self.preexisting_locks and str(DAEMON) in command
                         and info.st_ino == record["socket_ino"] and info.st_dev == record["socket_dev"]):
