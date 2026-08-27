@@ -9,10 +9,18 @@ from pathlib import Path
 
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+SOURCE_FILE_FLAGS = FILE_FLAGS | getattr(os, "O_NONBLOCK", 0)
 
 
 class UnsafePath(RuntimeError):
     """A path could not be traversed without following links or losing ownership."""
+
+
+def trusted_source_metadata(before: os.stat_result, info: os.stat_result, uid: int) -> bool:
+    """Pure metadata predicate, exposed for deterministic wrong-owner tests."""
+    return ((before.st_dev, before.st_ino) == (info.st_dev, info.st_ino)
+            and stat.S_ISREG(info.st_mode) and info.st_uid == uid
+            and info.st_nlink == 1 and not stat.S_IMODE(info.st_mode) & 0o022)
 
 
 def _component(value: str) -> str:
@@ -46,7 +54,14 @@ class SafeDirectory:
         require_owner: bool = True,
         private: bool = False,
     ) -> "SafeDirectory":
-        absolute = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+        raw = os.fspath(path)
+        try:
+            expanded = os.path.expanduser(raw)
+        except RuntimeError as exc:
+            raise UnsafePath(f"unresolved user path: {raw}") from exc
+        if raw.startswith("~") and expanded.startswith("~"):
+            raise UnsafePath(f"unresolved user path: {raw}")
+        absolute = Path(os.path.abspath(expanded))
         parts = absolute.parts
         if not absolute.is_absolute() or not parts:
             raise UnsafePath(f"path must resolve lexically to an absolute path: {path}")
@@ -155,6 +170,33 @@ class SafeDirectory:
             return "unreadable", None
         finally:
             os.close(file_fd)
+
+    def read_source_regular(self, name: str) -> bytes:
+        """Read a VCS policy source with owned/single-link/non-writable guarantees."""
+        name = _component(name)
+        try:
+            before = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode):
+                raise UnsafePath(f"unsafe repository source: {name}")
+            fd = os.open(name, SOURCE_FILE_FLAGS, dir_fd=self.fd)
+        except OSError as exc:
+            raise UnsafePath(f"unsafe repository source: {name}") from exc
+        try:
+            info = os.fstat(fd)
+            if not trusted_source_metadata(before, info, os.geteuid()):
+                raise UnsafePath(f"unsafe repository source: {name}")
+            chunks: list[bytes] = []
+            try:
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except OSError as exc:
+                raise UnsafePath(f"unreadable repository source: {name}") from exc
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
 
     def write_exclusive(self, name: str, data: bytes) -> None:
         name = _component(name)

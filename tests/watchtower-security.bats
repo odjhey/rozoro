@@ -3,6 +3,7 @@ load test_helper/common
 
 @test "preset names cannot traverse and preset symlinks are rejected" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
+  chmod 700 "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"outside","effort":"low"}' > "$ROZORO_HOME/outside.json"
   for command in "show ../outside" "path ../outside"; do
     run bash -c '"$1/bin/rozoro" watchtower $2 $3' _ "$REPO_ROOT" ${command}
@@ -175,6 +176,7 @@ SH
 
 @test "preset show and launch reject non-standard JSON and oversized known metadata" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
+  chmod 700 "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":NaN}' > "$ROZORO_HOME/watchtower-presets/nan.json"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":Infinity}' > "$ROZORO_HOME/watchtower-presets/infinity.json"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":"v=1"}' > "$ROZORO_HOME/watchtower-presets/delimiter.json"
@@ -193,6 +195,7 @@ SH
 
 @test "metadata ingress rejects C0 controls, DEL, and line metadata delimiters" {
   mkdir -p "$ROZORO_HOME/watchtower-presets"
+  chmod 700 "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"luna","effort":"high"}' > "$ROZORO_HOME/watchtower-presets/luna.json"
   export HERDR_PANE_ID=pane
   for name in $'north\nforged=x' $'north\tbad' $'north\033bad' $'north\177bad' 'north=bad'; do
@@ -211,6 +214,7 @@ SH
 
 @test "overflow versions and hardlinked preset and target files are rejected" {
   mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtowers/herdr-pane"
+  chmod 700 "$ROZORO_HOME/watchtower-presets"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":1e999}' > "$ROZORO_HOME/watchtower-presets/overflow.json"
   printf '%s\n' '{"harness":"pi","model":"x","effort":"low","version":9007199254740993}' > "$ROZORO_HOME/watchtower-presets/unsafe-integer.json"
   run rozoro watchtower show overflow; assert_failure
@@ -324,6 +328,7 @@ PY
     [ "$(cat "$SENTINEL")" = untouched ]
   done
   mkdir -p "$ROZORO_HOME/watchtower-presets"; mkfifo "$ROZORO_HOME/watchtower-presets/fifo.json"; chmod 600 "$ROZORO_HOME/watchtower-presets/fifo.json"
+  chmod 700 "$ROZORO_HOME/watchtower-presets"
   bounded_failure rozoro watchtower show fifo
   [ "$(cat "$SENTINEL")" = untouched ]
 }

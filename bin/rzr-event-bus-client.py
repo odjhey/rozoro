@@ -185,7 +185,7 @@ def compat(report):
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true"); ap.add_argument("--full",action="store_true")
-    a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME",str(Path.home()/".rozoro"))
+    a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or str(Path.home()/".rozoro")
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
     try:

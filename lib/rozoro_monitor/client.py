@@ -107,8 +107,11 @@ def _create_home_from_trusted_ancestor(path: Path) -> int:
 
 
 def _open_home(home: str | os.PathLike[str] | None, *, create: bool = True) -> tuple[Path, int]:
-    path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    path = path.absolute()
+    raw = os.fspath(home) if home is not None else os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"
+    expanded = os.path.expanduser(raw)
+    if raw.startswith("~") and expanded.startswith("~"):
+        raise UnsafePathError(f"unresolved user home path: {raw}")
+    path = Path(expanded).absolute()
     if create:
         try:
             fd = _create_home_from_trusted_ancestor(path)

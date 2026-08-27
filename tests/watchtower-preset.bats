@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 load test_helper/common
 
-make_preset() { mkdir -p "$ROZORO_HOME/watchtower-presets"; printf '%s\n' "$2" > "$ROZORO_HOME/watchtower-presets/$1.json"; }
+make_preset() { make_wt_presets; printf '%s\n' "$2" > "$ROZORO_HOME/watchtower-presets/$1.json"; }
 
 @test "watchtower preset list show path and registered expose versioned identity" {
   make_preset luna '{"schema":1,"version":3,"harness":"pi","model":"luna","effort":"high","permission_mode":"","notes":"trial","future":true}'

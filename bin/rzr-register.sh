@@ -27,8 +27,6 @@
 # Prints the driver id (unless --quiet). Re-registration replaces the current
 # target and appends a fresh history record for the same identity.
 set -euo pipefail
-# shellcheck disable=SC1091 # The library path is resolved beside this script.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 HARNESS="" BACKEND="auto" DRIVER_ID="" AGENT_SESSION="" QUIET=0
 while [ $# -gt 0 ]; do
@@ -42,6 +40,30 @@ while [ $# -gt 0 ]; do
     *) rzr_die "unknown flag: $1" ;;
   esac
 done
+
+# Policy attribution is untrusted ingress. Validate it before sourcing the
+# shared library, which may initialize home/state for a valid registration.
+# Invalid tuples must therefore be a pure, no-write failure.
+register_die() { echo "rzr: $*" >&2; exit 1; }
+POLICY_FIELDS="${ROZORO_WT_POLICY_SHA256:-}|${ROZORO_WT_POLICY_CORE_SHA256:-}|${ROZORO_WT_POLICY_MISSION_NAME:-}|${ROZORO_WT_POLICY_MISSION_SOURCE:-}|${ROZORO_WT_POLICY_MISSION_SHA256:-}"
+if [ "$HARNESS" != pi ] && [ "$POLICY_FIELDS" != '||||' ]; then
+  register_die "Pi policy attribution is valid only for harness pi"
+fi
+case "$POLICY_FIELDS" in
+  '||||') ;;
+  *'|'*'|'*'|'*'|'*)
+    for digest in "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}"; do
+      printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || register_die "invalid watchtower policy digest"
+    done
+    case "${ROZORO_WT_POLICY_MISSION_SOURCE:-}" in shipped|operator) ;; *) register_die "invalid watchtower mission source" ;; esac
+    mission="${ROZORO_WT_POLICY_MISSION_NAME:-}"
+    case "$mission" in ''|.|..|*[!A-Za-z0-9._-]*) register_die "watchtower mission name '$mission' is unsafe; use letters, digits, '.', '_' or '-'" ;; esac
+    [ "${#mission}" -le 120 ] || register_die "watchtower mission name is too long (maximum 120 characters)" ;;
+  *) register_die "watchtower policy attribution must be an all-or-none five-field tuple" ;;
+esac
+
+# shellcheck disable=SC1091 # The library path is resolved beside this script.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
 
 case "$HARNESS" in
   claude|codex|copilot|pi) ;;
@@ -99,7 +121,6 @@ rzr_validate_wt_metadata "$IDENTITY" "wake target identity"
 [ -n "$DRIVER_ID" ] || DRIVER_ID="$(rzr_driver_id_for "$BACKEND" "$IDENTITY")"
 rzr_validate_task_component "$DRIVER_ID" "driver id"
 [ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
-[ -z "${ROZORO_WT_POLICY_SHA256:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_POLICY_SHA256" "watchtower policy SHA"
 if [ -n "${ROZORO_WT_PRESET:-}" ]; then
   rzr_validate_wtpreset_name "$ROZORO_WT_PRESET"
   rzr_validate_wt_metadata "${ROZORO_WT_PRESET_VERSION:-}" "watchtower preset version"
@@ -112,8 +133,9 @@ RZR_REG_HOME="$RZR_HOME" RZR_REG_ID="$DRIVER_ID" RZR_REG_HARNESS="$HARNESS" \
 RZR_REG_BACKEND="$BACKEND" RZR_REG_IDENTITY="$IDENTITY" RZR_REG_OWNER="$PPID" \
 RZR_REG_WT_NAME="${ROZORO_WT_NAME:-}" RZR_REG_PRESET="${ROZORO_WT_PRESET:-}" \
 RZR_REG_VERSION="${ROZORO_WT_PRESET_VERSION:-}" RZR_REG_SHA="${ROZORO_WT_PRESET_SHA256:-}" \
-RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" \
-RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
+RZR_REG_POLICY_SHA="${ROZORO_WT_POLICY_SHA256:-}" RZR_REG_POLICY_CORE_SHA="${ROZORO_WT_POLICY_CORE_SHA256:-}" \
+RZR_REG_POLICY_MISSION_NAME="${ROZORO_WT_POLICY_MISSION_NAME:-}" RZR_REG_POLICY_MISSION_SOURCE="${ROZORO_WT_POLICY_MISSION_SOURCE:-}" \
+RZR_REG_POLICY_MISSION_SHA="${ROZORO_WT_POLICY_MISSION_SHA256:-}" RZR_REG_MODEL="${ROZORO_WT_MODEL:-}" RZR_REG_EFFORT="${ROZORO_WT_EFFORT:-}" \
 RZR_REG_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" python3 - <<'PY'
 import fcntl, json, math, os, secrets, stat
 
@@ -183,6 +205,24 @@ def valid_version(value):
         return False
     return abs(value) <= 2**53 - 1 and len(str(value)) <= 120
 
+def validate_existing_policy(data):
+    keys=("policy_sha256","policy_core_sha256","policy_mission_name","policy_mission_source","policy_mission_sha256")
+    components=keys[1:]
+    present=[key in data for key in keys]
+    if not any(present): return
+    if present[0] and not any(present[1:]):
+        if not safe_string(data["policy_sha256"]) or not data["policy_sha256"]:
+            raise SystemExit("invalid legacy policy attribution")
+        return
+    if not all(present): raise SystemExit("partial existing policy attribution")
+    if data.get("harness") != "pi": raise SystemExit("non-Pi complete policy attribution")
+    if any(not isinstance(data[key],str) or len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")):
+        raise SystemExit("invalid existing policy digest")
+    if data["policy_mission_source"] not in ("shipped","operator"): raise SystemExit("invalid existing mission source")
+    name=data["policy_mission_name"]; allowed="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    if not isinstance(name,str) or not name or len(name)>120 or name in (".","..") or any(c not in allowed for c in name):
+        raise SystemExit("invalid existing mission name")
+
 def write_all(fd, payload):
     view = memoryview(payload)
     while view:
@@ -197,9 +237,10 @@ def record_from_target(data, *, recovered=False):
     registration_id = data.get("registration_id")
     if not valid_registration_id(registration_id):
         raise SystemExit("invalid registration id")
-    copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256")
+    copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256", "policy_core_sha256", "policy_mission_name", "policy_mission_source", "policy_mission_sha256")
     if any(key in data and not safe_string(data[key]) for key in copied):
         raise SystemExit("invalid existing registration metadata")
+    validate_existing_policy(data)
     if "owner_pid" in data:
         owner_pid = data["owner_pid"]
         if not isinstance(owner_pid, str) or not owner_pid.isdigit() or not 1 <= int(owner_pid) <= 2**63 - 1:
@@ -228,8 +269,9 @@ def record_from_target(data, *, recovered=False):
         record["watchtower_name"] = data["watchtower_name"]
     if projected_preset is not None:
         record["preset"] = projected_preset
-    if "policy_sha256" in data:
-        record["policy_sha256"] = data["policy_sha256"]
+    for key in ("policy_sha256", "policy_core_sha256", "policy_mission_name", "policy_mission_source", "policy_mission_sha256"):
+        if key in data:
+            record[key] = data[key]
     if recovered:
         record["recovered"] = True
     return record
@@ -246,6 +288,8 @@ def last_history_registration_id(logfd):
                 raise SystemExit("invalid registrations history")
             if not isinstance(item, dict) or not valid_registration_id(item.get("registration_id")):
                 raise SystemExit("invalid registrations history")
+            try: validate_existing_policy(item)
+            except SystemExit: raise SystemExit("invalid registrations history")
             last = item["registration_id"]
     finally:
         stream.close()
@@ -327,7 +371,13 @@ try:
         if os.environ["RZR_REG_POLICY_SHA"]:
             data["preset"]["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
     if os.environ["RZR_REG_POLICY_SHA"]:
-        data["policy_sha256"] = os.environ["RZR_REG_POLICY_SHA"]
+        data.update({
+            "policy_sha256": os.environ["RZR_REG_POLICY_SHA"],
+            "policy_core_sha256": os.environ["RZR_REG_POLICY_CORE_SHA"],
+            "policy_mission_name": os.environ["RZR_REG_POLICY_MISSION_NAME"],
+            "policy_mission_source": os.environ["RZR_REG_POLICY_MISSION_SOURCE"],
+            "policy_mission_sha256": os.environ["RZR_REG_POLICY_MISSION_SHA"],
+        })
 
     record = record_from_target(data)
     tmp_name = ".target.%d.%s.tmp" % (os.getpid(), secrets.token_hex(12))

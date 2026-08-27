@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -19,13 +20,17 @@ sys.path.insert(0, str(SCRIPT_REPO))
 
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
-SCHEMA = "rozoro.watchtower-policy-snapshot/v8"
+SCHEMA = "rozoro.watchtower-policy-snapshot/v9"
 SOURCE = "templates/watchtower.md"
+MISSIONS_DIR = "templates/missions"
+DEFAULT_MISSION = "delivery"
+OPERATOR_MISSIONS = "$ROZORO_HOME/watchtower-missions"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "ae387a5511cdb22fc13a4be1cd5bd20f1767319d271cc6fa6e8fa37fd72baf4f"
+PI_LAUNCHER_SHA256 = "4f63ae862ed3332d21e244562316b9a36dbe7fdece82c977d2912c5de6386763"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
+MISSION_VALUE = "$MISSION_FILE"
 GIT_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 
@@ -38,8 +43,38 @@ def utc_now(value: str | None) -> dt.datetime:
     return parsed.astimezone(dt.timezone.utc)
 
 
+def normalized_path(value: str | os.PathLike[str]) -> Path:
+    raw = os.fspath(value)
+    try:
+        expanded = os.path.expanduser(raw)
+    except RuntimeError as exc:
+        raise UnsafePath(f"unresolved user path: {raw}") from exc
+    if raw.startswith("~") and expanded.startswith("~"):
+        raise UnsafePath(f"unresolved user path: {raw}")
+    return Path(os.path.abspath(expanded))
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def validate_policy_text(data: bytes, relative: str) -> None:
+    try:
+        value = data.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise UnsafePath(f"required repository source {relative} is invalid UTF-8") from exc
+    if not value or value.startswith("\ufeff") or not any(not char.isspace() for char in value):
+        raise UnsafePath(f"required repository source {relative} is empty or whitespace-only")
+    if any((ord(char) < 32 and char not in "\t\n\r") or 0x7F <= ord(char) <= 0x9F for char in value):
+        raise UnsafePath(f"required repository source {relative} contains a forbidden control")
+
+
+def open_source_child(parent: SafeDirectory, component: str) -> SafeDirectory:
+    child = parent.open_child(component, require_owner=True)
+    if stat.S_IMODE(child.stat().st_mode) & 0o022:
+        child.close()
+        raise UnsafePath(f"repository source directory {component} is group/world-writable")
+    return child
 
 
 def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
@@ -48,11 +83,10 @@ def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
     opened: list[SafeDirectory] = []
     try:
         for component in parts[:-1]:
-            current = current.open_child(component, require_owner=True)
+            current = open_source_child(current, component)
             opened.append(current)
-        state, data = current.read_regular(parts[-1])
-        if state != "regular" or data is None:
-            raise UnsafePath(f"required repository source {relative} is {state}")
+        data = current.read_source_regular(parts[-1])
+        validate_policy_text(data, relative)
         return data
     finally:
         for directory in reversed(opened):
@@ -124,15 +158,32 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
                 writes_valid = False
             index += 1
         if block_depth == 0 and tokens == expected_invocation:
-            invocation_results.append(
-                any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in zip(args, args[1:], strict=False))
-            )
+            policy_values = [args[index + 1] if index + 1 < len(args) else None
+                             for index, token in enumerate(args) if token == POLICY_OPTION]
+            invocation_results.append(policy_values == [POLICY_VALUE, MISSION_VALUE])
         for token in tokens:
             if token in openers or token == "{":
                 block_depth += 1
             elif token in closers or token == "}":
                 block_depth = max(0, block_depth - 1)
     return writes_valid and len(invocation_results) == 1 and invocation_results[0]
+
+
+def read_missions(repo: SafeDirectory) -> dict[str, bytes]:
+    with open_source_child(repo, "templates") as templates:
+        with open_source_child(templates, "missions") as missions:
+            names = sorted(name for name in missions.list_names() if name.endswith(".md"))
+            captured: dict[str, bytes] = {}
+            for name in names:
+                stem = name[:-3]
+                if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", stem) or stem in {".", ".."}:
+                    raise UnsafePath(f"invalid shipped mission filename: {name}")
+                data = missions.read_source_regular(name)
+                validate_policy_text(data, f"{MISSIONS_DIR}/{name}")
+                captured[name] = data
+    if f"{DEFAULT_MISSION}.md" not in captured:
+        raise UnsafePath(f"shipped default mission {MISSIONS_DIR}/{DEFAULT_MISSION}.md is missing")
+    return captured
 
 
 def reserve_run(root: SafeDirectory, now: dt.datetime) -> tuple[SafeDirectory, str]:
@@ -195,11 +246,14 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
+    repo_path = normalized_path(args.repo_root or SCRIPT_REPO)
     try:
         with SafeDirectory.open_path(repo_path, create=False, require_owner=True) as repo:
+            if stat.S_IMODE(repo.stat().st_mode) & 0o022:
+                raise UnsafePath("repository root is group/world-writable")
             identity = repo_identity(repo)
             source_bytes = read_repo_file(repo, SOURCE)
+            missions = read_missions(repo)
             pi_launcher = read_repo_file(repo, PI_LAUNCHER)
             claude_launcher = read_repo_file(repo, CLAUDE_LAUNCHER)
             exact_pi_launcher = digest(pi_launcher) == PI_LAUNCHER_SHA256
@@ -212,28 +266,55 @@ def main() -> int:
             commit_read = bound_git_value(repo_path, identity, "rev-parse", "HEAD")
             tracked_read = bound_git_value(repo_path, identity, "rev-parse", f"HEAD:{SOURCE}")
             current_read = bound_git_value(repo_path, identity, "hash-object", "--stdin", input_bytes=source_bytes)
+            mission_reads = {
+                name: (
+                    bound_git_value(repo_path, identity, "rev-parse", f"HEAD:{MISSIONS_DIR}/{name}"),
+                    bound_git_value(repo_path, identity, "hash-object", "--stdin", input_bytes=data),
+                )
+                for name, data in missions.items()
+            }
     except (OSError, UnsafePath) as exc:
         raise SystemExit(str(exc)) from exc
 
-    git_reads = (commit_read, tracked_read, current_read)
+    git_reads = (commit_read, tracked_read, current_read) + tuple(
+        read for pair in mission_reads.values() for read in pair
+    )
     git_verified = all(status == "verified" for _, status in git_reads)
     git_reason = None if git_verified else ";".join(sorted({status for _, status in git_reads if status != "verified"}))
-    commit, tracked_blob, current_blob = (read[0] for read in git_reads) if git_verified else (None, None, None)
+    commit, tracked_blob, current_blob = (
+        (commit_read[0], tracked_read[0], current_read[0]) if git_verified else (None, None, None)
+    )
     applicable = ["pi"] + (["claude"] if claude_captured else [])
     identity_id = "fs-" + digest(f"{identity[0]}:{identity[1]}".encode())[:20]
 
-    home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    artifact_root = args.artifact_root or home / "artifacts"
+    home = normalized_path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro")
+    artifact_root = normalized_path(args.artifact_root or home / "artifacts")
     now = utc_now(args.now)
     created_at = now.isoformat(timespec="microseconds").replace("+00:00", "Z")
     snapshot_name = "watchtower-policy.md"
+    mission_metadata = {}
+    for name, data in missions.items():
+        mission_tracked, mission_current = mission_reads[name]
+        mission_metadata[f"{MISSIONS_DIR}/{name}"] = {
+            "mission": name[: -len(".md")],
+            "sha256": digest(data),
+            "bytes": len(data),
+            "composed_policy_sha256": digest(source_bytes + data),
+            "git_blob_at_commit": mission_tracked[0] if git_verified else None,
+            "git_blob_current": mission_current[0] if git_verified else None,
+            "matches_git_commit": (
+                mission_tracked[0] == mission_current[0]
+                if git_verified and mission_tracked[0] and mission_current[0]
+                else None
+            ),
+        }
     metadata = {
         "schema": SCHEMA,
         "artifact_type": "watchtower-policy-snapshot",
         "created_at": created_at,
         "source": {
             "repository_relative_path": SOURCE,
-            "role": "explicit Watchtower launch policy source",
+            "role": "explicit Watchtower core policy source (composed with one mission at launch)",
             "applies_to_harnesses": applicable,
             "sha256": digest(source_bytes),
             "bytes": len(source_bytes),
@@ -242,6 +323,8 @@ def main() -> int:
             "git_blob_current": current_blob,
             "matches_git_commit": tracked_blob == current_blob if git_verified and tracked_blob and current_blob else None,
         },
+        "missions": mission_metadata,
+        "default_mission": DEFAULT_MISSION,
         "git_provenance": {
             "status": "verified" if git_verified else "indeterminate",
             "method": "held-directory-identity-verified-before-and-after-each-git-read",
@@ -249,10 +332,16 @@ def main() -> int:
             "reason": git_reason,
         },
         "harness_coverage": {
-            "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v1",
+            "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v2",
             "expected_pi_launcher_sha256": PI_LAUNCHER_SHA256,
             "option": POLICY_OPTION,
             "value": POLICY_VALUE,
+            "mission_value": MISSION_VALUE,
+            "mission_sources": {
+                "shipped": MISSIONS_DIR,
+                "operator": OPERATOR_MISSIONS,
+                "operator_status": "not-captured",
+            },
             "pi": {
                 "status": "captured" if pi_captured else "unverified-no-consumed-policy-args-array",
                 "launcher": PI_LAUNCHER,
@@ -264,10 +353,23 @@ def main() -> int:
                 "launcher_sha256": digest(claude_launcher),
             },
         },
-        "files": {snapshot_name: {"sha256": digest(source_bytes), "bytes": len(source_bytes)}},
+        "files": {
+            snapshot_name: {"sha256": digest(source_bytes), "bytes": len(source_bytes)},
+            **{
+                f"missions/{name}": {"sha256": digest(data), "bytes": len(data)}
+                for name, data in missions.items()
+            },
+        },
         "privacy": {
-            "included": [SOURCE, "non-content launcher hashes and coverage"],
-            "excluded": ["environment", "credentials", "task data", "session data", "absolute repository paths"],
+            "included": [SOURCE, f"{MISSIONS_DIR}/*.md", "non-content launcher hashes and coverage"],
+            "excluded": [
+                "environment",
+                "credentials",
+                "task data",
+                "session data",
+                "absolute repository paths",
+                "operator mission files under $ROZORO_HOME",
+            ],
         },
         "retention": "preserve-until-explicit-operator-deletion",
     }
@@ -278,6 +380,9 @@ def main() -> int:
             with run:
                 metadata["run_id"] = run_id
                 run.write_exclusive(snapshot_name, source_bytes)
+                with run.open_or_create_private_child("missions") as mission_out:
+                    for name, data in missions.items():
+                        mission_out.write_exclusive(name, data)
                 run.write_exclusive("metadata.json", (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode())
                 output = run.path
     except (OSError, UnsafePath) as exc:
@@ -287,4 +392,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except UnsafePath as exc:
+        raise SystemExit(f"cannot create safe artifact: {exc}") from None

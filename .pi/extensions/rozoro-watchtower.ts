@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,7 +28,18 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 
 export default function (pi: ExtensionAPI) {
 	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-	const rozoroHome = process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro");
+	const selectedHome = process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro");
+	let expandedHome = selectedHome === "~" ? homedir()
+		: selectedHome.startsWith("~/") ? join(homedir(), selectedHome.slice(2))
+		: selectedHome;
+	if (expandedHome.startsWith("~")) {
+		try {
+			expandedHome = execFileSync("python3", ["-c", "import os,sys; p=sys.argv[1]; e=os.path.expanduser(p); sys.exit(2) if e.startswith('~') else print(e)", selectedHome], { encoding: "utf8" }).trimEnd();
+		} catch {
+			throw new Error(`unresolved user home path: ${selectedHome}`);
+		}
+	}
+	const rozoroHome = resolve(expandedHome);
 
 	let busClient: RozoroEventBusClient | undefined;
 	let startup: AbortController | undefined;

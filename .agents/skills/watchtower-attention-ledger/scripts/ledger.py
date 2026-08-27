@@ -301,8 +301,11 @@ def log_line(now: dt.datetime, old: str, new: str, note: str) -> str:
 
 
 def resolve_home(value: str | None) -> Path:
-    raw = value or os.environ.get("ROZORO_HOME", "~/.rozoro")
-    return Path(os.path.abspath(os.path.expanduser(raw)))
+    raw = value or os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"
+    try: expanded=os.path.expanduser(raw)
+    except RuntimeError as exc: raise ValueError(f"unresolved user path: {raw}") from exc
+    if raw.startswith("~") and expanded.startswith("~"): raise ValueError(f"unresolved user path: {raw}")
+    return Path(os.path.abspath(expanded))
 
 
 def open_write_items(home: Path) -> tuple[SafeDirectory, SafeDirectory, SafeDirectory]:
@@ -893,7 +896,7 @@ def cmd_prime(args: argparse.Namespace) -> int:
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--home", help="ledger home (default $ROZORO_HOME, else ~/.rozoro)")
+    parser.add_argument("--home", help="ledger home (default $ROZORO_HOME, legacy $RZR_HOME, else ~/.rozoro)")
     parser.add_argument("--now", help=argparse.SUPPRESS)
 
 
@@ -970,7 +973,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.home = resolve_home(getattr(args, "home", None))
+    try: args.home = resolve_home(getattr(args, "home", None))
+    except ValueError as exc: parser.error(str(exc))
     return args.func(args)
 
 

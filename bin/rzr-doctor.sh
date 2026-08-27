@@ -14,7 +14,38 @@
 set -uo pipefail   # deliberately not -e: run all checks, then summarize
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RZR_HOME="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+if command -v python3 >/dev/null 2>&1; then
+  RZR_HOME="$(RZR_HOME_RAW="$RZR_HOME_RAW" python3 - <<'PY' 2>/dev/null
+import os
+raw=os.environ["RZR_HOME_RAW"]; expanded=os.path.expanduser(raw)
+if raw.startswith("~") and expanded.startswith("~"): raise SystemExit(2)
+print(os.path.abspath(expanded))
+PY
+)" || RZR_HOME="<unresolved:$RZR_HOME_RAW>"
+else
+  HOME_PATH_ERROR=
+  case "$RZR_HOME_RAW" in
+    '~') RZR_HOME="$HOME" ;;
+    '~/'*) RZR_HOME="$HOME/${RZR_HOME_RAW#\~/}" ;;
+    '~'*)
+      user_expr=${RZR_HOME_RAW#\~}; user=${user_expr%%/*}
+      suffix=${user_expr#"$user"}
+      user_home=
+      case "$user" in ''|*[!A-Za-z0-9._-]*) ;; *)
+        if command -v getent >/dev/null 2>&1; then
+          user_home=$(getent passwd "$user" 2>/dev/null | awk -F: 'NR==1 {print $6}')
+        elif command -v dscl >/dev/null 2>&1; then
+          user_home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk 'NR==1 {print $2}')
+        fi
+      esac
+      if [ -n "$user_home" ]; then RZR_HOME="$user_home$suffix"
+      else RZR_HOME="<unresolved:$RZR_HOME_RAW>"; HOME_PATH_ERROR=1
+      fi ;;
+    /*) RZR_HOME="$RZR_HOME_RAW" ;;
+    *) RZR_HOME="$PWD/$RZR_HOME_RAW" ;;
+  esac
+fi
 bad=0; ok=0
 pass() { printf '  \033[32m ok \033[0m %s\n' "$1"; ok=$((ok + 1)); }
 warn() { printf '  \033[33mwarn\033[0m %s\n' "$1"; }
@@ -25,6 +56,9 @@ echo "  home: $RZR_HOME"
 echo "  bin:  $BIN"
 
 echo "dependencies:"
+if [ -n "${HOME_PATH_ERROR:-}" ] || [[ "$RZR_HOME" == '<unresolved:'* ]]; then
+  fail "unresolved user path: $RZR_HOME_RAW"
+fi
 for c in herdr jq; do
   if command -v "$c" >/dev/null 2>&1; then pass "$c ($(command -v "$c"))"
   else fail "$c not found on PATH"; fi

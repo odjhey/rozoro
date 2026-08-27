@@ -34,8 +34,7 @@ and observations, never system truth.**
 
 ## Run
 
-From this skill directory (all subcommands accept `--home`, default `$ROZORO_HOME` then
-`~/.rozoro`):
+From this skill directory (all subcommands accept `--home`; otherwise the one shared namespace is the first nonempty public `ROZORO_HOME`, legacy `RZR_HOME`, then `$HOME/.rozoro`). Selected and explicit homes receive leading `~`/supported `~user` expansion and one lexical absolute normalization:
 
 ```bash
 # record a surfaced edge (supersedes an existing open/deferred item for the same task+reason)

@@ -8,8 +8,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
-from lib.rozoro_artifacts.safe_fs import SafeDirectory
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, trusted_source_metadata
 
 REPO = Path(__file__).resolve().parents[2]
 POLICY_SCRIPT = REPO / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
@@ -64,18 +65,23 @@ class DatedArtifactSkillTests(unittest.TestCase):
     def assert_private_tree(self, run: Path) -> None:
         for directory in (run, run.parent, run.parent.parent, run.parent.parent.parent):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, directory)
-        for child in run.iterdir():
-            self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o600, child)
+        for child in run.rglob("*"):
+            expected = 0o700 if child.is_dir() else 0o600
+            self.assertEqual(stat.S_IMODE(child.stat().st_mode), expected, child)
 
     def test_policy_snapshot_captures_current_source_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             source = checkout / "templates/watchtower.md"
             current = b"current working-tree policy\n"
             source.write_bytes(current)
+            mission_bytes = b"current delivery mission policy\n"
+            triage_bytes = b"current triage mission policy\n"
+            (checkout / "templates/missions/delivery.md").write_bytes(mission_bytes)
+            (checkout / "templates/missions/triage.md").write_bytes(triage_bytes)
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             artifact_root = root / "artifacts"
@@ -85,6 +91,8 @@ class DatedArtifactSkillTests(unittest.TestCase):
             fake_git.write_text(
                 "#!/bin/sh\n"
                 "case \"$*\" in\n"
+                "  *'HEAD:templates/missions/delivery.md'*) printf '%040d\\n' 4 ;;\n"
+                "  *'HEAD:templates/missions/triage.md'*) printf '%040d\\n' 5 ;;\n"
                 "  *'HEAD:templates/watchtower.md'*) printf '%040d\\n' 2 ;;\n"
                 "  *'rev-parse HEAD'*) printf '%040d\\n' 1 ;;\n"
                 "  *'hash-object'*) printf '%040d\\n' 3 ;;\n"
@@ -121,13 +129,30 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertEqual(first.parent.name, "2026-08-24")
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
+            self.assertEqual((first / "missions/delivery.md").read_bytes(), mission_bytes)
+            self.assertEqual((first / "missions/triage.md").read_bytes(), triage_bytes)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v8")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v9")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
+            self.assertEqual(metadata["default_mission"], "delivery")
+            mission_meta = metadata["missions"]["templates/missions/delivery.md"]
+            self.assertEqual(mission_meta["mission"], "delivery")
+            self.assertEqual(mission_meta["sha256"], hashlib.sha256(mission_bytes).hexdigest())
+            self.assertEqual(
+                mission_meta["composed_policy_sha256"],
+                hashlib.sha256(current + mission_bytes).hexdigest(),
+            )
+            self.assertFalse(mission_meta["matches_git_commit"])
+            self.assertEqual(metadata["files"]["missions/delivery.md"]["bytes"], len(mission_bytes))
+            triage_meta = metadata["missions"]["templates/missions/triage.md"]
+            self.assertEqual(triage_meta["sha256"], hashlib.sha256(triage_bytes).hexdigest())
+            self.assertEqual(triage_meta["composed_policy_sha256"], hashlib.sha256(current + triage_bytes).hexdigest())
+            self.assertEqual(metadata["files"]["missions/triage.md"]["bytes"], len(triage_bytes))
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
             self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
-            self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v1")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v2")
+            self.assertEqual(metadata["harness_coverage"]["mission_sources"]["operator_status"], "not-captured")
             self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
@@ -154,13 +179,95 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertNotEqual(substring_only.returncode, 0)
             self.assertIn("strict shipped launcher contract", substring_only.stderr)
 
+    def test_source_owner_predicate_rejects_synthetic_foreign_uid(self) -> None:
+        owned = SimpleNamespace(st_dev=1, st_ino=2, st_mode=stat.S_IFREG | 0o644, st_uid=os.geteuid(), st_nlink=1)
+        foreign = SimpleNamespace(st_dev=1, st_ino=2, st_mode=stat.S_IFREG | 0o644, st_uid=os.geteuid() + 1, st_nlink=1)
+        self.assertTrue(trusted_source_metadata(owned, owned, os.geteuid()))
+        self.assertFalse(trusted_source_metadata(owned, foreign, os.geteuid()))
+
+    @unittest.skipUnless(os.environ.get("ROZORO_FOREIGN_OWNED_FIXTURE"),
+                         "no pre-existing safe foreign-owned fixture; no privileged OS workaround permitted")
+    def test_foreign_owner_integration_when_fixture_is_provided(self) -> None:
+        self.assertNotEqual(Path(os.environ["ROZORO_FOREIGN_OWNED_FIXTURE"]).stat().st_uid, os.geteuid())
+
+    def test_policy_snapshot_rejects_unsafe_source_metadata_and_mission_names(self) -> None:
+        def fixture(root: Path) -> Path:
+            checkout = root / "checkout"
+            (checkout / "templates/missions").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (checkout / "templates/watchtower.md").write_text("core\n")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
+            return checkout
+
+        mutations = {
+            "writable-core": lambda checkout: (checkout / "templates/watchtower.md").chmod(0o666),
+            "hardlinked-mission": lambda checkout: os.link(checkout / "templates/missions/delivery.md", checkout / "mission-link"),
+            "writable-directory": lambda checkout: (checkout / "templates/missions").chmod(0o777),
+            "invalid-mission-name": lambda checkout: (checkout / "templates/missions/bad name.md").write_text("bad\n"),
+            "hardlinked-launcher": lambda checkout: os.link(checkout / "bin/rzr-pi-watchtower.sh", checkout / "launcher-link"),
+            "fifo-mission": lambda checkout: ((checkout / "templates/missions/delivery.md").unlink(), os.mkfifo(checkout / "templates/missions/delivery.md")),
+            "fifo-core": lambda checkout: ((checkout / "templates/watchtower.md").unlink(), os.mkfifo(checkout / "templates/watchtower.md")),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); checkout = fixture(root); mutate(checkout)
+                result = subprocess.run(["python3", str(POLICY_SCRIPT), "--repo-root", str(checkout),
+                                         "--artifact-root", str(root / "artifacts")],
+                                        capture_output=True, text=True, check=False, timeout=3)
+                self.assertNotEqual(result.returncode, 0, label)
+
+    def test_source_regular_to_fifo_swap_is_bounded_on_actual_opened_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "delivery.md"
+            source.write_text("mission\n")
+            probe = root / "probe.py"
+            probe.write_text("""
+import os, sys
+from pathlib import Path
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath
+root=Path(sys.argv[1]); original=os.open; swapped=False
+def racing_open(path, flags, *args, **kwargs):
+    global swapped
+    if path == 'delivery.md' and kwargs.get('dir_fd') is not None and not swapped:
+        swapped=True; (root/path).unlink(); os.mkfifo(root/path)
+    return original(path, flags, *args, **kwargs)
+os.open=racing_open
+try:
+    with SafeDirectory.open_path(root, create=False) as directory:
+        directory.read_source_regular('delivery.md')
+except UnsafePath:
+    raise SystemExit(0)
+raise SystemExit(9)
+""")
+            env = dict(os.environ, PYTHONPATH=str(REPO))
+            result = subprocess.run(["python3", str(probe), str(root)], env=env,
+                                    capture_output=True, text=True, timeout=2, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(stat.S_ISFIFO(source.lstat().st_mode))
+
+    def test_policy_pair_grammar_matrix(self) -> None:
+        import runpy
+        checker = runpy.run_path(str(POLICY_SCRIPT))["pi_launcher_contract_has_policy"]
+        def source(values: list[str]) -> bytes:
+            rendered=" ".join(f'--append-system-prompt "{value}"' for value in values)
+            return (f'args=({rendered})\nexec env ROZORO_WATCHTOWER=1 pi "${{args[@]}}" "$@"\n').encode()
+        core="$ROOT/templates/watchtower.md"; mission="$MISSION_FILE"
+        self.assertTrue(checker(source([core, mission])))
+        for values in ([mission,core],[core,core],[mission,mission],[core,mission,mission],[core],[mission],[]):
+            with self.subTest(values=values): self.assertFalse(checker(source(list(values))))
+        self.assertFalse(checker(b'args=(--approve)\ndecoy=(--append-system-prompt "$ROOT/templates/watchtower.md" --append-system-prompt "$MISSION_FILE")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'))
+
     def test_policy_coverage_requires_policy_on_array_consumed_by_pi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n", encoding="utf-8")
             (checkout / "bin/rzr-claude-watchtower.sh").write_text(
                 'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
             )
@@ -265,10 +372,11 @@ class DatedArtifactSkillTests(unittest.TestCase):
             root = Path(temporary).resolve()
             checkout = root / "checkout"
             held = root / "checkout-held"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             policy = b"held policy bytes\n"
             (checkout / "templates/watchtower.md").write_bytes(policy)
+            (checkout / "templates/missions/delivery.md").write_bytes(b"held mission bytes\n")
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
@@ -311,9 +419,10 @@ class DatedArtifactSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n", encoding="utf-8")
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
@@ -583,6 +692,11 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertNotEqual(policy_alias_result.returncode, 0)
             self.assertIn("symlink", policy_alias_result.stderr)
             self.assertFalse((real / "policy-artifacts").exists())
+
+    def test_safe_directory_rejects_unresolved_leading_user_expression(self) -> None:
+        unresolved = "~rozoro-user-that-does-not-exist-129/artifacts"
+        with self.assertRaisesRegex(Exception, "unresolved user path"):
+            SafeDirectory.open_path(unresolved, create=True)
 
     def test_directory_descriptors_resist_pathname_swap_after_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

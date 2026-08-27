@@ -21,7 +21,15 @@ RZR_BIN="$(cd "$(dirname "$RZR_LIB_SRC")" && pwd)"
 # Home for all on-disk state. Defaults to ~/.rozoro so the driver's state lives
 # outside any one checkout and survives a restart. Precedence: ROZORO_HOME (the
 # public knob) > RZR_HOME > default.
-RZR_HOME="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME="$(RZR_HOME_RAW="$RZR_HOME_RAW" python3 - <<'PY'
+import os
+raw=os.environ["RZR_HOME_RAW"]; expanded=os.path.expanduser(raw)
+if raw.startswith("~") and expanded.startswith("~"): raise SystemExit("rzr: unresolved user home path")
+print(os.path.abspath(expanded))
+PY
+)"
+export ROZORO_HOME="$RZR_HOME"
 RZR_STATE="$RZR_HOME/state"
 # Per-task folders: the durable record of a task's INPUT (brief.md), append-only
 # OUTPUT (handoff.md), and resume link (session.json). Data, so it lives under
@@ -31,10 +39,21 @@ RZR_TASKS="$RZR_HOME/tasks"
 # this checkout, not RZR_HOME. Override with RZR_TEMPLATES.
 RZR_REPO="$(cd "$RZR_BIN/.." && pwd)"
 RZR_TEMPLATES="${RZR_TEMPLATES:-$RZR_REPO/templates}"
-[ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
-mkdir -p "$RZR_STATE"
-[ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
-chmod 700 "$RZR_STATE"
+if [ "${RZR_LIB_NO_STATE_INIT:-0}" != 1 ]; then
+  RZR_VALIDATE_HOME="$RZR_HOME" python3 - <<'PY'
+import os, stat
+path=os.environ["RZR_VALIDATE_HOME"]
+try: info=os.stat(path,follow_symlinks=False)
+except FileNotFoundError:
+    os.makedirs(path,mode=0o700); info=os.stat(path,follow_symlinks=False)
+if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
+    raise SystemExit("rzr: unsafe ROZORO_HOME: require an owned owner-private real directory")
+PY
+  [ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
+  mkdir -p "$RZR_STATE"
+  [ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
+  chmod 700 "$RZR_STATE"
+fi
 
 # Task keys and legacy ids are deliberately conservative filesystem components.
 # Existing unsuffixed folders remain valid; unsafe historical names must be
@@ -136,8 +155,8 @@ rzr_render_handoff_protocol() {  # <id>
 
 rzr_die() { echo "rzr: $*" >&2; exit 1; }
 
-command -v herdr >/dev/null 2>&1 || rzr_die "herdr not found on PATH"
-command -v jq    >/dev/null 2>&1 || rzr_die "jq not found on PATH"
+[ "${RZR_LIB_SKIP_HERDR_CHECK:-0}" = 1 ] || command -v herdr >/dev/null 2>&1 || rzr_die "herdr not found on PATH"
+command -v jq >/dev/null 2>&1 || rzr_die "jq not found on PATH"
 
 # --- herdr invocation ------------------------------------------------------
 # Talks to the running herdr server over its control socket. A single local
@@ -293,54 +312,75 @@ rzr_wtpreset_path() { rzr_validate_wtpreset_name "$1"; printf '%s/%s.json' "$RZR
 rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
   local name="$1"; rzr_validate_wtpreset_name "$name"
   RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
-import hashlib, json, math, os, stat
-path=os.environ["RZR_WTP_DIR"]; before=os.stat(path,follow_symlinks=False)
-root = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("preset directory changed during open")
+import hashlib, json, math, os, stat, sys
+def controlled_excepthook(kind, value, trace):
+    if issubclass(kind, OSError): print("rzr: watchtower preset storage is unsafe",file=sys.stderr); return
+    sys.__excepthook__(kind, value, trace)
+sys.excepthook=controlled_excepthook
+path=os.environ["RZR_WTP_DIR"]; nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
+def die(family): raise SystemExit("rzr: watchtower preset "+family)
+try: before=os.stat(path,follow_symlinks=False)
+except FileNotFoundError: die("not found")
+if not stat.S_ISDIR(before.st_mode) or before.st_uid!=os.geteuid() or stat.S_IMODE(before.st_mode)&0o077: die("storage is unsafe")
+try: root=os.open(path,os.O_RDONLY|directory|nofollow)
+except OSError: die("storage is unsafe")
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); die("storage is unsafe")
 try:
-    filename=os.environ["RZR_WTP_FILE"]; before=os.stat(filename,dir_fd=root,follow_symlinks=False)
-    fd = os.open(filename, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=root)
+    filename=os.environ["RZR_WTP_FILE"]
+    try: before=os.stat(filename,dir_fd=root,follow_symlinks=False)
+    except FileNotFoundError: die("not found")
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or
+            before.st_nlink!=1 or stat.S_IMODE(before.st_mode)!=0o600):
+        die("storage is unsafe")
+    try: fd=os.open(filename,os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=root)
+    except OSError: die("storage is unsafe")
     try:
-        info = os.fstat(fd)
-        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit("preset changed during open")
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
-            raise SystemExit("preset is not a singly-linked owned regular file")
-        chunks = []
+        info=os.fstat(fd)
+        if ((before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino) or
+                not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or
+                info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=0o600):
+            die("storage is unsafe")
+        chunks=[]
         while True:
-            chunk = os.read(fd, 65536)
+            chunk=os.read(fd,65536)
             if not chunk: break
             chunks.append(chunk)
     finally: os.close(fd)
 finally: os.close(root)
-raw = b"".join(chunks)
+raw=b"".join(chunks)
 def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
 try: doc = json.loads(raw, parse_constant=reject_constant)
-except (UnicodeError, ValueError): raise SystemExit("invalid preset JSON")
-if not isinstance(doc, dict): raise SystemExit("preset must be an object")
+except (UnicodeError, ValueError): die("content is invalid")
+if not isinstance(doc, dict): die("content is invalid")
 def finite_json(value):
     if isinstance(value, float): return math.isfinite(value)
     if isinstance(value, dict): return all(finite_json(item) for item in value.values())
     if isinstance(value, list): return all(finite_json(item) for item in value)
     return True
-if not finite_json(doc): raise SystemExit("preset contains a non-finite number")
-for key in ("harness", "model", "effort", "permission_mode", "notes"):
-    if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
-for key in ("harness", "model", "effort", "permission_mode", "notes"):
-    if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
+if not finite_json(doc): die("content is invalid")
+for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
+    if key in doc and not isinstance(doc[key], str): die("content is invalid")
+for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
+    if len(doc.get(key, "")) > 120: die("content is invalid")
     if "=" in doc.get(key, "") or any(ord(char) < 32 or ord(char) == 127 for char in doc.get(key, "")):
-        raise SystemExit("preset field contains unsafe metadata characters")
+        die("content is invalid")
+mission = doc.get("mission", "")
+if mission:
+    safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    if mission in (".", "..") or any(char not in safe for char in mission):
+        die("content is invalid")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
-        raise SystemExit("invalid preset field type")
+        die("content is invalid")
 if "version" in doc:
     version=doc["version"]
-    if len(str(version)) > 120: raise SystemExit("preset version is too long")
+    if len(str(version)) > 120: die("content is invalid")
     if isinstance(version,str) and ("=" in version or any(ord(char) < 32 or ord(char) == 127 for char in version)):
-        raise SystemExit("preset version contains unsafe metadata characters")
-    if isinstance(version,(int,float)) and abs(version) > 2**53-1: raise SystemExit("preset version exceeds JSON numeric precision")
-if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
+        die("content is invalid")
+    if isinstance(version,(int,float)) and abs(version) > 2**53-1: die("content is invalid")
+if doc.get("harness", "") not in ("claude", "pi"): die("content is invalid")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
-    raise SystemExit("invalid preset effort")
+    die("content is invalid")
 print(json.dumps({"document": doc, "sha256": hashlib.sha256(raw).hexdigest()}, separators=(",", ":"), allow_nan=False))
 PY
 }
@@ -348,6 +388,98 @@ rzr_wtpreset_exists() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
 rzr_wtpreset_json() { rzr_wtpreset_resolve "$1" | jq -c '.document'; }
 rzr_wtpreset_field() { rzr_wtpreset_resolve "$1" | jq -r --arg k "$2" '.document[$k] // empty' 2>/dev/null; }
 rzr_wtpreset_validate() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
+
+# Resolve and validate the mandatory core plus exactly one mission. Every path
+# component below its trust root is opened descriptor-relative without following
+# links; policy bytes and identities come from those validated descriptors.
+rzr_watchtower_policy_resolve() {  # <checkout> <effective-home> <mission>
+  RZR_POLICY_ROOT="$1" RZR_POLICY_HOME="$2" RZR_POLICY_MISSION="$3" python3 - <<'PY'
+import hashlib, json, os, stat, sys
+def die(message): raise SystemExit("rzr: "+message)
+def controlled_excepthook(kind, value, trace):
+    if issubclass(kind, OSError): print("rzr: watchtower policy source is unsafe or unreadable",file=sys.stderr); return
+    sys.__excepthook__(kind, value, trace)
+sys.excepthook=controlled_excepthook
+nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0); nonblock=getattr(os,"O_NONBLOCK",0)
+uid=os.geteuid(); mission=os.environ["RZR_POLICY_MISSION"]
+safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+if not (1 <= len(mission) <= 120) or mission in (".","..") or any(c not in safe for c in mission):
+    die("unsafe mission name")
+def root(path, private, label):
+    try: before=os.stat(path,follow_symlinks=False)
+    except FileNotFoundError: return None
+    if not stat.S_ISDIR(before.st_mode) or before.st_uid!=uid or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
+        die(f"unsafe {label}")
+    try: fd=os.open(path,os.O_RDONLY|directory|nofollow)
+    except OSError: die(f"unsafe {label}")
+    now=os.fstat(fd)
+    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); die(f"changed {label}")
+    return fd
+def child(parent,name,private,label,missing=False):
+    try: before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    except FileNotFoundError:
+        if missing:return None
+        die(f"missing {label}")
+    if not stat.S_ISDIR(before.st_mode) or before.st_uid!=uid or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
+        die(f"unsafe {label}")
+    try: fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent)
+    except OSError: die(f"unsafe {label}")
+    now=os.fstat(fd)
+    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); die(f"changed {label}")
+    return fd
+def text(raw,label):
+    try: value=raw.decode("utf-8","strict")
+    except UnicodeError: die(f"invalid UTF-8 {label}")
+    if not value or value.startswith("\ufeff") or not any(not c.isspace() for c in value): die(f"empty or whitespace-only {label}")
+    if any((ord(c)<32 and c not in "\t\n\r") or 0x7f<=ord(c)<=0x9f for c in value): die(f"forbidden control in {label}")
+def file(parent,name,private,label,missing=False):
+    try: before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    except FileNotFoundError:
+        if missing:return None
+        die(f"missing {label}")
+    if not stat.S_ISREG(before.st_mode) or before.st_uid!=uid or before.st_nlink!=1 or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
+        die(f"unsafe {label}")
+    try: fd=os.open(name,os.O_RDONLY|nofollow|nonblock,dir_fd=parent)
+    except OSError: die(f"unsafe {label}")
+    try:
+        info=os.fstat(fd)
+        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): die(f"changed {label}")
+        chunks=[]
+        while True:
+            chunk=os.read(fd,65536)
+            if not chunk:break
+            chunks.append(chunk)
+        raw=b"".join(chunks); text(raw,label)
+        return raw,f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}:{hashlib.sha256(raw).hexdigest()}"
+    finally: os.close(fd)
+checkout=root(os.environ["RZR_POLICY_ROOT"],False,"checkout root")
+if checkout is None: die("missing checkout root")
+try:
+    templates=child(checkout,"templates",False,"templates directory")
+    try:
+        core=file(templates,"watchtower.md",False,"watchtower core")
+        missions=child(templates,"missions",False,"shipped missions directory")
+        try: shipped=file(missions,mission+".md",False,"shipped mission",True)
+        finally: os.close(missions)
+    finally: os.close(templates)
+finally: os.close(checkout)
+operator=None; home=root(os.environ["RZR_POLICY_HOME"],True,"Rozoro home")
+if home is not None:
+    try:
+        md=child(home,"watchtower-missions",True,"operator missions directory",True)
+        if md is not None:
+            try: operator=file(md,mission+".md",True,"operator mission",True)
+            finally: os.close(md)
+    finally: os.close(home)
+if shipped is not None and operator is not None: die("ambiguous mission")
+selected=shipped or operator
+if selected is None: die("missing mission")
+source="shipped" if shipped is not None else "operator"; cbytes,cid=core; mbytes,mid=selected
+print(json.dumps({"core_identity":cid,"mission_identity":mid,"core_sha256":hashlib.sha256(cbytes).hexdigest(),
+ "mission_sha256":hashlib.sha256(mbytes).hexdigest(),"policy_sha256":hashlib.sha256(cbytes+mbytes).hexdigest(),
+ "mission_source":source},separators=(",",":")))
+PY
+}
 
 rzr_file_identity() { python3 - "$1" <<'PY'
 import hashlib, os, stat, sys
@@ -365,6 +497,24 @@ finally: os.close(fd)
 PY
 }
 rzr_sha256_file() { rzr_file_identity "$1" | awk -F: '{print $5}'; }
+
+# SHA-256 of the exact concatenated bytes of the given files, in order. Used for
+# the composed watchtower policy (core + mission) delivered at launch.
+rzr_sha256_concat() { python3 - "$@" <<'PY'
+import hashlib, os, stat, sys
+digest = hashlib.sha256()
+for path in sys.argv[1:]:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode): raise SystemExit("not a regular file")
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            digest.update(chunk)
+    finally: os.close(fd)
+print(digest.hexdigest())
+PY
+}
 
 # Enumerate only records reached through owned, private, no-follow directory
 # descriptors. An optional driver id selects one record. Malformed/unsafe state
@@ -412,8 +562,18 @@ try:
                 if not isinstance(data,dict) or data.get("driver_id") != name or not safe(data.get("driver_id")): continue
                 if "schema" in data and (not isinstance(data["schema"],int) or isinstance(data["schema"],bool) or data["schema"]!=1): continue
                 if "owner_pid" in data and (not isinstance(data["owner_pid"],str) or not data["owner_pid"].isdigit() or not 1<=int(data["owner_pid"])<=2**63-1): continue
-                if any(key in data and not isinstance(data[key],str) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
-                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in ("identity","watchtower_name","harness","backend","created","policy_sha256","registration_id")): continue
+                policy_keys=("policy_sha256","policy_core_sha256","policy_mission_name","policy_mission_source","policy_mission_sha256")
+                strings=("identity","watchtower_name","harness","backend","created","registration_id")+policy_keys
+                if any(key in data and not isinstance(data[key],str) for key in strings): continue
+                if any(isinstance(data.get(key),str) and not safe(data[key]) for key in strings): continue
+                present=[key in data for key in policy_keys]
+                # Legacy targets may carry only policy_sha256; new complete tuples
+                # are validated strictly while remaining readable for dispatch.
+                if present[0] and not any(present[1:]) and not data["policy_sha256"]: continue
+                if any(present[1:]) and not all(present): continue
+                if all(present):
+                    mission=data["policy_mission_name"]; allowed="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+                    if data.get("harness")!="pi" or any(len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")) or data["policy_mission_source"] not in ("shipped","operator") or not mission or mission in (".","..") or any(c not in allowed for c in mission): continue
                 if data.get("schema") == 1 and (not safe(data.get("registration_id")) or not data["registration_id"]): continue
                 if "preset" in data:
                     preset=data["preset"]

@@ -31,7 +31,12 @@ from lib.rozoro_monitor.client import _open_home
 
 
 def home_path() -> Path:
-    return Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser().absolute()
+    raw = os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"
+    try: expanded = os.path.expanduser(raw)
+    except RuntimeError: raise SystemExit(f"rzr: unresolved user home path: {raw}") from None
+    if raw.startswith("~") and expanded.startswith("~"):
+        raise SystemExit(f"rzr: unresolved user home path: {raw}")
+    return Path(expanded).absolute()
 
 
 def down(home: Path, error: str | None = None) -> dict:

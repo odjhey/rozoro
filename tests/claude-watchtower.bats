@@ -5,6 +5,8 @@ load test_helper/common
   export PYTHONDONTWRITEBYTECODE=1
   if [ -x /opt/homebrew/bin/python3 ]; then mkdir "$TEST_ROOT/pybin"; ln -s /opt/homebrew/bin/python3 "$TEST_ROOT/pybin/python3"; export PATH="$TEST_ROOT/pybin:$PATH"; fi
   export HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.1.241 FAKE_CLAUDE_LOG="$TEST_ROOT/claude.log" FAKE_CLAUDE_SLEEP=10
+  export ROZORO_WT_POLICY_SHA256="$(printf 'a%.0s' $(seq 1 64))" ROZORO_WT_POLICY_CORE_SHA256="$(printf 'b%.0s' $(seq 1 64))"
+  export ROZORO_WT_POLICY_MISSION_NAME=stale ROZORO_WT_POLICY_MISSION_SOURCE=operator ROZORO_WT_POLICY_MISSION_SHA256="$(printf 'c%.0s' $(seq 1 64))"
   fake_pane p1 idle claude true
   chmod 700 "$ROZORO_HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks"
   "$REPO_ROOT/bin/rozoro" monitor start >/dev/null || { cat "$ROZORO_HOME/monitor.log" >&2; false; }
@@ -13,6 +15,8 @@ load test_helper/common
   [ -n "${session:-}" ] || { cat "$TEST_ROOT/launcher.log" >&2; cat "$FAKE_CLAUDE_LOG" >&2; false; }
   dir="$ROZORO_HOME/watchtowers/claude-$session"; [ -f "$dir/.event-bus-authority" ] || { cat "$TEST_ROOT/launcher.log" >&2; find "$dir" -maxdepth 2 -ls >&2; cat "$ROZORO_HOME/monitor.log" >&2; false; }
   ready="$(find "$dir" -name 'poller-ready.*' -type f | head -1)"; [ -s "$ready" ]; poller="$(cat "$ready")"; kill -0 "$poller"
+  [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/target.json")" -eq 0 ]
+  [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/registrations.jsonl")" -eq 0 ]
   settings="$dir/claude-event-settings.json"; command="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")"
   printf '{"hook_event_name":"SessionStart","session_id":"%s"}\n' "$session" | sh -c "$command"
   old_adapter="$(python3 - "$ROZORO_HOME/monitor.db" <<'PY2'
