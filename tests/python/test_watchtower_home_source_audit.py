@@ -387,12 +387,15 @@ class HomeSourceAuditTests(unittest.TestCase):
         self.assertEqual(git_errors, [])
         inventory = load_fixture()
         self.assertEqual((len(inventory["direct_default"]), len(inventory["inherited_explicit_only"]), len(inventory["excluded"])), (10, 8, 1))
-        self.assertEqual(95, len(manifest), "bound 94 + H2 monitor matrix source")
+        self.assertEqual(
+            97, len(manifest),
+            "bound 94 + H2 monitor matrix + H3 extension matrix/child TypeScript sources",
+        )
         for names in (manifest, git_names, archive_names):
             self.assertEqual(names, sorted(set(names)))
-            self.assertEqual(len(names), 95)
+            self.assertEqual(len(names), 97)
             self.assertEqual(names, manifest)
-        self.assertEqual((len(manifest), len(git_names), len(archive_names)), (95, 95, 95))
+        self.assertEqual((len(manifest), len(git_names), len(archive_names)), (97, 97, 97))
         for mode in ("auto", "archive"):
             sources, errors = self.current(mode)
             self.assertEqual(audit(load_fixture(), sources, errors), [])
