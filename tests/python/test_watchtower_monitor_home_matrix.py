@@ -6,8 +6,10 @@ D=default, R=relative, T=tilde, O=explicit override, X=XDG decoy.
 import json
 import os
 import signal
+import shutil
 import socket
 import subprocess
+import threading
 import sys
 import tempfile
 import time
@@ -33,10 +35,11 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         self.cwd = self.root / "cwd"; self.cwd.mkdir(mode=0o700)
         self.processes = []
         self.homes = set()
+        self.started_at = time.time()
+        self.preexisting_locks = {p.resolve() for p in ROOT.rglob("monitor.lock")}
 
     def tearDown(self):
-        # This cleanup is intentionally unconditional: failed assertions and
-        # timeouts must not leave a daemon or AF_UNIX endpoint behind.
+        # Foreground children are unambiguously ours.
         for process in self.processes:
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
@@ -45,8 +48,37 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
                     process.kill(); process.wait(timeout=3)
             for stream in (process.stdout, process.stderr):
                 if stream: stream.close()
-        for home in self.homes:
-            self.assertFalse((home / "monitor.sock").exists(), f"surviving socket: {home}")
+        # Detached `monitor start` loses its Popen handle. Discover every home
+        # selected beneath this test's new private root (including precedence
+        # mutants), but never inspect or signal a pre-existing user home.
+        owned = []
+        candidates = list(self.root.rglob("monitor.lock")) + list(ROOT.rglob("monitor.lock"))
+        for lock in candidates:
+            try:
+                resolved = lock.resolve()
+                record = json.loads(lock.read_text()); pid = record["pid"]
+                if (resolved not in self.preexisting_locks and
+                        lock.stat().st_mtime + 1 >= self.started_at and isinstance(pid, int)):
+                    owned.append((lock.parent, pid))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        for home, pid in owned:
+            try: os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try: os.kill(pid, 0)
+                except ProcessLookupError: break
+                time.sleep(.03)
+            else:
+                os.kill(pid, signal.SIGKILL)
+            self.homes.add(home)
+            if home.is_relative_to(ROOT) and not home.is_relative_to(self.root):
+                shutil.rmtree(home, ignore_errors=True)
+        survivors = [str(p) for p in self.root.rglob("monitor.sock")]
+        survivors += [str(p) for p in ROOT.rglob("monitor.sock")
+                      if p.parent.joinpath("monitor.lock").resolve() not in self.preexisting_locks]
+        self.assertEqual(survivors, [], f"surviving owned sockets: {survivors}")
         self.tmp.cleanup()
 
     def env(self, bits=None):
@@ -91,49 +123,105 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
                     self.assertEqual(expected.stat().st_mode & 0o777, 0o700)
             # O kills the mutant that consults environment before an API override.
             with patch.dict(os.environ, self.env({"ROZORO_HOME": "wrong"}), clear=True):
-                explicit = self.root / "explicit"
-                path, fd = _open_home(explicit)
-                try: self.assertEqual(path, explicit)
-                finally: os.close(fd)
+                for cell, raw, explicit in (("O-relative", "explicit/relative", self.cwd / "explicit/relative"),
+                                            ("O-tilde", "~/explicit-tilde", self.user / "explicit-tilde")):
+                    with self.subTest(cell=cell):
+                        path, fd = _open_home(raw)
+                        try: self.assertEqual(path, explicit)
+                        finally: os.close(fd)
+            # A real passwd expansion row kills expand-$HOME-only mutants.
+            import pwd
+            username = pwd.getpwuid(os.getuid()).pw_name
+            account = Path(pwd.getpwnam(username).pw_dir)
+            with patch.dict(os.environ, self.env(), clear=True):
+                self.assertEqual(resolve_home(f"~{username}/.rozoro-h2-probe"), account / ".rozoro-h2-probe")
+                (account / ".rozoro-h2-probe").rmdir()
         finally: os.chdir(old)
 
-    def test_real_monitor_cli_start_status_stop_reset_obeys_public_precedence(self):
-        chosen = self.cwd / "chosen"
-        env = self.env({"ROZORO_HOME": "chosen", "RZR_HOME": "mutant-legacy"})
-        started = self.command([sys.executable, str(MONITOR), "start"], env)
-        self.assertEqual(started.returncode, 0, started.stderr)
-        self.homes.add(chosen)
-        try:
-            status = self.command([sys.executable, str(MONITOR), "status", "--json"], env)
-            self.assertEqual(status.returncode, 0, status.stderr)
-            self.assertEqual(json.loads(status.stdout)["socket"], str(chosen / "monitor.sock"))
-            self.assertFalse((self.cwd / "mutant-legacy/monitor.sock").exists())
-            stopped = self.command([sys.executable, str(MONITOR), "stop"], env)
-            self.assertEqual(stopped.returncode, 0, stopped.stderr)
-            reset = self.command([sys.executable, str(MONITOR), "reset", "--force"], env)
-            self.assertEqual(reset.returncode, 0, reset.stderr)
-            self.assertFalse((chosen / "monitor.db").exists())
-        finally:
-            # Detached start is not in self.processes, so use the real stop path
-            # even after a failed assertion, then verify endpoint disappearance.
-            self.command([sys.executable, str(MONITOR), "stop"], env)
-            deadline = time.monotonic() + 3
-            while (chosen / "monitor.sock").exists() and time.monotonic() < deadline: time.sleep(.03)
+    def test_real_monitor_cli_start_status_stop_reset_complete_matrix(self):
+        rows = {
+            "P": ({"ROZORO_HOME": "mp"}, self.cwd / "mp"),
+            "L": ({"RZR_HOME": "ml"}, self.cwd / "ml"),
+            "B": ({"ROZORO_HOME": "mb", "RZR_HOME": "decoy-b"}, self.cwd / "mb"),
+            "E": ({"ROZORO_HOME": "", "RZR_HOME": "me"}, self.cwd / "me"),
+            "D": ({}, self.user / ".rozoro"),
+            "R": ({"ROZORO_HOME": "mr/child"}, self.cwd / "mr/child"),
+            "T": ({"ROZORO_HOME": "~/mt"}, self.user / "mt"),
+            "X": ({"ROZORO_HOME": "mx", "XDG_CONFIG_HOME": str(self.root / "xdg-wrong")}, self.cwd / "mx"),
+        }
+        for cell, (bits, chosen) in rows.items():
+            env = self.env(bits); self.homes.add(chosen)
+            try:
+                started = self.command([sys.executable, str(MONITOR), "start"], env)
+                self.assertEqual(started.returncode, 0, f"{cell}: {started.stderr}")
+                status = self.command([sys.executable, str(MONITOR), "status", "--json"], env)
+                self.assertEqual(status.returncode, 0, f"{cell}: {status.stderr}")
+                self.assertEqual(json.loads(status.stdout)["socket"], str(chosen / "monitor.sock"))
+            finally:
+                self.command([sys.executable, str(MONITOR), "stop"], env)
+            if cell == "B": self.assertFalse((self.cwd / "decoy-b/monitor.sock").exists())
+            if cell == "X": self.assertFalse((self.root / "xdg-wrong/monitor.sock").exists())
+        reset_home = self.cwd / "reset"
+        reset_home.mkdir(mode=0o700); (reset_home / "monitor.db").write_text("fixture")
+        reset = self.command([sys.executable, str(MONITOR), "reset", "--force"], self.env({"ROZORO_HOME": "reset"}))
+        self.assertEqual(reset.returncode, 0, reset.stderr); self.assertFalse((reset_home / "monitor.db").exists())
 
-    def test_real_rozorod_parser_home_override_and_monitor_server_identity(self):
-        explicit = self.root / "O-explicit"
-        env = self.env({"ROZORO_HOME": str(self.root / "mutant-env")})
-        process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(explicit)],
-                                   cwd=self.cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.processes.append(process)
-        status = self.wait_up(explicit, self.env({"ROZORO_HOME": str(explicit)}))
-        self.assertEqual(status["socket"], str(explicit / "monitor.sock"))
-        self.assertFalse((self.root / "mutant-env/monitor.sock").exists())
-        server = MonitorServer(explicit)
-        try: self.assertEqual(server.home, explicit)
+    def test_real_rozorod_parser_environment_and_explicit_relative_tilde_rows(self):
+        rows = (("P", None, {"ROZORO_HOME": "dp", "RZR_HOME": "wrong"}, self.cwd / "dp"),
+                ("L", None, {"RZR_HOME": "dl"}, self.cwd / "dl"),
+                ("O-relative", "do/relative", {"ROZORO_HOME": "wrong"}, self.cwd / "do/relative"),
+                ("O-tilde", "~/do-tilde", {"ROZORO_HOME": "wrong"}, self.user / "do-tilde"))
+        for cell, override, bits, expected in rows:
+            command = [sys.executable, str(DAEMON)]
+            if override is not None: command += ["--home", override]
+            process = subprocess.Popen(command, cwd=self.cwd, env=self.env(bits),
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.processes.append(process)
+            status = self.wait_up(expected, self.env({"ROZORO_HOME": str(expected)}))
+            self.assertEqual(status["socket"], str(expected / "monitor.sock"), cell)
+            process.send_signal(signal.SIGTERM); self.assertEqual(process.wait(timeout=3), 0)
+        self.assertFalse((self.cwd / "wrong/monitor.sock").exists())
+        server = MonitorServer(self.cwd / "server-explicit")
+        try: self.assertEqual(server.home, self.cwd / "server-explicit")
         finally:
             if getattr(server, "_home_fd", -1) >= 0:
                 os.close(server._home_fd); server._home_fd = -1
+
+    def test_real_bridge_failure_matrix_and_correlated_timeout_cleanup(self):
+        rows = (("P", {"ROZORO_HOME": "bp"}, self.cwd / "bp"),
+                ("L", {"RZR_HOME": "bl"}, self.cwd / "bl"),
+                ("B", {"ROZORO_HOME": "bb", "RZR_HOME": "wrong"}, self.cwd / "bb"),
+                ("E", {"ROZORO_HOME": "", "RZR_HOME": "be"}, self.cwd / "be"),
+                ("D", {}, self.user / ".rozoro"),
+                ("R", {"ROZORO_HOME": "br/child"}, self.cwd / "br/child"),
+                ("T", {"ROZORO_HOME": "~/bt"}, self.user / "bt"),
+                ("X", {"ROZORO_HOME": "bx", "XDG_CONFIG_HOME": str(self.root / "xdg-bridge")}, self.cwd / "bx"))
+        for cell, bits, selected in rows:
+            selected.mkdir(parents=True, mode=0o700); selected.chmod(0o700)
+            failed = self.command([sys.executable, str(BRIDGE), "status", "--task", "missing"], self.env(bits))
+            self.assertEqual(failed.returncode, 2, cell)
+            self.assertIn(str(selected / "monitor.sock"), failed.stderr)
+            self.assertTrue((selected / "watchtowers").is_dir())
+        # A private AF_UNIX peer accepts the real DaemonFlow request but never
+        # replies. This is the explicit bridge timeout row, with forced cleanup.
+        home = self.cwd / "bridge-timeout"; home.mkdir(mode=0o700); self.homes.add(home)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); connection = None
+        listener.bind(str(home / "monitor.sock")); os.chmod(home / "monitor.sock", 0o600); listener.listen()
+        release = threading.Event()
+        def stall():
+            nonlocal connection
+            connection, _ = listener.accept(); connection.recv(65536); release.wait(5)
+        thread = threading.Thread(target=stall); thread.start()
+        try:
+            timed = self.command([sys.executable, str(BRIDGE), "status", "--task", "timeout"],
+                                 self.env({"ROZORO_HOME": str(home)}), timeout=8)
+            self.assertEqual(timed.returncode, 2); self.assertIn("timed out", timed.stderr)
+        finally:
+            release.set()
+            if connection is not None: connection.close()
+            listener.close(); thread.join(timeout=2)
+            try: (home / "monitor.sock").unlink()
+            except FileNotFoundError: pass
 
     def test_real_bridge_boundary_daemonflow_and_socket_exchange_use_selected_home(self):
         home = self.cwd / "bridge-public"
