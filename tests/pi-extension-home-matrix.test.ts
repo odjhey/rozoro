@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,7 +20,16 @@ async function run(runtime: typeof runtimes[number], cell: string, options: { mo
     let stdout = "", stderr = "";
     child.stdout!.on("data", (chunk) => { stdout += chunk; }); child.stderr!.on("data", (chunk) => { stderr += chunk; });
     const code = await new Promise<number | null>((resolve, reject) => {
-      timer = setTimeout(() => { child!.kill("SIGKILL"); reject(new Error(`${runtime.name}/${cell} timed out`)); }, options.timeoutMs ?? 8000);
+      const failTimeout = () => { child!.kill("SIGKILL"); reject(new Error(`${runtime.name}/${cell} timed out after real session.register write`)); };
+      if (options.mode === "timeout") {
+        const synchronizationDeadline = Date.now() + 8000;
+        const synchronize = () => {
+          if (existsSync(join(fixtureRoot, "ready"))) timer = setTimeout(failTimeout, options.timeoutMs ?? 100);
+          else if (Date.now() >= synchronizationDeadline) { child!.kill("SIGKILL"); reject(new Error(`${runtime.name}/${cell} never reached real session.register write`)); }
+          else timer = setTimeout(synchronize, 10);
+        };
+        synchronize();
+      } else timer = setTimeout(failTimeout, options.timeoutMs ?? 8000);
       child!.once("error", reject); child!.once("exit", resolve);
     });
     assert.equal(code, 0, `${runtime.name}/${cell}: ${stderr || stdout}`);
@@ -53,7 +63,7 @@ for (const runtime of runtimes) {
     console.log(`matrix-result ${runtime.name} ${cells.map((cell) => `${cell}=20/20`).join(" ")}`);
   });
   test(`${runtime.name}: forced timeout and peer-close write race leave no survivors`, { concurrency: false, timeout: 20_000 }, async () => {
-    await assert.rejects(run(runtime, "P", { mode: "timeout", timeoutMs: 500 }), /timed out/);
+    await assert.rejects(run(runtime, "P", { mode: "timeout", timeoutMs: 100 }), /timed out after real session\.register write/);
     await run(runtime, "P", { mode: "peer-close" });
   });
 }
