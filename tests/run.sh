@@ -27,8 +27,13 @@ EOF
   fi
 fi
 
+runtime_uid="$(id -u)"
+runtime_gid="$(id -g)"
+
 "$engine" build \
   --file "$ROOT/tests/Containerfile" \
+  --build-arg "ROZORO_TEST_UID=$runtime_uid" \
+  --build-arg "ROZORO_TEST_GID=$runtime_gid" \
   --tag "$IMAGE" \
   "$ROOT/tests"
 
@@ -40,9 +45,11 @@ run_args=(
   --workdir /workspace
   --volume "$ROOT:/workspace:ro"
   --tmpfs /tmp:rw,exec,nosuid
+  --tmpfs "/home/rozoro-test:rw,exec,nosuid,uid=$runtime_uid,gid=$runtime_gid,mode=700"
   --env HOME=/tmp
   --env TMPDIR=/tmp
-  --user "$(id -u):$(id -g)"
+  --env ROZORO_TEST_NAMED_USER=rozoro-test
+  --user "$runtime_uid:$runtime_gid"
 )
 
 # Rootless Podman on SELinux hosts cannot read a bind mount without relabeling it.
