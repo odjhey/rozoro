@@ -191,6 +191,7 @@ List known tasks:
 | `./bin/rozoro reconcile` | reconcile the changed-task delta since last ACK (`--full` for the complete snapshot) |
 | `./bin/rozoro ack` | advance task open-item acknowledgement |
 | `./bin/rozoro list` | list known tasks and live state |
+| `./bin/rozoro lineage` | replay one agent's full communication history, or index every agent |
 | `./bin/rozoro monitor start\|status\|stop` | operate and inspect `rozorod` |
 | `./bin/rozoro crew list\|show` | inspect crew launch presets |
 | `./bin/rozoro watchtower list\|show\|path\|registered` | inspect watchtower presets and registrations |
@@ -222,6 +223,27 @@ A task currently stores files such as:
 - metadata that maps the Rozoro task key to the current host and harness session.
 
 These files are part of the current implementation. Their format is not a stable public API yet.
+
+### Replaying what an agent was told and said
+
+An agent's conversation is durable but scattered: the prompts it received live in
+the harness transcript, its reports in `handoff.md`, the decisions the watchtower
+took in the attention ledger, and turn boundaries in `monitor.db`. `lineage`
+stitches those back into one ordered record.
+
+```text
+./bin/rozoro lineage                    # every agent, one row each
+./bin/rozoro lineage <task>             # full history for one agent (key or unique prefix)
+./bin/rozoro lineage <task> --full      # do not truncate message bodies
+./bin/rozoro lineage <task> --json      # machine-readable
+./bin/rozoro lineage --drift            # only agents whose counts disagree
+```
+
+Handoff blocks carry no timestamp of their own, so each is anchored to the turn
+boundary it most likely closed and printed with a leading `~`. When the inbound,
+report, and turn counts disagree the header says so: that drift means a prompt
+produced no report, or a report was appended outside a turn. `lineage` only reads;
+it never writes to the stores.
 
 ## Launch presets
 
