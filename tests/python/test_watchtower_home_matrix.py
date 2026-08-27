@@ -226,22 +226,26 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                 self.assertIn(f"home: {expected}", doctor.stdout)
 
             import pwd
-            username = pwd.getpwuid(os.getuid()).pw_name
-            account_home = Path(pwd.getpwnam(username).pw_dir)
-            supported = account_home / f".rzr-pr136-{os.getpid()}"
-            supported.mkdir(mode=0o700)
             try:
-                env = dict(os.environ, HOME=str(home), ROZORO_HOME=f"~{username}/{supported.name}",
-                           RZR_HOME="ignored", XDG_CONFIG_HOME=str(root / "xdg"))
-                lib = subprocess.run(["bash", "-c", f'source {ROOT}/bin/rzr-lib.sh; printf "%s" "$RZR_HOME"'],
-                                     cwd=initial, env=env, text=True, capture_output=True)
-                self.assertEqual(lib.stdout, str(supported), lib.stderr)
-                doctor = subprocess.run(["bash", str(ROOT / "bin/rzr-doctor.sh")], cwd=initial, env=env,
-                                        text=True, capture_output=True)
-                self.assertIn(f"home: {supported}", doctor.stdout)
-            finally:
-                import shutil
-                shutil.rmtree(supported)
+                username = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError:  # Pinned uid-only CI container has no passwd row.
+                username = None
+            if username:
+                account_home = Path(pwd.getpwnam(username).pw_dir)
+                supported = account_home / f".rzr-pr136-{os.getpid()}"
+                supported.mkdir(mode=0o700)
+                try:
+                    env = dict(os.environ, HOME=str(home), ROZORO_HOME=f"~{username}/{supported.name}",
+                               RZR_HOME="ignored", XDG_CONFIG_HOME=str(root / "xdg"))
+                    lib = subprocess.run(["bash", "-c", f'source {ROOT}/bin/rzr-lib.sh; printf "%s" "$RZR_HOME"'],
+                                         cwd=initial, env=env, text=True, capture_output=True)
+                    self.assertEqual(lib.stdout, str(supported), lib.stderr)
+                    doctor = subprocess.run(["bash", str(ROOT / "bin/rzr-doctor.sh")], cwd=initial, env=env,
+                                            text=True, capture_output=True)
+                    self.assertIn(f"home: {supported}", doctor.stdout)
+                finally:
+                    import shutil
+                    shutil.rmtree(supported)
 
             bad = dict(os.environ, HOME=str(home), ROZORO_HOME="~rozoro-no-such-user-135/home",
                        XDG_CONFIG_HOME=str(root / "xdg"))
