@@ -17,9 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/watchtower-home-consumers.json"
 SOURCE_SUFFIXES = {".py", ".sh", ".ts", ".js", ".bash"}
-# .claude is an explicitly ignored/generated compatibility projection of .agents.
-ARCHIVE_IGNORES = {".git", ".worktrees", ".claude", "node_modules", "vendor", "dist", "build", "__pycache__", ".pytest_cache"}
-ARCHIVE_GENERATED_ALIASES = {"bin/rzr"}
+# Exact repository metadata/worktree artifacts and generated compatibility aliases.
+# No directory-name class (vendor/cache/build/etc.) is exempt from archive parity.
+ARCHIVE_ARTIFACT_ROOTS = {".git", ".worktrees"}
+ARCHIVE_GENERATED_ALIASES = {"bin/rzr", ".claude/skills"}
 
 
 def load_fixture(root: Path = ROOT) -> dict:
@@ -34,7 +35,10 @@ def git_source_names(root: Path) -> tuple[list[str] | None, list[str]]:
     """None means genuinely no git executable; every git error is fatal."""
     if shutil.which("git") is None:
         return None, []
-    run = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=root, capture_output=True)
+    try:
+        run = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=root, capture_output=True)
+    except OSError as exc:
+        return [], [f"git inventory failed closed: {exc}"]
     if run.returncode:
         detail = run.stderr.decode(errors="replace").strip() or "invalid git inventory"
         return [], [f"git inventory failed closed: {detail}"]
@@ -60,8 +64,10 @@ def archive_source_names(root: Path) -> list[str]:
     names = []
     for path in root.rglob("*"):
         relative = path.relative_to(root)
-        if (any(part in ARCHIVE_IGNORES for part in relative.parts)
-                or relative.as_posix() in ARCHIVE_GENERATED_ALIASES or not path.is_file()):
+        name = relative.as_posix()
+        if (relative.parts and relative.parts[0] in ARCHIVE_ARTIFACT_ROOTS
+                or any(name == alias or name.startswith(alias + "/") for alias in ARCHIVE_GENERATED_ALIASES)
+                or not path.is_file()):
             continue
         if is_source(path, os.access(path, os.X_OK)):
             names.append(relative.as_posix())
@@ -140,10 +146,16 @@ def python_call(text: str, value: str) -> bool:
     return bool(tree and any(isinstance(n, ast.Call) and dotted(n.func) == value for n in ast.walk(tree)))
 
 
-def python_parameter(text: str, value: str) -> bool:
+def python_event_store_path(text: str, value: str) -> bool:
     tree = parse_python(text)
-    return bool(tree and any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                             and any(a.arg == value for a in n.args.args) for n in ast.walk(tree)))
+    if tree is None: return False
+    for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "EventStore"):
+        for fn in (n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "__init__"):
+            if any(a.arg == value for a in fn.args.args):
+                # The parameter must participate in an executable call, not merely exist.
+                return any(isinstance(call, ast.Call) and any(isinstance(a, ast.Name) and a.id == value
+                           for a in call.args) for call in ast.walk(fn))
+    return False
 
 
 def monitor_home_delegate(text: str) -> bool:
@@ -156,62 +168,96 @@ def monitor_home_delegate(text: str) -> bool:
     return False
 
 
+def shell_active_text(line: str) -> str:
+    """Keep unquoted/double-quoted shell syntax; erase single quotes/comments."""
+    out, quote, escaped = [], None, False
+    for char in line:
+        if escaped:
+            if quote != "'": out.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True; out.append(char); continue
+        if char == "#" and quote is None: break
+        if char == "'" and quote is None: quote = "'"; continue
+        if char == "'" and quote == "'": quote = None; continue
+        if char == '"' and quote is None: quote = '"'; continue
+        if char == '"' and quote == '"': quote = None; continue
+        if quote != "'": out.append(char)
+    return "".join(out)
+
+
 def shell_statements(text: str) -> list[tuple[str, list[str]]]:
     logical = re.sub(r"\\\n", " ", text)
     result = []
     for line in logical.splitlines():
+        active = shell_active_text(line)
         try: tokens = shlex.split(line, comments=True, posix=True)
         except ValueError: continue
-        if tokens: result.append((line, tokens))
+        if tokens: result.append((active, tokens))
     return result
 
 
 def shell_default(text: str) -> bool:
     for raw, tokens in shell_statements(text):
-        if not re.match(r"\s*[A-Za-z_][A-Za-z0-9_]*=", raw): continue
-        assignment = tokens[0]
-        if "${ROZORO_HOME" in assignment and "${RZR_HOME" in assignment and ".rozoro" in assignment:
+        match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*HOME[A-Za-z0-9_]*)=(.*)", raw)
+        if not match: continue
+        expression = match.group(2)
+        if "${ROZORO_HOME" in expression and "${RZR_HOME" in expression and ".rozoro" in expression:
             return True
     return False
 
 
 def shell_argument(text: str, value: str) -> bool:
-    return any(value in tokens and any(t in {"python", "python3", "$PYTHON"} or t.endswith(".py") for t in tokens)
-               for _, tokens in shell_statements(text))
+    return any(value in active.split() and any(t in {"python", "python3", "$PYTHON"} or t.endswith(".py") for t in tokens)
+               for active, tokens in shell_statements(text))
 
 
 def shell_export(text: str, value: str) -> bool:
-    return any(tokens[0] == "export" and any(t.split("=", 1)[0] == value for t in tokens[1:])
-               for _, tokens in shell_statements(text))
+    return any(re.match(rf"\s*export\s+{re.escape(value)}=", active) is not None
+               for active, _ in shell_statements(text))
 
 
 def shell_source(text: str, value: str) -> bool:
-    return any(tokens[0] in {".", "source"} and any(value in token for token in tokens[1:])
-               for _, tokens in shell_statements(text))
+    return any(re.match(r"\s*(?:\.|source)\s+", active) and value in active
+               for active, _ in shell_statements(text))
 
 
 def ts_tokens(text: str) -> list[tuple[str, str]]:
-    pattern = re.compile(r"/\*.*?\*/|//[^\n]*|(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|[A-Za-z_$][\w$]*|\S", re.S)
+    pattern = re.compile(
+        r"/\*.*?\*/|//[^\n]*|`(?:\\.|[^`\\])*`|"
+        r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|"
+        r"/(?:\\.|[^/\\\n])+/[a-z]*|[A-Za-z_$][\w$]*|\S", re.S
+    )
     out = []
     for match in pattern.finditer(text):
         token = match.group()
         if token.startswith(("//", "/*")): continue
-        out.append(("string" if token[:1] in {'\"', "'"} else "code", token))
+        inert = token[:1] in {'\"', "'", "`"} or (token.startswith("/") and token.count("/") >= 2)
+        out.append(("inert" if inert else "code", token))
     return out
 
 
 def typescript_default(text: str) -> bool:
-    tokens = ts_tokens(text)
-    code = [v for kind, v in tokens if kind == "code"]
-    strings = {v[1:-1] for kind, v in tokens if kind == "string"}
-    joined = " ".join(code)
-    return ("process . env . ROZORO_HOME" in joined and "process . env . RZR_HOME" in joined
-            and "homedir ( )" in joined and ".rozoro" in strings)
+    statement: list[tuple[str, str]] = []
+    for token in ts_tokens(text) + [("code", ";")]:
+        statement.append(token)
+        if token != ("code", ";"): continue
+        code = [v for kind, v in statement if kind == "code"]
+        strings = {v[1:-1] for kind, v in statement if kind == "inert" and v[:1] in {'\"', "'"}}
+        joined = " ".join(code)
+        assignment = re.search(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*[Hh]ome[\w$]*)\s*=", joined)
+        if (assignment and "process . env . ROZORO_HOME" in joined
+                and "process . env . RZR_HOME" in joined and "homedir ( )" in joined
+                and ".rozoro" in strings):
+            return True
+        statement = []
+    return False
 
 
 EVIDENCE = {
     "python_default": lambda t, v=None: python_default(t),
-    "python_argument": python_argument, "python_call": python_call, "python_parameter": python_parameter,
+    "python_argument": python_argument, "python_call": python_call, "python_event_store_path": python_event_store_path,
     "shell_default": lambda t, v=None: shell_default(t), "shell_argument": shell_argument,
     "shell_export": shell_export, "shell_source": shell_source,
     "typescript_default": lambda t, v=None: typescript_default(t),
@@ -255,6 +301,9 @@ class HomeSourceAuditTests(unittest.TestCase):
 
     def test_git_failure_and_invalid_output_fail_closed(self):
         with mock.patch("shutil.which", return_value="/fake/git"):
+            with mock.patch("subprocess.run", side_effect=OSError("exec failed")):
+                _, errors = self.current()
+                self.assertTrue(any("git inventory failed closed: exec failed" in e for e in errors))
             with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 2, b"", b"boom")):
                 _, errors = self.current()
                 self.assertTrue(any("git inventory failed closed" in e for e in errors))
@@ -267,24 +316,48 @@ class HomeSourceAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); shutil.copytree(ROOT, root, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", ".worktrees", "__pycache__"))
             (root / "tools").mkdir(); (root / "tools/new.py").write_text("print('x')\n")
+            (root / "vendor").mkdir(exist_ok=True); (root / "vendor/hidden.py").write_text("print('tracked archive authority')\n")
+            self.assertIn("vendor/hidden.py", archive_source_names(root))
             _, errors = tracked_sources(root, mode="archive")
             self.assertIn("tracked-source manifest differs from source surface", errors)
-            (root / "tools/new.py").unlink(); (root / "bin/rzr-monitor.py").unlink()
+            (root / "tools/new.py").unlink(); (root / "vendor/hidden.py").unlink(); (root / "bin/rzr-monitor.py").unlink()
             _, errors = tracked_sources(root, mode="archive")
             self.assertIn("tracked-source manifest differs from source surface", errors)
 
     def test_git_mode_ignores_actual_untracked_and_ignored_files(self):
-        sources, errors = self.current()
-        self.assertEqual(audit(load_fixture(), sources, errors), [])
-        self.assertNotIn("ignored/decoy.py", sources)
+        if shutil.which("git") is None:
+            return
+        untracked = ROOT / "h8-untracked-source.py"
+        ignored = ROOT / "tests/python/__pycache__/h8_ignored.py"
+        try:
+            untracked.write_text('home=os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"\n')
+            ignored.parent.mkdir(exist_ok=True)
+            ignored.write_text(untracked.read_text())
+            status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
+                                    check=True, capture_output=True, text=True).stdout
+            self.assertIn("?? h8-untracked-source.py", status)
+            self.assertEqual(subprocess.run(["git", "check-ignore", "-q", str(ignored.relative_to(ROOT))], cwd=ROOT).returncode, 0)
+            sources, errors = self.current()
+            self.assertEqual(audit(load_fixture(), sources, errors), [])
+            self.assertNotIn("h8-untracked-source.py", sources)
+            self.assertNotIn("tests/python/__pycache__/h8_ignored.py", sources)
+        finally:
+            untracked.unlink(missing_ok=True)
+            ignored.unlink(missing_ok=True)
 
     def test_semantic_decoys_are_rejected_for_every_language(self):
-        self.assertFalse(python_default('("ROZORO_HOME", "RZR_HOME", "~/.rozoro")\n'))
-        self.assertFalse(python_default('"""os.environ.get(\"ROZORO_HOME\") or ~/.rozoro"""\n'))
-        self.assertFalse(shell_default('# X=${ROZORO_HOME:-${RZR_HOME:-~/.rozoro}}\nX="ROZORO_HOME RZR_HOME ~/.rozoro"\n'))
-        self.assertFalse(typescript_default('// process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro")\nconst x="process.env.ROZORO_HOME process.env.RZR_HOME homedir() .rozoro"'))
-        self.assertFalse(monitor_home_delegate('NOTE=("--home", "MonitorServer", "args")\n'))
-        self.assertFalse(python_argument('# --store\nNOTE="--store"\n', "--store"))
+        full = 'os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"'
+        for decoy in (f'NOTE={full!r}\n', f'NOTE=({full!r}, "ROZORO_HOME", "RZR_HOME", "~/.rozoro")\n',
+                      f'"""{full}"""\n'):
+            self.assertFalse(python_default(decoy))
+        shell = "${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+        self.assertFalse(shell_default(f"# RZR_HOME_RAW={shell}\nRZR_HOME_RAW='{shell}'\nNOTE=\"{shell}\"\n"))
+        ts = 'process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro")'
+        for decoy in (f'const selectedHome = "{ts}";', f'const selectedHome = `{ts}`;',
+                      r'const selectedHome = /process.env.ROZORO_HOME.*process.env.RZR_HOME.*homedir.*\\.rozoro/;'):
+            self.assertFalse(typescript_default(decoy))
+        self.assertFalse(monitor_home_delegate('NOTE=("--home", "MonitorServer", "args.home")\n'))
+        self.assertFalse(python_argument('# parser.add_argument("--store")\nNOTE="--store"\n', "--store"))
 
     def test_tracked_source_outside_prior_roots_is_detected(self):
         sources, _ = self.current(); sources["tools/new-home.py"] = 'home=os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"\n'

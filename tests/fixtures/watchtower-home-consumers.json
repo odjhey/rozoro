@@ -62,7 +62,7 @@
       "value": "_open_home"
     },
     "lib/rozoro_monitor/store.py": {
-      "kind": "python_parameter",
+      "kind": "python_event_store_path",
       "value": "path"
     }
   },
