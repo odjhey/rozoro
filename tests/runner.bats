@@ -57,6 +57,43 @@ SH
   chmod +x "$TEST_ROOT/engines/$name"
 }
 
+@test "pinned test environment provides real Git to the unprivileged CI user" {
+  [ "$(id -u)" -ne 0 ]
+  run git --version
+  assert_success
+  assert_output_contains "git version"
+
+  repo="$TEST_ROOT/git-contract"
+  home="$TEST_ROOT/isolated-home"
+  mkdir -p "$repo" "$home"
+  export HOME="$home"
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL=/dev/null
+
+  run git init -q "$repo"
+  assert_success
+  printf 'ignored.txt\n' > "$repo/.gitignore"
+  printf 'tracked\n' > "$repo/tracked.txt"
+  printf 'untracked\n' > "$repo/untracked.txt"
+  printf 'ignored\n' > "$repo/ignored.txt"
+  run git -C "$repo" config --local user.name "CI Gate"
+  assert_success
+  run git -C "$repo" config --local user.email "ci-gate@example.invalid"
+  assert_success
+  run git -C "$repo" add .gitignore tracked.txt
+  assert_success
+  run git -C "$repo" check-ignore -q ignored.txt
+  assert_success
+  run git -C "$repo" ls-files
+  assert_success
+  assert_output_contains ".gitignore"
+  assert_output_contains "tracked.txt"
+  case "$output" in
+    *untracked.txt*|*ignored.txt*) return 1 ;;
+  esac
+  [ ! -e "$home/.gitconfig" ]
+}
+
 @test "runner prefers Podman and applies its SELinux-safe option" {
   make_engine podman
   make_engine docker

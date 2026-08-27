@@ -1,0 +1,174 @@
+{
+  "schema": 1,
+  "direct_default": {
+    "bin/rzr-lib.sh": {
+      "kind": "shell_default"
+    },
+    "bin/rzr-doctor.sh": {
+      "kind": "shell_default"
+    },
+    "bin/rzr-monitor.py": {
+      "kind": "python_default"
+    },
+    "bin/rozorod.py": {
+      "kind": "monitor_home_delegate"
+    },
+    "bin/rzr-event-bus-client.py": {
+      "kind": "python_default"
+    },
+    "lib/rozoro_monitor/client.py": {
+      "kind": "python_default"
+    },
+    ".pi/extensions/rozoro-watchtower.ts": {
+      "kind": "typescript_default"
+    },
+    ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py": {
+      "kind": "python_default"
+    },
+    ".agents/skills/watchtower-progress-report/scripts/report.py": {
+      "kind": "python_default"
+    },
+    ".agents/skills/watchtower-attention-ledger/scripts/ledger.py": {
+      "kind": "python_default"
+    }
+  },
+  "inherited_explicit_only": {
+    "bin/rzr-claude-watchtower-poll.py": {
+      "kind": "python_argument",
+      "value": "--home"
+    },
+    "bin/rzr-pi-watchtower.sh": {
+      "kind": "shell_export",
+      "value": "ROZORO_HOME"
+    },
+    "bin/rzr-claude-watchtower.sh": {
+      "kind": "shell_argument",
+      "value": "--home"
+    },
+    "bin/rzr-register.sh": {
+      "kind": "shell_source",
+      "value": "rzr-lib.sh"
+    },
+    "hooks/claude-rozoro-event.py": {
+      "kind": "python_call",
+      "value": "ProducerClient"
+    },
+    "hooks/codex-rozoro-event.py": {
+      "kind": "python_call",
+      "value": "ProducerClient"
+    },
+    "lib/rozoro_monitor/server.py": {
+      "kind": "python_call",
+      "value": "_open_home"
+    },
+    "lib/rozoro_monitor/store.py": {
+      "kind": "python_event_store_path",
+      "value": "path"
+    }
+  },
+  "excluded": {
+    "bin/rzr-codex-event-adapter.py": {
+      "kind": "python_argument",
+      "value": "--store"
+    }
+  },
+  "tracked_executable_sources": [
+    ".agents/skills/watchtower-attention-ledger/scripts/ledger.py",
+    ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py",
+    ".agents/skills/watchtower-progress-report/scripts/report.py",
+    ".pi/extensions/rozoro-watchtower.ts",
+    ".pi/lib/rozoro-event-bus-client.ts",
+    "bin/herdr-eventwait.py",
+    "bin/rozoro",
+    "bin/rozorod.py",
+    "bin/rzr-ack.sh",
+    "bin/rzr-claude-watchtower-poll.py",
+    "bin/rzr-claude-watchtower.sh",
+    "bin/rzr-codex-event-adapter.py",
+    "bin/rzr-control.sh",
+    "bin/rzr-crew.sh",
+    "bin/rzr-doctor.sh",
+    "bin/rzr-event-bus-client.py",
+    "bin/rzr-handoff.py",
+    "bin/rzr-lib.sh",
+    "bin/rzr-link.sh",
+    "bin/rzr-list.sh",
+    "bin/rzr-lock.sh",
+    "bin/rzr-monitor.py",
+    "bin/rzr-monitor.sh",
+    "bin/rzr-pi-watchtower.sh",
+    "bin/rzr-reconcile.sh",
+    "bin/rzr-register.sh",
+    "bin/rzr-render.sh",
+    "bin/rzr-resume.sh",
+    "bin/rzr-rollback.sh",
+    "bin/rzr-runtime.py",
+    "bin/rzr-send.sh",
+    "bin/rzr-spawn.sh",
+    "bin/rzr-start.sh",
+    "bin/rzr-status.sh",
+    "bin/rzr-teardown.sh",
+    "bin/rzr-watch.sh",
+    "bin/rzr-watchtower.sh",
+    "hooks/claude-rozoro-event.py",
+    "hooks/codex-rozoro-event.py",
+    "lib/rozoro_artifacts/__init__.py",
+    "lib/rozoro_artifacts/safe_fs.py",
+    "lib/rozoro_monitor/__init__.py",
+    "lib/rozoro_monitor/client.py",
+    "lib/rozoro_monitor/handoff.py",
+    "lib/rozoro_monitor/herdr.py",
+    "lib/rozoro_monitor/notify.py",
+    "lib/rozoro_monitor/protocol.py",
+    "lib/rozoro_monitor/reducer.py",
+    "lib/rozoro_monitor/server.py",
+    "lib/rozoro_monitor/store.py",
+    "tests/codex-event-adapter.test.py",
+    "tests/fakes/claude",
+    "tests/fakes/codex",
+    "tests/fakes/copilot",
+    "tests/fakes/herdr",
+    "tests/fixtures/pi-extension-home-child.ts",
+    "tests/live/claude-background-wait.sh",
+    "tests/live/claude-hook-capability-probe.sh",
+    "tests/live/copilot-lifecycle.sh",
+    "tests/live/copilot-watchtower.sh",
+    "tests/live/pi-watchtower-reload.sh",
+    "tests/monitor-python-rejection.py",
+    "tests/monitor-python-runtime.py",
+    "tests/pi-cutover-additional.test.ts",
+    "tests/pi-event-bus-adapter.test.ts",
+    "tests/pi-extension-home-matrix.test.ts",
+    "tests/pi-extension-process.ts",
+    "tests/policy-contracts.bats",
+    "tests/python/test_attention_ledger.py",
+    "tests/python/test_claude_hook_capability.py",
+    "tests/python/test_claude_producer.py",
+    "tests/python/test_claude_watchtower_poller.py",
+    "tests/python/test_client.py",
+    "tests/python/test_codex_native_hook.py",
+    "tests/python/test_dated_artifact_skills.py",
+    "tests/python/test_delivery_ledger.py",
+    "tests/python/test_herdr.py",
+    "tests/python/test_monitor_lifecycle.py",
+    "tests/python/test_notify.py",
+    "tests/python/test_policy_contracts.py",
+    "tests/python/test_projections_report.py",
+    "tests/python/test_protocol.py",
+    "tests/python/test_reducer.py",
+    "tests/python/test_server.py",
+    "tests/python/test_store.py",
+    "tests/python/test_watchtower_artifact_home_matrix.py",
+    "tests/python/test_watchtower_docs.py",
+    "tests/python/test_watchtower_home_matrix.py",
+    "tests/python/test_watchtower_home_source_audit.py",
+    "tests/python/test_watchtower_ledger_home_matrix.py",
+    "tests/python/test_watchtower_monitor_home_matrix.py",
+    "tests/registration-behavior-probe.sh",
+    "tests/registration-concurrency-probe.sh",
+    "tests/rollback-process.py",
+    "tests/run.sh",
+    "tests/test_helper/common.bash",
+    "tests/test_helper/event_server.py"
+  ]
+}
