@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "direct_default": {
+    "bin/rzr-lib.sh": ["ROZORO_HOME", "RZR_HOME_RAW", ".rozoro"],
+    "bin/rzr-doctor.sh": ["ROZORO_HOME", "RZR_HOME_RAW", ".rozoro"],
+    "bin/rzr-monitor.py": ["ROZORO_HOME", "RZR_HOME", "~/.rozoro"],
+    "bin/rozorod.py": ["--home", "MonitorServer"],
+    "bin/rzr-event-bus-client.py": ["ROZORO_HOME", "RZR_HOME", ".rozoro"],
+    "lib/rozoro_monitor/client.py": ["ROZORO_HOME", "RZR_HOME", "~/.rozoro"],
+    ".pi/extensions/rozoro-watchtower.ts": ["ROZORO_HOME", "RZR_HOME", ".rozoro"],
+    ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py": ["ROZORO_HOME", "RZR_HOME", "~/.rozoro"],
+    ".agents/skills/watchtower-progress-report/scripts/report.py": ["ROZORO_HOME", "RZR_HOME", "~/.rozoro"],
+    ".agents/skills/watchtower-attention-ledger/scripts/ledger.py": ["ROZORO_HOME", "RZR_HOME", "~/.rozoro"]
+  },
+  "inherited_explicit_only": {
+    "bin/rzr-claude-watchtower-poll.py": ["--home"],
+    "bin/rzr-pi-watchtower.sh": ["ROZORO_HOME", "EFFECTIVE_HOME"],
+    "bin/rzr-claude-watchtower.sh": ["--home", "RZR_HOME"],
+    "bin/rzr-register.sh": ["rzr-lib.sh"],
+    "hooks/claude-rozoro-event.py": ["ProducerClient"],
+    "hooks/codex-rozoro-event.py": ["ProducerClient"],
+    "lib/rozoro_monitor/server.py": ["home", "_open_home"],
+    "lib/rozoro_monitor/store.py": ["path", "sqlite3.Connection"]
+  },
+  "excluded": {
+    "bin/rzr-codex-event-adapter.py": ["--store"]
+  }
+}
