@@ -277,6 +277,8 @@ Watchtower instructions used to be entirely VCS-managed. Today they are split ac
 
 Repository templates and skills describe role contracts and dispatch semantics only; they intentionally name no models. Watchtower presets select only the Watchtower launch target, while crew presets realize crew execution. Neither kind grants crew-role policy or fallback authority.
 
+The invariants that hold for every watchtower regardless of preset or mission — composition, shared state, precedence, attribution, and the one-primary operating model — are documented in [Watchtower shared facts](docs/watchtower-shared-facts.md).
+
 ## Operator artifact skills
 
 Project skills under `.agents/skills/` can persist two owner-private, dated operator records under `$ROZORO_HOME/artifacts`:
