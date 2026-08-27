@@ -155,6 +155,7 @@ PY
   selected="$namespace/selected"; failed="$namespace/failed"; sentinel="$namespace/sentinel"
   legacy="$TEST_ROOT/legacy-Tuser"; xdg="$TEST_ROOT/xdg-Tuser"; default="$HOME/.rozoro"; public_decoy="$TEST_ROOT/public-decoy-Tuser"
   account_guard="$account_home/.rozoro-h1-unrelated-guard-${BATS_TEST_NUMBER}-$$"; printf 'unrelated-preserve\n' > "$account_guard"
+  cleanup_result="$TEST_ROOT/named-cleanup-result"
   snapshot_decoys Tuser-pre /no-selected-home "$namespace" "$selected" "$failed" "$legacy" "$xdg" "$default" "$public_decoy"
 
   # Regression for Bats --jobs-wide: unrelated account-home siblings may appear
@@ -163,13 +164,17 @@ PY
   ( while [ ! -e "$stop" ]; do mkdir -p "$interference"; printf 'foreign\n' > "$interference/value"; rm -rf "$interference"; done ) & interferer=$!
   register_pid "$interferer"
 
-  run bash -c 'set -u; namespace=$1; selected=$2; failed=$3; sentinel=$4; guard=$5; cleanup() { rc=$?; test "$(cat "$sentinel")" = h1-owned; test "$(cat "$guard")" = unrelated-preserve; rm -rf -- "$namespace"; test ! -e "$namespace"; test "$(cat "$guard")" = unrelated-preserve; exit "$rc"; }; trap cleanup EXIT HUP INT TERM; test ! -e "$namespace"; mkdir -m 700 "$namespace" "$selected" "$failed"; printf "h1-owned\n" > "$sentinel"; env ROZORO_HOME="~'$account'/$6/selected" RZR_HOME="$7" XDG_STATE_HOME="$8" HERDR_PANE_ID="$9" PI_OBSERVED="${10}" FAKE_HERDR_ROOT="${11}" FAKE_HERDR_LOG="${12}" PATH="${13}" REPO_ROOT="${14}" HOME="${15}" "${14}/bin/rzr-pi-watchtower.sh" --resume session-Tuser --cwd "${16}" -- --model model-Tuser passthrough-Tuser || exit; test -f "$selected/watchtowers/herdr-home-matrix-pane/target.json"; test -f "$selected/watchtowers/herdr-home-matrix-pane/registrations.jsonl"; env PI_FORCE_FAIL=1 ROZORO_HOME="~'$account'/$6/failed" RZR_HOME="$7" XDG_STATE_HOME="$8" HERDR_PANE_ID="$9" PI_OBSERVED="${10}-failed" FAKE_HERDR_ROOT="${11}" FAKE_HERDR_LOG="${12}" PATH="${13}" REPO_ROOT="${14}" HOME="${15}" "${14}/bin/rzr-pi-watchtower.sh" --cwd "${16}" && exit 90; test "$?" -eq 73; grep -Fx forced-failure "${10}-failed"; test ! -e "$failed/watchtowers"; test -z "$(find "$failed" -mindepth 1 -print -quit)"' _ \
-    "$namespace" "$selected" "$failed" "$sentinel" "$account_guard" "$unique" "$legacy" "$xdg" "$HERDR_PANE_ID" "$PI_OBSERVED" "$FAKE_HERDR_ROOT" "$FAKE_HERDR_LOG" "$PATH" "$REPO_ROOT" "$HOME" "$TEST_ROOT"
+  run bash -c 'set -euo pipefail; namespace=$1; selected=$2; failed=$3; sentinel=$4; guard=$5; cleanup_result=${17}; cleanup() { original=$?; trap - EXIT HUP INT TERM; cleanup_status=0; [ -f "$sentinel" ] && [ "$(cat "$sentinel")" = h1-owned ] || cleanup_status=1; [ -f "$guard" ] && [ "$(cat "$guard")" = unrelated-preserve ] || cleanup_status=1; rm -rf -- "$namespace" || cleanup_status=1; [ ! -e "$namespace" ] || cleanup_status=1; [ -f "$guard" ] && [ "$(cat "$guard")" = unrelated-preserve ] || cleanup_status=1; printf "%s:%s\n" "$original" "$cleanup_status" > "$cleanup_result" || cleanup_status=1; if [ "$original" -ne 0 ]; then exit "$original"; fi; exit "$cleanup_status"; }; trap cleanup EXIT; trap '\''exit 129'\'' HUP; trap '\''exit 130'\'' INT; trap '\''exit 143'\'' TERM; test ! -e "$namespace"; mkdir -m 700 "$namespace" "$selected" "$failed"; printf "h1-owned\n" > "$sentinel"; env ROZORO_HOME="~'$account'/$6/selected" RZR_HOME="$7" XDG_STATE_HOME="$8" HERDR_PANE_ID="$9" PI_OBSERVED="${10}" FAKE_HERDR_ROOT="${11}" FAKE_HERDR_LOG="${12}" PATH="${13}" REPO_ROOT="${14}" HOME="${15}" "${14}/bin/rzr-pi-watchtower.sh" --resume session-Tuser --cwd "${16}" -- --model model-Tuser passthrough-Tuser; test -f "$selected/watchtowers/herdr-home-matrix-pane/target.json"; test -f "$selected/watchtowers/herdr-home-matrix-pane/registrations.jsonl"; if env PI_FORCE_FAIL=1 ROZORO_HOME="~'$account'/$6/failed" RZR_HOME="$7" XDG_STATE_HOME="$8" HERDR_PANE_ID="$9" PI_OBSERVED="${10}-failed" FAKE_HERDR_ROOT="${11}" FAKE_HERDR_LOG="${12}" PATH="${13}" REPO_ROOT="${14}" HOME="${15}" "${14}/bin/rzr-pi-watchtower.sh" --cwd "${16}"; then exit 90; else failed_rc=$?; fi; test "$failed_rc" -eq 73; grep -Fx "home=$failed" "${10}-failed"; grep -Fx forced-failure "${10}-failed"; test ! -e "$failed/watchtowers"; test -z "$(find "$failed" -mindepth 1 -print -quit)"' _ \
+    "$namespace" "$selected" "$failed" "$sentinel" "$account_guard" "$unique" "$legacy" "$xdg" "$HERDR_PANE_ID" "$PI_OBSERVED" "$FAKE_HERDR_ROOT" "$FAKE_HERDR_LOG" "$PATH" "$REPO_ROOT" "$HOME" "$TEST_ROOT" "$cleanup_result"
   assert_success
   touch "$stop"; wait "$interferer"; rm -rf "$interference"
-  [ ! -e "$namespace" ]; [ "$(cat "$account_guard")" = unrelated-preserve ]
+  [ ! -e "$namespace" ]; [ "$(cat "$account_guard")" = unrelated-preserve ]; [ "$(cat "$cleanup_result")" = 0:0 ]
   assert_pi_observation Tuser "$selected" "$TEST_ROOT"
   assert_decoys_unchanged Tuser-pre /no-selected-home "$namespace" "$selected" "$failed" "$legacy" "$xdg" "$default" "$public_decoy"
+
+  signal_namespace="$account_home/$unique-signal"; signal_result="$TEST_ROOT/signal-cleanup-result"
+  run bash -c 'set -euo pipefail; ns=$1; result=$2; cleanup() { original=$?; trap - EXIT HUP INT TERM; cleanup_status=0; rm -rf -- "$ns" || cleanup_status=1; [ ! -e "$ns" ] || cleanup_status=1; printf "%s:%s\n" "$original" "$cleanup_status" > "$result" || cleanup_status=1; [ "$original" -ne 0 ] && exit "$original"; exit "$cleanup_status"; }; trap cleanup EXIT; trap '\''exit 143'\'' TERM; test ! -e "$ns"; mkdir -m 700 "$ns"; kill -TERM $$; exit 91' _ "$signal_namespace" "$signal_result"
+  [ "$status" -eq 143 ]; [ ! -e "$signal_namespace" ]; [ "$(cat "$signal_result")" = 143:0 ]
   rm -f "$account_guard"
 }
 
