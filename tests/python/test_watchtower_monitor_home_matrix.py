@@ -3,6 +3,7 @@
 Matrix identities: P=public, L=legacy, B=both, E=empty public,
 D=default, R=relative, T=tilde, O=explicit override, X=XDG decoy.
 """
+import fcntl
 import json
 import os
 import signal
@@ -17,6 +18,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from lib.rozoro_monitor import protocol
 from lib.rozoro_monitor.client import _open_home, resolve_home
 from lib.rozoro_monitor.server import MonitorServer
 
@@ -37,6 +39,20 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         self.homes = set()
         self.started_at = time.time()
         self.preexisting_locks = {p.resolve() for p in ROOT.rglob("monitor.lock")}
+        self.owned_detached = {}
+
+    def discover_owned_detached(self):
+        """Adopt only records proven to name this checkout's daemon and socket."""
+        for lock in list(self.root.rglob("monitor.lock")) + list(ROOT.rglob("monitor.lock")):
+            try:
+                record = json.loads(lock.read_text()); pid = record["pid"]
+                command = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True)
+                info = (lock.parent / "monitor.sock").lstat()
+                if (str(DAEMON) in command and info.st_ino == record["socket_ino"]
+                        and info.st_dev == record["socket_dev"]):
+                    self.owned_detached[pid] = lock.parent
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+                continue
 
     def tearDown(self):
         # Foreground children are unambiguously ours.
@@ -51,18 +67,8 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         # Detached `monitor start` loses its Popen handle. Discover every home
         # selected beneath this test's new private root (including precedence
         # mutants), but never inspect or signal a pre-existing user home.
-        owned = []
-        candidates = list(self.root.rglob("monitor.lock")) + list(ROOT.rglob("monitor.lock"))
-        for lock in candidates:
-            try:
-                resolved = lock.resolve()
-                record = json.loads(lock.read_text()); pid = record["pid"]
-                if (resolved not in self.preexisting_locks and
-                        lock.stat().st_mtime + 1 >= self.started_at and isinstance(pid, int)):
-                    owned.append((lock.parent, pid))
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-        for home, pid in owned:
+        self.discover_owned_detached()
+        for pid, home in self.owned_detached.items():
             try: os.kill(pid, signal.SIGTERM)
             except ProcessLookupError: pass
             deadline = time.monotonic() + 3
@@ -75,11 +81,12 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
             self.homes.add(home)
             if home.is_relative_to(ROOT) and not home.is_relative_to(self.root):
                 shutil.rmtree(home, ignore_errors=True)
-        survivors = [str(p) for p in self.root.rglob("monitor.sock")]
-        survivors += [str(p) for p in ROOT.rglob("monitor.sock")
-                      if p.parent.joinpath("monitor.lock").resolve() not in self.preexisting_locks]
-        self.assertEqual(survivors, [], f"surviving owned sockets: {survivors}")
-        self.tmp.cleanup()
+        survivors = [str(home / "monitor.sock") for home in self.owned_detached.values()
+                     if (home / "monitor.sock").exists()]
+        # Always remove the private tree before surfacing cleanup failure.
+        try: self.tmp.cleanup()
+        finally:
+            if survivors: self.fail(f"surviving owned sockets: {survivors}")
 
     def env(self, bits=None):
         env = dict(os.environ, HOME=str(self.user), XDG_CONFIG_HOME=str(self.root / "xdg-decoy"))
@@ -168,9 +175,67 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         reset = self.command([sys.executable, str(MONITOR), "reset", "--force"], self.env({"ROZORO_HOME": "reset"}))
         self.assertEqual(reset.returncode, 0, reset.stderr); self.assertFalse((reset_home / "monitor.db").exists())
 
+    def test_detached_cleanup_preserves_preexisting_held_pid_socket_fixture(self):
+        sentinel = self.root / "sentinel"; sentinel.mkdir(mode=0o700)
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        peer.bind(str(sentinel / "monitor.sock")); os.chmod(sentinel / "monitor.sock", 0o600); peer.listen()
+        info = (sentinel / "monitor.sock").lstat()
+        lock_fd = os.open(sentinel / "monitor.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        payload = json.dumps({"pid": os.getpid(), "socket_dev": info.st_dev, "socket_ino": info.st_ino}).encode()
+        os.write(lock_fd, payload); os.fsync(lock_fd); fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        before = (os.readlink(f"/proc/{os.getpid()}/exe") if Path(f"/proc/{os.getpid()}/exe").exists() else None,
+                  (sentinel / "monitor.lock").read_bytes(), (sentinel / "monitor.lock").stat().st_ino,
+                  (sentinel / "monitor.sock").stat().st_ino)
+        env = self.env({"ROZORO_HOME": "owned", "RZR_HOME": str(sentinel)})
+        try:
+            started = self.command([sys.executable, str(MONITOR), "start"], env)
+            self.assertEqual(started.returncode, 0, started.stderr)
+            self.discover_owned_detached()
+            self.assertNotIn(os.getpid(), self.owned_detached)
+            # Committed forced-assertion regression: cleanup still targets only
+            # the positively identified detached daemon, never this held peer.
+            try: self.assertEqual("forced", "failure")
+            except AssertionError:
+                self.assertEqual(self.command([sys.executable, str(MONITOR), "stop"], env).returncode, 0)
+            os.kill(os.getpid(), 0)
+            after = (before[0], (sentinel / "monitor.lock").read_bytes(),
+                     (sentinel / "monitor.lock").stat().st_ino, (sentinel / "monitor.sock").stat().st_ino)
+            self.assertEqual(after, before)
+        finally:
+            peer.close(); os.close(lock_fd)
+            for path in (sentinel / "monitor.sock", sentinel / "monitor.lock"):
+                try: path.unlink()
+                except FileNotFoundError: pass
+
+    def test_monitor_named_user_and_unresolved_user_rows(self):
+        import pwd
+        bad = self.env({"ROZORO_HOME": "~rozoro-h2-no-such-user/path"})
+        failed = self.command([sys.executable, str(MONITOR), "start"], bad)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse((self.cwd / "~rozoro-h2-no-such-user").exists())
+        try: username = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError: username = None
+        if username:
+            account = Path(pwd.getpwnam(username).pw_dir)
+            home = account / f".rozoro-h2-cli-{os.getpid()}"; env = self.env({"ROZORO_HOME": f"~{username}/{home.name}"})
+            self.homes.add(home)
+            try:
+                self.assertEqual(self.command([sys.executable, str(MONITOR), "start"], env).returncode, 0)
+                value = json.loads(self.command([sys.executable, str(MONITOR), "status", "--json"], env).stdout)
+                self.assertEqual(value["socket"], str(home / "monitor.sock"))
+            finally:
+                self.command([sys.executable, str(MONITOR), "stop"], env)
+                shutil.rmtree(home, ignore_errors=True)
+
     def test_real_rozorod_parser_environment_and_explicit_relative_tilde_rows(self):
-        rows = (("P", None, {"ROZORO_HOME": "dp", "RZR_HOME": "wrong"}, self.cwd / "dp"),
+        rows = (("P", None, {"ROZORO_HOME": "dp"}, self.cwd / "dp"),
                 ("L", None, {"RZR_HOME": "dl"}, self.cwd / "dl"),
+                ("B", None, {"ROZORO_HOME": "db", "RZR_HOME": "wrong"}, self.cwd / "db"),
+                ("E", None, {"ROZORO_HOME": "", "RZR_HOME": "de"}, self.cwd / "de"),
+                ("D", None, {}, self.user / ".rozoro"),
+                ("R", None, {"ROZORO_HOME": "dr/child"}, self.cwd / "dr/child"),
+                ("T", None, {"ROZORO_HOME": "~/dt"}, self.user / "dt"),
+                ("X", None, {"ROZORO_HOME": "dx", "XDG_CONFIG_HOME": str(self.root / "xd")}, self.cwd / "dx"),
                 ("O-relative", "do/relative", {"ROZORO_HOME": "wrong"}, self.cwd / "do/relative"),
                 ("O-tilde", "~/do-tilde", {"ROZORO_HOME": "wrong"}, self.user / "do-tilde"))
         for cell, override, bits, expected in rows:
@@ -209,15 +274,20 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         home = self.cwd / "bridge-timeout"; home.mkdir(mode=0o700); self.homes.add(home)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); connection = None
         listener.bind(str(home / "monitor.sock")); os.chmod(home / "monitor.sock", 0o600); listener.listen()
-        release = threading.Event()
+        release = threading.Event(); observed = {}
         def stall():
             nonlocal connection
-            connection, _ = listener.accept(); connection.recv(65536); release.wait(5)
+            connection, _ = listener.accept()
+            raw = bytearray()
+            while not raw.endswith(b"\n"): raw.extend(connection.recv(65536))
+            observed.update(protocol.decode(bytes(raw))); release.wait(5)
         thread = threading.Thread(target=stall); thread.start()
         try:
             timed = self.command([sys.executable, str(BRIDGE), "status", "--task", "timeout"],
                                  self.env({"ROZORO_HOME": str(home)}), timeout=8)
             self.assertEqual(timed.returncode, 2); self.assertIn("timed out", timed.stderr)
+            self.assertEqual(observed.get("type"), "task.status")
+            self.assertIsInstance(observed.get("request_id"), str)
         finally:
             release.set()
             if connection is not None: connection.close()
@@ -225,24 +295,26 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
             try: (home / "monitor.sock").unlink()
             except FileNotFoundError: pass
 
-    def test_real_bridge_boundary_daemonflow_and_socket_exchange_use_selected_home(self):
-        home = self.cwd / "bridge-public"
-        env = self.env({"ROZORO_HOME": "bridge-public", "RZR_HOME": "mutant-legacy"})
-        process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(home)], cwd=self.cwd, env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.processes.append(process); self.homes.add(home)
-        deadline = time.monotonic() + 8
-        while not (home / "monitor.sock").exists() and time.monotonic() < deadline:
-            if process.poll() is not None: self.fail(process.stderr.read().decode())
-            time.sleep(.04)
-        self.assertTrue((home / "monitor.sock").is_socket())
-        result = self.command([sys.executable, str(BRIDGE), "status", "--task", "task-h2"], env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        reply = json.loads(result.stdout)
-        self.assertEqual(reply["task_id"], "task-h2")
-        self.assertTrue((home / "watchtowers/.authority.lock").is_file())
-        self.assertTrue((home / "monitor.sock").is_socket())
-        self.assertFalse((self.cwd / "mutant-legacy/watchtowers").exists())
+    def test_real_bridge_boundary_daemonflow_success_matrix(self):
+        rows = (("P", {"ROZORO_HOME": "sp"}, self.cwd / "sp"),
+                ("L", {"RZR_HOME": "sl"}, self.cwd / "sl"),
+                ("B", {"ROZORO_HOME": "sb", "RZR_HOME": "wrong"}, self.cwd / "sb"),
+                ("E", {"ROZORO_HOME": "", "RZR_HOME": "se"}, self.cwd / "se"),
+                ("D", {}, self.user / ".rozoro"),
+                ("R", {"ROZORO_HOME": "sr/child"}, self.cwd / "sr/child"),
+                ("T", {"ROZORO_HOME": "~/st"}, self.user / "st"),
+                ("X", {"ROZORO_HOME": "sx", "XDG_CONFIG_HOME": str(self.root / "xwrong")}, self.cwd / "sx"))
+        for cell, bits, home in rows:
+            env = self.env(bits)
+            process = subprocess.Popen([sys.executable, str(DAEMON), "--home", str(home)], cwd=self.cwd, env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.processes.append(process); self.wait_up(home, self.env({"ROZORO_HOME": str(home)}))
+            result = self.command([sys.executable, str(BRIDGE), "status", "--task", f"task-{cell}"], env)
+            self.assertEqual(result.returncode, 0, f"{cell}: {result.stderr}")
+            self.assertEqual(json.loads(result.stdout)["task_id"], f"task-{cell}")
+            self.assertTrue((home / "watchtowers/.authority.lock").is_file())
+            process.send_signal(signal.SIGTERM); self.assertEqual(process.wait(timeout=3), 0)
+        self.assertFalse((self.cwd / "wrong/watchtowers").exists())
 
 
 if __name__ == "__main__": unittest.main()
