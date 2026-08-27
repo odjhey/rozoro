@@ -14,7 +14,8 @@
 set -uo pipefail   # deliberately not -e: run all checks, then summarize
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RZR_HOME="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+case "$RZR_HOME_RAW" in '~') RZR_HOME="$HOME" ;; '~/'*) RZR_HOME="$HOME/${RZR_HOME_RAW#\~/}" ;; /*) RZR_HOME="$RZR_HOME_RAW" ;; *) RZR_HOME="$PWD/$RZR_HOME_RAW" ;; esac
 bad=0; ok=0
 pass() { printf '  \033[32m ok \033[0m %s\n' "$1"; ok=$((ok + 1)); }
 warn() { printf '  \033[33mwarn\033[0m %s\n' "$1"; }

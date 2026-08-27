@@ -34,7 +34,9 @@ change and needs an ADR, not a mission edit.
 
 ## Shared state and substrate (one namespace, not partitioned per mission)
 
-- `$ROZORO_HOME` is shared by all watchtowers on the machine: task folders
+- The effective home is nonempty public `$ROZORO_HOME`, else nonempty legacy
+  `$RZR_HOME`, else `$HOME/.rozoro`; `ROZORO_HOME` wins when both are set. This
+  one namespace is shared by all watchtowers on the machine: task folders
   (`tasks/`), state, the event bus (`rozorod`, monitor.db), artifacts,
   registrations (`watchtowers/<driver-id>/`), presets
   (`watchtower-presets/`), operator missions (`watchtower-missions/`), durable
@@ -62,10 +64,14 @@ contracts only; they intentionally name no models).
 
 - Driver identity is transport-derived (ADR-0011); the watchtower **name** is
   operator metadata and never identity.
-- Every named/preset launch records: preset name, operator-managed version,
-  SHA-256 of the exact preset bytes, and `policy_sha256` = SHA-256 of the
-  concatenated core+mission bytes actually delivered. `target.json` is current
-  attribution; `registrations.jsonl` is append-only history.
+- Every Pi launch records the complete five-field policy tuple. Every preset
+  launch records preset name, operator-managed version, and exact preset-byte
+  SHA-256. A named-unpreset launch records only its name plus
+  harness-applicable attribution. Pi unnamed/unpreset and named/unpreset have
+  the policy tuple but no preset/model attribution; Pi presets have all three.
+  Claude unnamed/unpreset has none, Claude named/unpreset has only a name, and
+  Claude presets have name/preset/model attribution but never the Pi tuple.
+  `target.json` is current attribution; `registrations.jsonl` is history.
 - `watchtower-policy-snapshot` captures the core plus shipped missions with
   per-mission composed hashes; operator missions are noted as not-captured.
 

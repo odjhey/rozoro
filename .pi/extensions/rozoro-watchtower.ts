@@ -27,7 +27,7 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 
 export default function (pi: ExtensionAPI) {
 	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-	const rozoroHome = process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro");
+	const rozoroHome = resolve(process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro"));
 
 	let busClient: RozoroEventBusClient | undefined;
 	let startup: AbortController | undefined;

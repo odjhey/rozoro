@@ -301,7 +301,7 @@ def log_line(now: dt.datetime, old: str, new: str, note: str) -> str:
 
 
 def resolve_home(value: str | None) -> Path:
-    raw = value or os.environ.get("ROZORO_HOME", "~/.rozoro")
+    raw = value or os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"
     return Path(os.path.abspath(os.path.expanduser(raw)))
 
 
@@ -893,7 +893,7 @@ def cmd_prime(args: argparse.Namespace) -> int:
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--home", help="ledger home (default $ROZORO_HOME, else ~/.rozoro)")
+    parser.add_argument("--home", help="ledger home (default $ROZORO_HOME, legacy $RZR_HOME, else ~/.rozoro)")
     parser.add_argument("--now", help=argparse.SUPPRESS)
 
 

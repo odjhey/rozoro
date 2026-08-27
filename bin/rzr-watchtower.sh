@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Inspect named, versioned watchtower presets and active registrations.
 set -euo pipefail
+RZR_LIB_NO_STATE_INIT=1
 # shellcheck disable=SC1091 # The library path is resolved beside this script.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rzr-lib.sh"
+unset RZR_LIB_NO_STATE_INIT
 
 print_row() {
   local name="$1" json
@@ -23,12 +25,13 @@ case "$cmd" in
     for f in "$RZR_WT_PRESETS"/*.json; do [ -e "$f" ] || continue; print_row "$(basename "$f" .json)"; done ;;
   show)
     [ $# -ge 2 ] || rzr_die "usage: rzr-watchtower.sh show <name>"
-    rzr_wtpreset_exists "$2" || rzr_die "no such watchtower preset '$2'"
-    rzr_wtpreset_validate "$2" || rzr_die "watchtower preset '$2' has invalid JSON or known field types"
-    rzr_wtpreset_json "$2" | jq . ;;
+    rzr_validate_wtpreset_name "$2"
+    resolved="$(rzr_wtpreset_resolve "$2")" || exit $?
+    printf '%s' "$resolved" | jq '.document' ;;
   path)
     [ $# -ge 2 ] || rzr_die "usage: rzr-watchtower.sh path <name>"
-    rzr_wtpreset_exists "$2" || rzr_die "no such watchtower preset '$2'"
+    rzr_validate_wtpreset_name "$2"
+    rzr_wtpreset_resolve "$2" >/dev/null || exit $?
     rzr_wtpreset_path "$2" ;;
   registered)
     printf '%-24s %-18s %-20s %-8s %-8s %s\n' DRIVER NAME PRESET@VERSION HARNESS BACKEND CREATED

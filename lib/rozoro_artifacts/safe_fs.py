@@ -15,6 +15,13 @@ class UnsafePath(RuntimeError):
     """A path could not be traversed without following links or losing ownership."""
 
 
+def trusted_source_metadata(before: os.stat_result, info: os.stat_result, uid: int) -> bool:
+    """Pure metadata predicate, exposed for deterministic wrong-owner tests."""
+    return ((before.st_dev, before.st_ino) == (info.st_dev, info.st_ino)
+            and stat.S_ISREG(info.st_mode) and info.st_uid == uid
+            and info.st_nlink == 1 and not stat.S_IMODE(info.st_mode) & 0o022)
+
+
 def _component(value: str) -> str:
     if value in {"", ".", ".."} or "/" in value or "\x00" in value:
         raise UnsafePath(f"unsafe path component: {value!r}")
@@ -155,6 +162,28 @@ class SafeDirectory:
             return "unreadable", None
         finally:
             os.close(file_fd)
+
+    def read_source_regular(self, name: str) -> bytes:
+        """Read a VCS policy source with owned/single-link/non-writable guarantees."""
+        name = _component(name)
+        try:
+            before = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            fd = os.open(name, FILE_FLAGS, dir_fd=self.fd)
+        except OSError as exc:
+            raise UnsafePath(f"unsafe repository source: {name}") from exc
+        try:
+            info = os.fstat(fd)
+            if not trusted_source_metadata(before, info, os.geteuid()):
+                raise UnsafePath(f"unsafe repository source: {name}")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
 
     def write_exclusive(self, name: str, data: bytes) -> None:
         name = _component(name)

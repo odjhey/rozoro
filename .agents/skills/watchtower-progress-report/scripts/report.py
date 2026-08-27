@@ -299,9 +299,9 @@ def main() -> int:
     except (OSError, UnsafePath) as exc:
         raise SystemExit(f"cannot safely load canonical handoff parser: {exc}") from exc
 
-    home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    tasks_path = args.tasks_root or home / "tasks"
-    artifact_root = args.artifact_root or home / "artifacts"
+    home = Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser().absolute()
+    tasks_path = (args.tasks_root or home / "tasks").expanduser().absolute()
+    artifact_root = (args.artifact_root or home / "artifacts").expanduser().absolute()
 
     records: list[dict[str, Any]] = []
     skipped = 0

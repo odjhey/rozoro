@@ -107,7 +107,7 @@ def _create_home_from_trusted_ancestor(path: Path) -> int:
 
 
 def _open_home(home: str | os.PathLike[str] | None, *, create: bool = True) -> tuple[Path, int]:
-    path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
+    path = Path(home) if home is not None else Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser()
     path = path.absolute()
     if create:
         try:

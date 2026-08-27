@@ -212,7 +212,7 @@ control   = tell the runtime/process something
 
 ## Durable task state
 
-State lives under `$ROZORO_HOME`, which defaults to `~/.rozoro`. Task folders remain after live hosting is torn down.
+State lives in one effective home: nonempty public `$ROZORO_HOME`, else nonempty legacy `$RZR_HOME`, else `$HOME/.rozoro`. `ROZORO_HOME` wins when both are set; this is one shared namespace, not two. Task folders remain after live hosting is torn down.
 
 A task currently stores files such as:
 
@@ -259,11 +259,22 @@ Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`
 
 Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; launchers derive the driver id from transport identity.
 
-The preset launch is the **canonical operator path**. An unpreset launch that passes model flags manually (`./bin/rozoro pi-watchtower -- --model … --thinking …`) still works and still registers, but the registration carries no name, preset, version, preset hash, policy hash, or model/effort attribution. Do not combine `--preset` with manual model flags after `--`: trailing arguments are appended after the preset-derived flags, so the harness would receive the option twice while the registration records only the preset's values.
+The preset launch is the **canonical operator path**. Attribution is exact:
+
+| Harness / launch | name | preset fields | five-field Pi policy tuple | model/effort attribution |
+|---|---:|---:|---:|---:|
+| Pi unnamed, unpreset | no | no | yes | no preset attribution |
+| Pi named, unpreset | yes | no | yes | no preset attribution |
+| Pi preset (default or explicit mission) | yes (preset default or override) | yes | yes | yes, from preset |
+| Claude unnamed, unpreset | no | no | no | no preset attribution |
+| Claude named, unpreset | yes | no | no | no preset attribution |
+| Claude preset | yes (preset default or override) | yes | no | yes, from preset |
+
+Do not combine `--preset` with manual model flags after `--`: trailing arguments are appended after preset-derived flags while registration records only preset values.
 
 A Pi preset may also name a **mission** (ADR-0013). Every Pi watchtower launch composes two policy files as system prompts: the VCS-owned mechanics core `templates/watchtower.md`, then exactly one mission policy that defines what the fleet is for. The mission comes from the preset's `mission` field and defaults to `delivery` (the shipped `templates/missions/delivery.md`), so unpreset and mission-less launches keep today's behavior. A mission name resolves to exactly one of `templates/missions/<name>.md` (shipped) or `$ROZORO_HOME/watchtower-missions/<name>.md` (operator-authored, for iterating on a new mission before it graduates into VCS); both existing is an error, as is neither. The recorded `policy_sha256` is the SHA-256 of the concatenated core+mission bytes actually delivered at launch.
 
-The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited watchtower attribution before applying the command-line options, so an unpreset launch cannot reuse stale name, preset, hash, model, effort, or driver values.
+The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited name, preset, complete five-field Pi policy tuple, model, effort, and driver attribution before rebuilding harness-applicable values; Claude never inherits Pi policy attribution.
 
 #### Where watchtower configuration lives
 

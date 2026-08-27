@@ -22,14 +22,17 @@ for arg in "$@"; do
 done
 unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_POLICY_CORE_SHA256 ROZORO_WT_POLICY_MISSION_NAME ROZORO_WT_POLICY_MISSION_SOURCE ROZORO_WT_POLICY_MISSION_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
 # Policy resolution does not contact Herdr; the pane identity is transport input.
-RZR_LIB_SKIP_HERDR_CHECK=1
+RZR_LIB_SKIP_HERDR_CHECK=1 RZR_LIB_NO_STATE_INIT=1
 # shellcheck disable=SC1091
 . "$RZR_BIN/rzr-lib.sh"
-unset RZR_LIB_SKIP_HERDR_CHECK
+unset RZR_LIB_SKIP_HERDR_CHECK RZR_LIB_NO_STATE_INIT
+EFFECTIVE_HOME="$RZR_HOME"
+export ROZORO_HOME="$EFFECTIVE_HOME"
 [ -z "$WT_NAME" ] || rzr_validate_wt_metadata "$WT_NAME" "watchtower name"
 MISSION=delivery
 if [ -n "$PRESET" ]; then
-  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"
+  rzr_validate_wtpreset_name "$PRESET"
+  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || exit $?
   [ "$(printf '%s' "$RESOLVED" | jq -r '.document.harness')" = pi ] || rzr_die "watchtower preset '$PRESET' is not for harness pi"
   [ -n "$WT_NAME" ] || WT_NAME="$PRESET"
   MODEL="$(printf '%s' "$RESOLVED" | jq -r '.document.model // empty')"
@@ -39,7 +42,6 @@ if [ -n "$PRESET" ]; then
   PRESET_MISSION="$(printf '%s' "$RESOLVED" | jq -r '.document.mission // empty')"
   [ -z "$PRESET_MISSION" ] || MISSION="$PRESET_MISSION"
 fi
-EFFECTIVE_HOME="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
 POLICY="$(rzr_watchtower_policy_resolve "$ROOT" "$EFFECTIVE_HOME" "$MISSION")" || rzr_die "watchtower core or mission '$MISSION' is missing or unsafe"
 SOURCE="$(printf '%s' "$POLICY" | jq -r .mission_source)"
 if [ "$SOURCE" = shipped ]; then MISSION_FILE="$ROOT/templates/missions/$MISSION.md"

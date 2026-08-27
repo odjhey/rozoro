@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ MISSIONS_DIR = "templates/missions"
 DEFAULT_MISSION = "delivery"
 OPERATOR_MISSIONS = "$ROZORO_HOME/watchtower-missions"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "5832cc57d47805afb6b251294854fc4caf73848489783575d780dd2450ad0d6e"
+PI_LAUNCHER_SHA256 = "cdbf70bf0e0ccdae43fdd1fa2184d81a9ba46fb8d2c211517566590751fe14fd"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
@@ -57,17 +58,23 @@ def validate_policy_text(data: bytes, relative: str) -> None:
         raise UnsafePath(f"required repository source {relative} contains a forbidden control")
 
 
+def open_source_child(parent: SafeDirectory, component: str) -> SafeDirectory:
+    child = parent.open_child(component, require_owner=True)
+    if stat.S_IMODE(child.stat().st_mode) & 0o022:
+        child.close()
+        raise UnsafePath(f"repository source directory {component} is group/world-writable")
+    return child
+
+
 def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
     parts = relative.split("/")
     current = repo
     opened: list[SafeDirectory] = []
     try:
         for component in parts[:-1]:
-            current = current.open_child(component, require_owner=True)
+            current = open_source_child(current, component)
             opened.append(current)
-        state, data = current.read_regular(parts[-1])
-        if state != "regular" or data is None:
-            raise UnsafePath(f"required repository source {relative} is {state}")
+        data = current.read_source_regular(parts[-1])
         validate_policy_text(data, relative)
         return data
     finally:
@@ -140,11 +147,9 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
                 writes_valid = False
             index += 1
         if block_depth == 0 and tokens == expected_invocation:
-            pairs = list(zip(args, args[1:], strict=False))
-            invocation_results.append(
-                any(left == POLICY_OPTION and right == POLICY_VALUE for left, right in pairs)
-                and any(left == POLICY_OPTION and right == MISSION_VALUE for left, right in pairs)
-            )
+            policy_values = [args[index + 1] if index + 1 < len(args) else None
+                             for index, token in enumerate(args) if token == POLICY_OPTION]
+            invocation_results.append(policy_values == [POLICY_VALUE, MISSION_VALUE])
         for token in tokens:
             if token in openers or token == "{":
                 block_depth += 1
@@ -154,14 +159,15 @@ def pi_launcher_contract_has_policy(source: bytes) -> bool:
 
 
 def read_missions(repo: SafeDirectory) -> dict[str, bytes]:
-    with repo.open_child("templates", require_owner=True) as templates:
-        with templates.open_child("missions", require_owner=True) as missions:
+    with open_source_child(repo, "templates") as templates:
+        with open_source_child(templates, "missions") as missions:
             names = sorted(name for name in missions.list_names() if name.endswith(".md"))
             captured: dict[str, bytes] = {}
             for name in names:
-                state, data = missions.read_regular(name)
-                if state != "regular" or data is None:
-                    raise UnsafePath(f"required repository source {MISSIONS_DIR}/{name} is {state}")
+                stem = name[:-3]
+                if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", stem) or stem in {".", ".."}:
+                    raise UnsafePath(f"invalid shipped mission filename: {name}")
+                data = missions.read_source_regular(name)
                 validate_policy_text(data, f"{MISSIONS_DIR}/{name}")
                 captured[name] = data
     if f"{DEFAULT_MISSION}.md" not in captured:
@@ -232,6 +238,8 @@ def main() -> int:
     repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
     try:
         with SafeDirectory.open_path(repo_path, create=False, require_owner=True) as repo:
+            if stat.S_IMODE(repo.stat().st_mode) & 0o022:
+                raise UnsafePath("repository root is group/world-writable")
             identity = repo_identity(repo)
             source_bytes = read_repo_file(repo, SOURCE)
             missions = read_missions(repo)
@@ -268,8 +276,8 @@ def main() -> int:
     applicable = ["pi"] + (["claude"] if claude_captured else [])
     identity_id = "fs-" + digest(f"{identity[0]}:{identity[1]}".encode())[:20]
 
-    home = Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser()
-    artifact_root = args.artifact_root or home / "artifacts"
+    home = Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser().absolute()
+    artifact_root = (args.artifact_root or home / "artifacts").expanduser().absolute()
     now = utc_now(args.now)
     created_at = now.isoformat(timespec="microseconds").replace("+00:00", "Z")
     snapshot_name = "watchtower-policy.md"

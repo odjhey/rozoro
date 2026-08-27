@@ -16,10 +16,11 @@ while [ $# -gt 0 ]; do
     *) PASS+=("$1"); shift ;;
   esac
 done
-unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
+unset ROZORO_WT_NAME ROZORO_WT_PRESET ROZORO_WT_PRESET_VERSION ROZORO_WT_PRESET_SHA256 ROZORO_WT_POLICY_SHA256 ROZORO_WT_POLICY_CORE_SHA256 ROZORO_WT_POLICY_MISSION_NAME ROZORO_WT_POLICY_MISSION_SOURCE ROZORO_WT_POLICY_MISSION_SHA256 ROZORO_WT_MODEL ROZORO_WT_EFFORT ROZORO_WT_DRIVER
 [ -z "$WT_NAME" ] || rzr_validate_wt_metadata "$WT_NAME" "watchtower name"
 if [ -n "$PRESET" ]; then
-  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || rzr_die "watchtower preset '$PRESET' has invalid or unsafe content"
+  rzr_validate_wtpreset_name "$PRESET"
+  RESOLVED="$(rzr_wtpreset_resolve "$PRESET")" || exit $?
   [ "$(printf '%s' "$RESOLVED" | jq -r '.document.harness')" = claude ] || rzr_die "watchtower preset '$PRESET' is not for harness claude"
   [ -n "$WT_NAME" ] || WT_NAME="$PRESET"
   MODEL="$(printf '%s' "$RESOLVED" | jq -r '.document.model // empty')"

@@ -31,7 +31,7 @@ from lib.rozoro_monitor.client import _open_home
 
 
 def home_path() -> Path:
-    return Path(os.environ.get("ROZORO_HOME", "~/.rozoro")).expanduser().absolute()
+    return Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser().absolute()
 
 
 def down(home: Path, error: str | None = None) -> dict:

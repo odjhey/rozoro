@@ -8,8 +8,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
-from lib.rozoro_artifacts.safe_fs import SafeDirectory
+from lib.rozoro_artifacts.safe_fs import SafeDirectory, trusted_source_metadata
 
 REPO = Path(__file__).resolve().parents[2]
 POLICY_SCRIPT = REPO / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
@@ -177,6 +178,43 @@ class DatedArtifactSkillTests(unittest.TestCase):
             )
             self.assertNotEqual(substring_only.returncode, 0)
             self.assertIn("strict shipped launcher contract", substring_only.stderr)
+
+    def test_source_owner_predicate_rejects_synthetic_foreign_uid(self) -> None:
+        owned = SimpleNamespace(st_dev=1, st_ino=2, st_mode=stat.S_IFREG | 0o644, st_uid=os.geteuid(), st_nlink=1)
+        foreign = SimpleNamespace(st_dev=1, st_ino=2, st_mode=stat.S_IFREG | 0o644, st_uid=os.geteuid() + 1, st_nlink=1)
+        self.assertTrue(trusted_source_metadata(owned, owned, os.geteuid()))
+        self.assertFalse(trusted_source_metadata(owned, foreign, os.geteuid()))
+
+    @unittest.skipUnless(os.environ.get("ROZORO_FOREIGN_OWNED_FIXTURE"),
+                         "no pre-existing safe foreign-owned fixture; no privileged OS workaround permitted")
+    def test_foreign_owner_integration_when_fixture_is_provided(self) -> None:
+        self.assertNotEqual(Path(os.environ["ROZORO_FOREIGN_OWNED_FIXTURE"]).stat().st_uid, os.geteuid())
+
+    def test_policy_snapshot_rejects_unsafe_source_metadata_and_mission_names(self) -> None:
+        def fixture(root: Path) -> Path:
+            checkout = root / "checkout"
+            (checkout / "templates/missions").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (checkout / "templates/watchtower.md").write_text("core\n")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
+            return checkout
+
+        mutations = {
+            "writable-core": lambda checkout: (checkout / "templates/watchtower.md").chmod(0o666),
+            "hardlinked-mission": lambda checkout: os.link(checkout / "templates/missions/delivery.md", checkout / "mission-link"),
+            "writable-directory": lambda checkout: (checkout / "templates/missions").chmod(0o777),
+            "invalid-mission-name": lambda checkout: (checkout / "templates/missions/bad name.md").write_text("bad\n"),
+            "hardlinked-launcher": lambda checkout: os.link(checkout / "bin/rzr-pi-watchtower.sh", checkout / "launcher-link"),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); checkout = fixture(root); mutate(checkout)
+                result = subprocess.run(["python3", str(POLICY_SCRIPT), "--repo-root", str(checkout),
+                                         "--artifact-root", str(root / "artifacts")],
+                                        capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0, label)
 
     def test_policy_coverage_requires_policy_on_array_consumed_by_pi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

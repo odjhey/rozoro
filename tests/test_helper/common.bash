@@ -32,6 +32,7 @@ teardown() {
 }
 
 register_pid() { TEST_PIDS="$TEST_PIDS $1"; }
+make_wt_presets() { mkdir -p "$ROZORO_HOME/watchtower-presets"; chmod 700 "$ROZORO_HOME/watchtower-presets"; }
 
 # Octal permission bits of a file, portable across GNU and macOS. Try GNU
 # `stat -c` first: on BSD/macOS `-c` is rejected (clean non-zero) so we fall back

@@ -21,7 +21,13 @@ RZR_BIN="$(cd "$(dirname "$RZR_LIB_SRC")" && pwd)"
 # Home for all on-disk state. Defaults to ~/.rozoro so the driver's state lives
 # outside any one checkout and survives a restart. Precedence: ROZORO_HOME (the
 # public knob) > RZR_HOME > default.
-RZR_HOME="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
+RZR_HOME="$(RZR_HOME_RAW="$RZR_HOME_RAW" python3 - <<'PY'
+import os
+print(os.path.abspath(os.path.expanduser(os.environ["RZR_HOME_RAW"])))
+PY
+)"
+export ROZORO_HOME="$RZR_HOME"
 RZR_STATE="$RZR_HOME/state"
 # Per-task folders: the durable record of a task's INPUT (brief.md), append-only
 # OUTPUT (handoff.md), and resume link (session.json). Data, so it lives under
@@ -31,7 +37,8 @@ RZR_TASKS="$RZR_HOME/tasks"
 # this checkout, not RZR_HOME. Override with RZR_TEMPLATES.
 RZR_REPO="$(cd "$RZR_BIN/.." && pwd)"
 RZR_TEMPLATES="${RZR_TEMPLATES:-$RZR_REPO/templates}"
-RZR_VALIDATE_HOME="$RZR_HOME" python3 - <<'PY'
+if [ "${RZR_LIB_NO_STATE_INIT:-0}" != 1 ]; then
+  RZR_VALIDATE_HOME="$RZR_HOME" python3 - <<'PY'
 import os, stat
 path=os.environ["RZR_VALIDATE_HOME"]
 try: info=os.stat(path,follow_symlinks=False)
@@ -40,10 +47,11 @@ except FileNotFoundError:
 if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)&0o077:
     raise SystemExit("rzr: unsafe ROZORO_HOME: require an owned owner-private real directory")
 PY
-[ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
-mkdir -p "$RZR_STATE"
-[ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
-chmod 700 "$RZR_STATE"
+  [ ! -L "$RZR_STATE" ] || { echo "rzr: state directory must not be a symlink" >&2; exit 1; }
+  mkdir -p "$RZR_STATE"
+  [ -O "$RZR_STATE" ] || { echo "rzr: state directory must be owned by the current user" >&2; exit 1; }
+  chmod 700 "$RZR_STATE"
+fi
 
 # Task keys and legacy ids are deliberately conservative filesystem components.
 # Existing unsuffixed folders remain valid; unsafe historical names must be
@@ -303,58 +311,65 @@ rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
   local name="$1"; rzr_validate_wtpreset_name "$name"
   RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
 import hashlib, json, math, os, stat
-path=os.environ["RZR_WTP_DIR"]; before=os.stat(path,follow_symlinks=False)
-root = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); raise SystemExit("preset directory changed during open")
+path=os.environ["RZR_WTP_DIR"]; nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
+def die(family): raise SystemExit("rzr: watchtower preset "+family)
+try: before=os.stat(path,follow_symlinks=False)
+except FileNotFoundError: die("not found")
+if not stat.S_ISDIR(before.st_mode) or before.st_uid!=os.geteuid() or stat.S_IMODE(before.st_mode)&0o077: die("storage is unsafe")
+try: root=os.open(path,os.O_RDONLY|directory|nofollow)
+except OSError: die("storage is unsafe")
+if (before.st_dev,before.st_ino)!=(os.fstat(root).st_dev,os.fstat(root).st_ino): os.close(root); die("storage is unsafe")
 try:
-    filename=os.environ["RZR_WTP_FILE"]; before=os.stat(filename,dir_fd=root,follow_symlinks=False)
-    fd = os.open(filename, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=root)
+    filename=os.environ["RZR_WTP_FILE"]
+    try: before=os.stat(filename,dir_fd=root,follow_symlinks=False)
+    except FileNotFoundError: die("not found")
+    if not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or before.st_nlink!=1: die("storage is unsafe")
+    try: fd=os.open(filename,os.O_RDONLY|nofollow|getattr(os,"O_NONBLOCK",0),dir_fd=root)
+    except OSError: die("storage is unsafe")
     try:
-        info = os.fstat(fd)
-        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit("preset changed during open")
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
-            raise SystemExit("preset is not a singly-linked owned regular file")
-        chunks = []
+        info=os.fstat(fd)
+        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): die("storage is unsafe")
+        chunks=[]
         while True:
-            chunk = os.read(fd, 65536)
+            chunk=os.read(fd,65536)
             if not chunk: break
             chunks.append(chunk)
     finally: os.close(fd)
 finally: os.close(root)
-raw = b"".join(chunks)
+raw=b"".join(chunks)
 def reject_constant(value): raise ValueError("non-standard JSON constant: "+value)
 try: doc = json.loads(raw, parse_constant=reject_constant)
-except (UnicodeError, ValueError): raise SystemExit("invalid preset JSON")
-if not isinstance(doc, dict): raise SystemExit("preset must be an object")
+except (UnicodeError, ValueError): die("content is invalid")
+if not isinstance(doc, dict): die("content is invalid")
 def finite_json(value):
     if isinstance(value, float): return math.isfinite(value)
     if isinstance(value, dict): return all(finite_json(item) for item in value.values())
     if isinstance(value, list): return all(finite_json(item) for item in value)
     return True
-if not finite_json(doc): raise SystemExit("preset contains a non-finite number")
+if not finite_json(doc): die("content is invalid")
 for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
-    if key in doc and not isinstance(doc[key], str): raise SystemExit("invalid preset field type")
+    if key in doc and not isinstance(doc[key], str): die("content is invalid")
 for key in ("harness", "model", "effort", "permission_mode", "notes", "mission"):
-    if len(doc.get(key, "")) > 120: raise SystemExit("preset field is too long")
+    if len(doc.get(key, "")) > 120: die("content is invalid")
     if "=" in doc.get(key, "") or any(ord(char) < 32 or ord(char) == 127 for char in doc.get(key, "")):
-        raise SystemExit("preset field contains unsafe metadata characters")
+        die("content is invalid")
 mission = doc.get("mission", "")
 if mission:
     safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
     if mission in (".", "..") or any(char not in safe for char in mission):
-        raise SystemExit("invalid preset mission name")
+        die("content is invalid")
 for key in ("schema", "version"):
     if key in doc and (not isinstance(doc[key], (int, float)) or isinstance(doc[key], bool)):
-        raise SystemExit("invalid preset field type")
+        die("content is invalid")
 if "version" in doc:
     version=doc["version"]
-    if len(str(version)) > 120: raise SystemExit("preset version is too long")
+    if len(str(version)) > 120: die("content is invalid")
     if isinstance(version,str) and ("=" in version or any(ord(char) < 32 or ord(char) == 127 for char in version)):
-        raise SystemExit("preset version contains unsafe metadata characters")
-    if isinstance(version,(int,float)) and abs(version) > 2**53-1: raise SystemExit("preset version exceeds JSON numeric precision")
-if doc.get("harness", "") not in ("claude", "pi"): raise SystemExit("invalid preset harness")
+        die("content is invalid")
+    if isinstance(version,(int,float)) and abs(version) > 2**53-1: die("content is invalid")
+if doc.get("harness", "") not in ("claude", "pi"): die("content is invalid")
 if doc.get("effort", "") not in ("", "low", "medium", "high", "xhigh", "max"):
-    raise SystemExit("invalid preset effort")
+    die("content is invalid")
 print(json.dumps({"document": doc, "sha256": hashlib.sha256(raw).hexdigest()}, separators=(",", ":"), allow_nan=False))
 PY
 }
