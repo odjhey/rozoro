@@ -131,11 +131,13 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
                         finally: os.close(fd)
             # A real passwd expansion row kills expand-$HOME-only mutants.
             import pwd
-            username = pwd.getpwuid(os.getuid()).pw_name
-            account = Path(pwd.getpwnam(username).pw_dir)
-            with patch.dict(os.environ, self.env(), clear=True):
-                self.assertEqual(resolve_home(f"~{username}/.rozoro-h2-probe"), account / ".rozoro-h2-probe")
-                (account / ".rozoro-h2-probe").rmdir()
+            try: username = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError: username = None  # Pinned uid-only CI has no passwd row.
+            if username:
+                account = Path(pwd.getpwnam(username).pw_dir)
+                with patch.dict(os.environ, self.env(), clear=True):
+                    self.assertEqual(resolve_home(f"~{username}/.rozoro-h2-probe"), account / ".rozoro-h2-probe")
+                    (account / ".rozoro-h2-probe").rmdir()
         finally: os.chdir(old)
 
     def test_real_monitor_cli_start_status_stop_reset_complete_matrix(self):
