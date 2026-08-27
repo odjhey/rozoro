@@ -61,6 +61,33 @@ load test_helper/common
   done
 }
 
+@test "every harness and policy-field subset has exact ingress and no-write behavior" {
+  fields=(ROZORO_WT_POLICY_SHA256 ROZORO_WT_POLICY_CORE_SHA256 ROZORO_WT_POLICY_MISSION_NAME ROZORO_WT_POLICY_MISSION_SOURCE ROZORO_WT_POLICY_MISSION_SHA256)
+  values=("$(printf 'a%.0s' $(seq 1 64))" "$(printf 'b%.0s' $(seq 1 64))" delivery shipped "$(printf 'c%.0s' $(seq 1 64))")
+  for harness in pi claude codex copilot; do
+    for mask in $(seq 0 31); do
+      home="$TEST_ROOT/matrix-$harness-$mask"; rm -rf "$home"
+      for field in "${fields[@]}"; do unset "$field"; done
+      for index in $(seq 0 4); do
+        if (( mask & (1 << index) )); then export "${fields[$index]}=${values[$index]}"; fi
+      done
+      export ROZORO_HOME="$home" HERDR_PANE_ID="pane-$harness-$mask"
+      fake_pane "$HERDR_PANE_ID" idle "$harness" true
+      run rzr-register.sh --harness "$harness" --backend herdr
+      if { [ "$harness" = pi ] && { [ "$mask" -eq 0 ] || [ "$mask" -eq 31 ]; }; } || { [ "$harness" != pi ] && [ "$mask" -eq 0 ]; }; then
+        assert_success
+        target="$home/watchtowers/$output/target.json"
+        [ -f "$target" ]; [ "$(wc -l < "${target%/target.json}/registrations.jsonl" | tr -d ' ')" = 1 ]
+      else
+        assert_failure
+        [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
+        [ ! -e "$home" ]
+        find "$TEST_ROOT" -name '*.tmp.*' -print -quit | grep -q . && return 1 || true
+      fi
+    done
+  done
+}
+
 @test "registration without watchtower env preserves legacy target shape" {
   export HERDR_PANE_ID=driver-pane
   fake_pane driver-pane idle claude true

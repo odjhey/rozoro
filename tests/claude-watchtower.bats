@@ -1,6 +1,62 @@
 #!/usr/bin/env bats
 load test_helper/common
 
+authority_marker_is_exact() {
+  [ -f "$1" ] && cmp -s "$1" "$2"
+}
+
+wait_for_exact_authority() {
+  marker="$1" expected="$2" attempts="$3" delay="$4"
+  for _ in $(seq 1 "$attempts"); do
+    authority_marker_is_exact "$marker" "$expected" && return 0
+    sleep "$delay"
+  done
+  return 1
+}
+
+diagnose_authority_marker() {
+  marker="$1"
+  ls -ld "$marker" >&2 2>/dev/null || true
+  [ ! -f "$marker" ] || { printf '%s\n' 'authority marker bytes:' >&2; od -An -tx1 "$marker" >&2; }
+}
+
+@test "authority readiness requires exact event-bus-v1 marker bytes within its bound" {
+  marker="$TEST_ROOT/.event-bus-authority"
+  expected="$TEST_ROOT/expected-authority"
+  printf 'event-bus-v1\n' > "$expected"
+
+  for contents in empty wrong truncated extra; do
+    case "$contents" in
+      empty) : > "$marker" ;;
+      wrong) printf 'event-bus-v2\n' > "$marker" ;;
+      truncated) printf 'event-bus-v1' > "$marker" ;;
+      extra) printf 'event-bus-v1\nextra\n' > "$marker" ;;
+    esac
+    if wait_for_exact_authority "$marker" "$expected" 2 .01; then
+      printf 'malformed %s marker was accepted\n' "$contents" >&2
+      false
+    fi
+  done
+  rm -f "$marker"
+  if wait_for_exact_authority "$marker" "$expected" 2 .01; then
+    printf '%s\n' 'missing marker was accepted' >&2
+    false
+  fi
+
+  printf 'wrong\n' > "$marker"
+  (sleep .12; printf 'event-bus-v1\n' > "$marker") & late=$!
+  if wait_for_exact_authority "$marker" "$expected" 2 .01; then
+    printf '%s\n' 'marker corrected after the bound was accepted early' >&2
+    false
+  fi
+  wait "$late"
+
+  printf 'wrong\n' > "$marker"
+  (sleep .02; printf 'event-bus-v1\n' > "$marker") & timely=$!
+  wait_for_exact_authority "$marker" "$expected" 20 .01
+  wait "$timely"
+}
+
 @test "Claude watchtower launch activates authority and exact resume uses a fresh incarnation" {
   export PYTHONDONTWRITEBYTECODE=1
   if [ -x /opt/homebrew/bin/python3 ]; then mkdir "$TEST_ROOT/pybin"; ln -s /opt/homebrew/bin/python3 "$TEST_ROOT/pybin/python3"; export PATH="$TEST_ROOT/pybin:$PATH"; fi
@@ -11,9 +67,15 @@ load test_helper/common
   chmod 700 "$ROZORO_HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks"
   "$REPO_ROOT/bin/rozoro" monitor start >/dev/null || { cat "$ROZORO_HOME/monitor.log" >&2; false; }
   "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --cwd "$TEST_ROOT" -- --permission-mode auto >"$TEST_ROOT/launcher.log" 2>&1 & owner=$!; register_pid "$owner"
-  for _ in $(seq 1 80); do session="$(grep -- '--session-id' "$FAKE_CLAUDE_LOG" 2>/dev/null | tail -1 | sed 's/.*--session-id //; s/ .*//')"; [ -n "${session:-}" ] && [ -f "$ROZORO_HOME/watchtowers/claude-$session/.event-bus-authority" ] && break; sleep .05; done
+  for _ in $(seq 1 80); do session="$(grep -- '--session-id' "$FAKE_CLAUDE_LOG" 2>/dev/null | tail -1 | sed 's/.*--session-id //; s/ .*//')"; [ -n "${session:-}" ] && break; sleep .05; done
   [ -n "${session:-}" ] || { cat "$TEST_ROOT/launcher.log" >&2; cat "$FAKE_CLAUDE_LOG" >&2; false; }
-  dir="$ROZORO_HOME/watchtowers/claude-$session"; [ -f "$dir/.event-bus-authority" ] || { cat "$TEST_ROOT/launcher.log" >&2; find "$dir" -maxdepth 2 -ls >&2; cat "$ROZORO_HOME/monitor.log" >&2; false; }
+  dir="$ROZORO_HOME/watchtowers/claude-$session"
+  expected_authority="$TEST_ROOT/expected-authority"
+  printf 'event-bus-v1\n' > "$expected_authority"
+  # Claude starts before registration and authority activation. Under a loaded
+  # parallel runner, observing its argv is not evidence that authority is ready.
+  wait_for_exact_authority "$dir/.event-bus-authority" "$expected_authority" 240 .05 || { cat "$TEST_ROOT/launcher.log" >&2; find "$dir" -maxdepth 2 -print >&2; diagnose_authority_marker "$dir/.event-bus-authority"; cat "$ROZORO_HOME/monitor.log" >&2; false; }
+  authority_marker_is_exact "$dir/.event-bus-authority" "$expected_authority"
   ready="$(find "$dir" -name 'poller-ready.*' -type f | head -1)"; [ -s "$ready" ]; poller="$(cat "$ready")"; kill -0 "$poller"
   [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/target.json")" -eq 0 ]
   [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/registrations.jsonl")" -eq 0 ]
@@ -32,7 +94,10 @@ PY2
 
   : > "$FAKE_CLAUDE_LOG"
   "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --resume "$session" --cwd "$TEST_ROOT" >/dev/null 2>&1 & resumed=$!; register_pid "$resumed"
-  for _ in $(seq 1 80); do grep -F -- "--resume $session" "$FAKE_CLAUDE_LOG" >/dev/null 2>&1 && [ -f "$dir/.event-bus-authority" ] && break; sleep .05; done
+  for _ in $(seq 1 80); do grep -F -- "--resume $session" "$FAKE_CLAUDE_LOG" >/dev/null 2>&1 && break; sleep .05; done
+  grep -F -- "--resume $session" "$FAKE_CLAUDE_LOG" >/dev/null 2>&1 || { cat "$FAKE_CLAUDE_LOG" >&2; false; }
+  wait_for_exact_authority "$dir/.event-bus-authority" "$expected_authority" 240 .05 || { diagnose_authority_marker "$dir/.event-bus-authority"; false; }
+  authority_marker_is_exact "$dir/.event-bus-authority" "$expected_authority"
   command="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")"
   printf '{"hook_event_name":"SessionStart","session_id":"%s"}\n' "$session" | sh -c "$command"
   python3 - "$ROZORO_HOME/monitor.db" "$old_adapter" <<'PY2'

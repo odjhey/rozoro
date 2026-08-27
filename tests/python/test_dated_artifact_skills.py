@@ -218,6 +218,49 @@ class DatedArtifactSkillTests(unittest.TestCase):
                                         capture_output=True, text=True, check=False, timeout=3)
                 self.assertNotEqual(result.returncode, 0, label)
 
+    def test_snapshot_rejects_replacement_of_every_consumed_entry(self) -> None:
+        """Replace the exact entry consumed by snapshot, never a harmless decoy."""
+        def fixture(root: Path) -> Path:
+            checkout = root / "checkout"
+            (checkout / "templates/missions").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (checkout / "templates/watchtower.md").write_text("core\n")
+            (checkout / "templates/missions/delivery.md").write_text("delivery\n")
+            (checkout / "templates/missions/second.md").write_text("second\n")
+            (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
+            (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
+            return checkout
+
+        entries = (
+            "templates/watchtower.md", "templates/missions/delivery.md",
+            "templates/missions/second.md", "bin/rzr-pi-watchtower.sh",
+            "bin/rzr-claude-watchtower.sh",
+        )
+        for kind in ("symlink", "hardlink", "fifo", "directory"):
+            for relative in entries:
+                with self.subTest(kind=kind, entry=relative), tempfile.TemporaryDirectory() as temporary:
+                    # macOS spells TemporaryDirectory under /var, a symlink to
+                    # /private/var. Resolve before SafeDirectory traversal so
+                    # every subtest reaches and mutates the consumed entry.
+                    root = Path(temporary).resolve(); checkout = fixture(root); entry = checkout / relative
+                    original = entry.read_bytes(); entry.unlink()
+                    if kind == "symlink":
+                        decoy = root / "decoy"; decoy.write_bytes(original); entry.symlink_to(decoy)
+                    elif kind == "hardlink":
+                        decoy = root / "decoy"; decoy.write_bytes(original); os.link(decoy, entry)
+                    elif kind == "fifo":
+                        os.mkfifo(entry)
+                    else:
+                        entry.mkdir()
+                    result = subprocess.run(
+                        ["python3", str(POLICY_SCRIPT), "--repo-root", str(checkout),
+                         "--artifact-root", str(root / "artifacts")],
+                        capture_output=True, text=True, check=False, timeout=3,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertFalse((root / "artifacts").exists())
+
     def test_source_regular_to_fifo_swap_is_bounded_on_actual_opened_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

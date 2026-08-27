@@ -2,6 +2,7 @@
 # immutable images avoids depending on Alpine's moving package repository.
 FROM docker.io/library/python:3.14.7-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc AS python-runtime
 FROM docker.io/library/node:24.14.0-alpine3.23@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS node-runtime
+FROM docker.io/oven/bun:1.2.22-alpine@sha256:ab596b6d0dcad05d23799b89451e92f4cdc16da184a9a4d240c42eaf3c4b9278 AS bun-runtime
 FROM ghcr.io/jqlang/jq:1.8.1@sha256:4f34c6d23f4b1372ac789752cc955dc67c2ae177eb1b5860b75cdc5091ce6f91 AS jq-runtime
 
 # Bats 1.14.0 is the final image, preserving its entrypoint and runtime setup.
@@ -10,10 +11,27 @@ FROM docker.io/bats/bats:1.14.0@sha256:5322b877351fda0cc435de8c6116de7d0a2ec79d7
 COPY --from=python-runtime /usr/local/ /usr/local/
 COPY --from=python-runtime /usr/lib/ /usr/lib/
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=node-runtime /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 COPY --from=node-runtime /usr/lib/libstdc++.so.6.0.34 /usr/lib/libstdc++.so.6.0.34
 COPY --from=jq-runtime /jq /usr/local/bin/jq
-RUN ln -s /usr/local/bin/python3 /usr/bin/python3 \
+RUN apk add --no-cache git \
+    && ln -s /usr/local/bin/python3 /usr/bin/python3 \
     && ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/lib/libstdc++.so.6.0.34 /usr/lib/libstdc++.so.6 \
     && ln -s /usr/local/bin/jq /usr/bin/jq
+
+# Match the numeric identity selected by tests/run.sh without assuming that its
+# host GID is absent from Alpine. The runner mounts this empty home as a tmpfs,
+# because the remainder of the test container is deliberately read-only.
+ARG ROZORO_TEST_UID
+ARG ROZORO_TEST_GID
+RUN case "$ROZORO_TEST_UID:$ROZORO_TEST_GID" in \
+      *[!0-9:]*|:*|*:|*:*:*) exit 2 ;; \
+    esac \
+    && ! grep -q '^rozoro-test:' /etc/passwd \
+    && ! awk -F: -v uid="$ROZORO_TEST_UID" '$3 == uid { found=1 } END { exit !found }' /etc/passwd \
+    && printf 'rozoro-test:x:%s:%s:Rozoro test account:/home/rozoro-test:/sbin/nologin\n' \
+      "$ROZORO_TEST_UID" "$ROZORO_TEST_GID" >> /etc/passwd \
+    && mkdir -m 700 /home/rozoro-test \
+    && chown "$ROZORO_TEST_UID:$ROZORO_TEST_GID" /home/rozoro-test
