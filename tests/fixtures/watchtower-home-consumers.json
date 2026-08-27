@@ -156,6 +156,7 @@
     "tests/python/test_reducer.py",
     "tests/python/test_server.py",
     "tests/python/test_store.py",
+    "tests/python/test_watchtower_artifact_home_matrix.py",
     "tests/python/test_watchtower_docs.py",
     "tests/python/test_watchtower_home_matrix.py",
     "tests/python/test_watchtower_home_source_audit.py",
