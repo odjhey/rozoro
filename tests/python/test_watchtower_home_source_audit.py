@@ -249,15 +249,17 @@ def shell_statements(text: str) -> list[tuple[str, list[str]]]:
 
 
 def shell_default(text: str) -> bool:
-    for raw, tokens in shell_statements(text):
-        match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*HOME[A-Za-z0-9_]*)=(.*)", raw)
-        if not match: continue
-        expression = match.group(2)
-        if ("$(" not in expression and "`" not in expression
-                and "${ROZORO_HOME" in expression and "${RZR_HOME" in expression
-                and ".rozoro" in expression):
-            return True
-    return False
+    # Quotes may differ, but the one active assignment must itself carry the
+    # complete public -> legacy -> HOME default dataflow. Neighboring commands
+    # and detached expansions cannot lend it evidence.
+    direct = re.compile(
+        r"\s*RZR_HOME_RAW\s*=\s*"
+        r"\$\{ROZORO_HOME:-\$\{RZR_HOME:-(?:\$HOME|\$\{HOME\})/\.rozoro\}\}\s*"
+    )
+    assignments = []
+    for active, _ in shell_statements(text):
+        if re.match(r"\s*RZR_HOME_RAW\s*=", active): assignments.append(active)
+    return len(assignments) == 1 and direct.fullmatch(assignments[0]) is not None
 
 
 def shell_argument(text: str, value: str) -> bool:
@@ -501,8 +503,23 @@ class HomeSourceAuditTests(unittest.TestCase):
                       'NOTE={"calls": [os.environ.get("ROZORO_HOME"), os.environ.get("RZR_HOME")], "default": "~/.rozoro"}\n'):
             self.assertFalse(python_default(decoy))
         shell = "${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
-        self.assertFalse(shell_default(f"# RZR_HOME_RAW={shell}\nRZR_HOME_RAW='{shell}'\nNOTE=\"{shell}\"\n"))
-        self.assertFalse(shell_default(f'RZR_HOME_RAW="$(printf %s "{shell}")"\n'))
+        self.assertTrue(shell_default(f'RZR_HOME_RAW="{shell}"\n'))
+        self.assertTrue(shell_default(f'RZR_HOME_RAW={shell}\n'))
+        self.assertTrue(shell_default('RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-${HOME}/.rozoro}}"\n'))
+        for decoy in (
+            f"# RZR_HOME_RAW={shell}\nRZR_HOME_RAW='{shell}'\nNOTE=\"{shell}\"\n",
+            f'RZR_HOME_RAW="$(printf %s "{shell}")"\n',
+            f'RZR_HOME_RAW=wrong; printf %s "{shell}"\n',
+            f'RZR_HOME_RAW=wrong\nprintf %s "{shell}"\n',
+            f'RZR_HOME_RAW=wrong\nNOTE="{shell}"\n',
+            '${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}\n',
+            'RZR_HOME_RAW=${RZR_HOME:-${ROZORO_HOME:-$HOME/.rozoro}}\n',
+            'RZR_HOME_RAW=${ROZORO_HOME:-${RZR_HOME:-$HOME/other}}\n',
+            'RZR_HOME_RAW=${ROZORO_HOME-${RZR_HOME:-$HOME/.rozoro}}\n',
+            f'RZR_HOME_RAW={shell}\nRZR_HOME_RAW={shell}\n',
+            f'RZR_HOME_RAW={shell}; true\n',
+        ):
+            self.assertFalse(shell_default(decoy))
         ts = 'process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro")'
         for decoy in (f'const selectedHome = "{ts}";', f'const selectedHome = `{ts}`;',
                       f'const selectedHome = [{ts}];', f'const selectedHome = {{value: {ts}}};',
@@ -528,6 +545,14 @@ class HomeSourceAuditTests(unittest.TestCase):
             self.assertTrue(any(path in e and "no semantic source evidence" in e for e in audit(load_fixture(), removed)))
             renamed = dict(sources); renamed[path + ".renamed"] = renamed.pop(path)
             self.assertTrue(any(path in e and "not source surface" in e for e in audit(load_fixture(), renamed)))
+        assignment = 'RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"'
+        reviewer = 'RZR_HOME_RAW=wrong; printf %s "${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"'
+        for path in ("bin/rzr-lib.sh", "bin/rzr-doctor.sh"):
+            mutant = dict(sources)
+            self.assertEqual(mutant[path].count(assignment), 1)
+            mutant[path] = mutant[path].replace(assignment, reviewer)
+            self.assertTrue(any(path in e and "no semantic source evidence" in e
+                                for e in audit(load_fixture(), mutant)))
         inventory = load_fixture(); del inventory["direct_default"]["bin/rzr-event-bus-client.py"]
         self.assertTrue(any("event-bus-client.py: tracked default-home selector absent" in e for e in audit(inventory, sources)))
         stale = load_fixture(); stale["direct_default"]["bin/removed.py"] = {"kind":"python_default"}
