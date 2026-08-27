@@ -82,3 +82,9 @@ contracts only; they intentionally name no models).
 Task kinds, fleet roles and their boundaries, assurance flow and what
 "verified" means, unattended-versus-ask authority, and the skill subset in
 use. `templates/missions/delivery.md` is the reference implementation.
+
+A mission's role list is not closed: Watchtower may create an **ad-hoc
+specialist** for bounded work no listed role owns, with a written boundary in
+its brief, no absorbed authority from listed roles, and recorded
+creation/rationale. Recurring ad-hoc specialists graduate into the mission's
+role list.

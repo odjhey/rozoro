@@ -27,6 +27,10 @@ Choose among the roles that fit the next bounded action:
 - No-Mistakes Runner
 - Workset Merger
 - Quick Scout / Quick Coder when `quick-crew-routing` qualifies
+- an ad-hoc specialist, when the mission permits one and no listed role owns
+  the bounded work — resolve its model/effort from the nearest analogous
+  role's durable assignment or the machine profile, and give its brief an
+  explicit boundary per the dispatch guidelines
 
 For new implementation work, Planner is the normal bridge from raw intent to a
 bounded **workset execution strategy** when scope, dependencies, acceptance

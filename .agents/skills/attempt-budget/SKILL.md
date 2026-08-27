@@ -44,6 +44,24 @@ Watchtower turns do not themselves consume Coder attempts. Integration/landing
 work consumes a Coder attempt only when a finding is routed back into a new Coder
 implementation turn.
 
+## Failure classification guards the budget
+
+Classify a blocker before charging any counter. **Only NEEDS_REPLAN
+increments `replan_count`.** Do not consume replan budget — and do not count
+a Coder implementation attempt — for:
+
+- package/workspace configuration repair;
+- CI, gate-check, or no-mistakes pipeline/configuration defects;
+- test-harness defects and missing fixture/copied-corpus problems;
+- other narrowly bounded infrastructure fixes.
+
+Route those as **NEEDS_INFRA_REPAIR** or **NEEDS_GATE_REPAIR**: a bounded
+repair brief whose attempts are tracked separately from the implementation
+lineage. A repair turn joins the lineage budget only when its findings route
+back into a candidate-writing Coder implementation turn on the product code.
+Three unrelated infrastructure problems must never exhaust a lineage's
+replan budget.
+
 ## Replanning extends the lineage
 
 Replanning is the bounded mechanism for extending a non-converging implementation

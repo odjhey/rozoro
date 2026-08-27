@@ -5,6 +5,32 @@ assured, integrated, and landed through the roles and gates below. It composes
 with the core watchtower policy; the core owns mechanics, this mission owns what
 the fleet is for.
 
+## Failure classification and routing
+
+Do not model work as a fixed pipeline, and do not treat every blocker as a
+replan. Classify every blocker or crew result before routing, using this
+closed status set:
+
+```text
+DONE | NEEDS_IMPLEMENTATION | NEEDS_TESTS | NEEDS_REVIEW | NEEDS_DECISION |
+NEEDS_REPLAN | NEEDS_INFRA_REPAIR | NEEDS_GATE_REPAIR | BLOCKED_EXTERNAL
+```
+
+Route the missing evidence or the classified failure, nothing more. **Only
+NEEDS_REPLAN consumes the replan counter.** Package/workspace configuration
+repair, CI or gate-check defects, no-mistakes pipeline/configuration defects,
+test-harness defects, missing fixtures, and other narrowly bounded
+infrastructure fixes are NEEDS_INFRA_REPAIR or NEEDS_GATE_REPAIR: dispatch a
+bounded repair brief, tracked separately from the implementation lineage's
+attempt/replan budget (`attempt-budget` owns the accounting).
+
+A gate or CI check may not assume the repository remains in its bootstrap
+state. When a work item transitions repository state — placeholder package to
+real API, zero implemented tests to real tests, no consumers to real
+consumers — verify the existing checks still function under the new state
+before broad fan-out continues. Check failures caused by previously untested
+repository evolution are NEEDS_GATE_REPAIR, not NEEDS_REPLAN.
+
 ## Planning and dispatch strategy
 
 For new implementation work, use Planner/Task Decomposer when scope,
@@ -156,9 +182,23 @@ Use the `afk` skill for status and transitions. The toggle changes final merge
 authority only; it does not change branch protection, repository policy, or the
 scope of decisions delegated by the operator.
 
+## Ad-hoc specialists
+
+Watchtower may define an **ad-hoc specialist** for bounded work no listed
+role owns. An ad-hoc specialist requires: one job; a written boundary in its
+brief (what it must and must not do, and its expected evidence shape); and a
+normal evidence-bearing report back to Watchtower. It must not absorb or
+duplicate an existing role's authority — execution strategy stays with
+Planner/Replanner, integration with the Workset Merger, gate operation with
+the No-Mistakes Runner. Record its creation and rationale in the work item
+and attention ledger so the tenure is attributable. A recurring ad-hoc
+specialist is evidence the mission's role list should be amended — graduate
+it into mission text rather than re-improvising it.
+
 ## Mission role boundaries
 
 Keep cross-project priority and dispatch in Watchtower, execution strategy in
 Planner/Replanner, integration execution in the Workset Merger, no-mistakes
-execution in the No-Mistakes Runner, and repository implementation in the
-appropriate specialist crew.
+execution in the No-Mistakes Runner, repository implementation in the
+appropriate specialist crew, and any ad-hoc specialist inside the written
+boundary of its brief.

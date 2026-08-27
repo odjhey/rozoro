@@ -330,6 +330,27 @@ landing/post-merge case.
 sufficient. `/afk off` stops the merger immediately before the final merge
 mutation and asks the operator to confirm.
 
+## Ad-hoc specialists
+
+The mission's role list is not closed. Watchtower may define an ad-hoc
+specialist for bounded work no listed role owns, subject to:
+
+- **one job**, stated as a bounded task with an explicit stop boundary;
+- a **written boundary in the brief**: what it must and must not do, and the
+  evidence shape it reports back;
+- **no absorbed authority** — an ad-hoc specialist never takes over a listed
+  role's decisions (planning strategy, contract/authority decisions,
+  integration/landing, gate operation stay with their owners);
+- **recorded creation** — note the role's name, rationale, and boundary in
+  the work item and attention ledger so the tenure is attributable; and
+- **graduation over repetition** — a recurring ad-hoc specialist is evidence
+  the mission's role list should be amended in its mission file, not
+  re-improvised per dispatch.
+
+`crew-model-selection` resolves an ad-hoc specialist's target from the
+nearest analogous role's durable policy assignment, or the machine profile
+when none fits.
+
 ## Quick Crew
 
 `quick-crew-routing` owns eligibility for the bounded fast path. The Quick Crew
