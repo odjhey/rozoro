@@ -1,6 +1,6 @@
 # ADR-0013: Mission-composed watchtower policy
 
-review: pending
+review: approved
 date: 2026-08-27
 supersedes: ADR-0011 (the "v1 has no policy override" boundary only)
 
@@ -59,12 +59,21 @@ Choose option 3.
 - The mission is selected by the preset **field**, never inferred from the
   preset name. Names remain pure metadata (ADR-0011); renaming a preset must
   not change its policy, and several presets may share one mission.
-- `ROZORO_WT_POLICY_SHA256` becomes the SHA-256 of the exact concatenated
-  core+mission bytes delivered at launch. The registration schema is unchanged;
-  which mission a tenure ran is recoverable through the recorded preset
-  name/version/sha256, whose bytes include the `mission` field.
-- The launcher rechecks both file identities immediately before exec and dies
-  on a mid-launch change, extending the existing single-file guard.
+- Every launch records an all-or-none five-field policy tuple: the SHA-256 of
+  exact core+mission bytes, core SHA-256, logical mission name, symbolic
+  `shipped`/`operator` source, and mission SHA-256. This applies even without a
+  name or preset and is preserved in current and historical registration.
+- Resolution is descriptor-relative and no-follow. Checkout directories and
+  shipped files must be effective-UID-owned and not group/world-writable;
+  shipped files are singly-linked regular files. The effective home and its
+  mission directory are owner-private real directories, and operator missions
+  are owner-private singly-linked regular files. Unsafe candidates fail the
+  launch even when the alternate candidate is safe.
+- Core and mission bytes must be nonempty strict UTF-8 containing at least one
+  non-whitespace scalar. TAB, LF, and CR are the only permitted C0/C1 controls.
+  Bytes are not normalized and their exact form determines all hashes.
+- The launcher rechecks both lexical paths and selected identities immediately
+  before exec and dies on an ordinary mid-launch change.
 - Composition is Pi-only for now: the Claude watchtower launcher appends no
   policy file today, and this decision does not change that.
 
@@ -81,6 +90,11 @@ Choose option 3.
 - `watchtower-policy-snapshot` must capture the core plus shipped missions and
   per-mission composed hashes; operator missions under `$ROZORO_HOME` are
   enumerated as a coverage note but not captured from the checkout.
+- `ROZORO_HOME` when nonempty, then legacy `RZR_HOME` when nonempty, then
+  `$HOME/.rozoro` is the single effective home precedence for presets, missions,
+  registration, and other home-relative state.
+- Pi passthrough cannot supply policy prompt options; the launcher alone owns
+  exactly two `--append-system-prompt` pairs, core first and one mission second.
 - A malicious or mistaken operator mission file changes watchtower behavior
   without VCS review. The filesystem contract from ADR-0011 (owner-private,
   no-follow, owned regular files, same-UID sabotage out of scope) applies to
@@ -101,5 +115,12 @@ Choose option 3.
   future decision that formalizes per-mission skills must also fold the
   effective skill set (paths and hashes) into policy attribution, or the
   mission hash stays precise while part of the effective policy floats free.
-- ADR-0011's registration, locking, and attribution decisions are otherwise
-  unchanged.
+- The final pathname recheck does not prevent a same-UID process replacing a
+  path after that check but before Pi opens it. That residual attribution race
+  is explicitly accepted under ADR-0011's threat model; immutable handoff or
+  stronger same-UID isolation requires a future architecture decision.
+- ADR-0011's transport-derived driver identity, preset-name metadata semantics,
+  registration/current-history behavior, locking, dispatch attribution, and
+  filesystem threat model remain unchanged. ADR-0012's durable policy
+  precedence is unchanged. This ADR supersedes ADR-0011 only on v1 policy
+  selection.

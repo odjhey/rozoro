@@ -18,30 +18,34 @@ load test_helper/common
 
 @test "registration records optional watchtower preset and appends private tenure records" {
   export HERDR_PANE_ID=driver-pane ROZORO_WT_NAME=north ROZORO_WT_PRESET=luna
-  export ROZORO_WT_PRESET_VERSION=3 ROZORO_WT_PRESET_SHA256=abc ROZORO_WT_POLICY_SHA256=def
+  export ROZORO_WT_PRESET_VERSION=3 ROZORO_WT_PRESET_SHA256=abc
+  export ROZORO_WT_POLICY_SHA256="$(printf 'a%.0s' $(seq 1 64))" ROZORO_WT_POLICY_CORE_SHA256="$(printf 'b%.0s' $(seq 1 64))"
+  export ROZORO_WT_POLICY_MISSION_NAME=delivery ROZORO_WT_POLICY_MISSION_SOURCE=shipped ROZORO_WT_POLICY_MISSION_SHA256="$(printf 'c%.0s' $(seq 1 64))"
   export ROZORO_WT_MODEL=luna ROZORO_WT_EFFORT=high
   fake_pane driver-pane idle pi true
   run rzr-register.sh --harness pi; assert_success
   target="$ROZORO_HOME/watchtowers/$output/target.json"; log="${target%/target.json}/registrations.jsonl"
   [ "$(jq -r '.watchtower_name' "$target")" = north ]
-  [ "$(jq -r '.preset | [.name,.version,.sha256,.policy_sha256,.model,.effort] | join(":")' "$target")" = 'luna:3:abc:def:luna:high' ]
-  [ "$(jq -r '.policy_sha256' "$target")" = def ]
+  [ "$(jq -r '.preset | [.name,.version,.sha256,.model,.effort] | join(":")' "$target")" = 'luna:3:abc:luna:high' ]
+  [ "$(jq -r '[.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | join(":")' "$target")" = "$(printf 'b%.0s' $(seq 1 64)):delivery:shipped:$(printf 'c%.0s' $(seq 1 64))" ]
   [ "$(wc -l < "$log" | tr -d ' ')" = 1 ]; [ "$(file_perm "$log")" = 600 ]
   run rzr-register.sh --harness pi; assert_success
   [ "$(wc -l < "$log" | tr -d ' ')" = 2 ]
 }
 
 @test "named unpreset Pi registration records policy provenance" {
-  export HERDR_PANE_ID=driver-pane ROZORO_WT_NAME=north ROZORO_WT_POLICY_SHA256=def
+  export HERDR_PANE_ID=driver-pane ROZORO_WT_NAME=north
+  export ROZORO_WT_POLICY_SHA256="$(printf 'a%.0s' $(seq 1 64))" ROZORO_WT_POLICY_CORE_SHA256="$(printf 'b%.0s' $(seq 1 64))"
+  export ROZORO_WT_POLICY_MISSION_NAME=delivery ROZORO_WT_POLICY_MISSION_SOURCE=shipped ROZORO_WT_POLICY_MISSION_SHA256="$(printf 'c%.0s' $(seq 1 64))"
   fake_pane driver-pane idle pi true
   run rzr-register.sh --harness pi
   assert_success
   target="$ROZORO_HOME/watchtowers/$output/target.json"
   log="${target%/target.json}/registrations.jsonl"
   [ "$(jq -r '.watchtower_name' "$target")" = north ]
-  [ "$(jq -r '.policy_sha256' "$target")" = def ]
+  [ "$(jq -r '.policy_mission_name' "$target")" = delivery ]
   [ "$(jq 'has("preset")' "$target")" = false ]
-  [ "$(jq -r '.policy_sha256' "$log")" = def ]
+  [ "$(jq -r '.policy_mission_source' "$log")" = shipped ]
 }
 
 @test "registration without watchtower env preserves legacy target shape" {

@@ -25,7 +25,7 @@ MISSIONS_DIR = "templates/missions"
 DEFAULT_MISSION = "delivery"
 OPERATOR_MISSIONS = "$ROZORO_HOME/watchtower-missions"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "1185f4f0091426d86a1fcf5b52284ff41be061167363d3013133260afcb9c971"
+PI_LAUNCHER_SHA256 = "5832cc57d47805afb6b251294854fc4caf73848489783575d780dd2450ad0d6e"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
@@ -46,6 +46,17 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_policy_text(data: bytes, relative: str) -> None:
+    try:
+        value = data.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise UnsafePath(f"required repository source {relative} is invalid UTF-8") from exc
+    if not value or value.startswith("\ufeff") or not any(not char.isspace() for char in value):
+        raise UnsafePath(f"required repository source {relative} is empty or whitespace-only")
+    if any((ord(char) < 32 and char not in "\t\n\r") or 0x7F <= ord(char) <= 0x9F for char in value):
+        raise UnsafePath(f"required repository source {relative} contains a forbidden control")
+
+
 def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
     parts = relative.split("/")
     current = repo
@@ -57,6 +68,7 @@ def read_repo_file(repo: SafeDirectory, relative: str) -> bytes:
         state, data = current.read_regular(parts[-1])
         if state != "regular" or data is None:
             raise UnsafePath(f"required repository source {relative} is {state}")
+        validate_policy_text(data, relative)
         return data
     finally:
         for directory in reversed(opened):
@@ -150,6 +162,7 @@ def read_missions(repo: SafeDirectory) -> dict[str, bytes]:
                 state, data = missions.read_regular(name)
                 if state != "regular" or data is None:
                     raise UnsafePath(f"required repository source {MISSIONS_DIR}/{name} is {state}")
+                validate_policy_text(data, f"{MISSIONS_DIR}/{name}")
                 captured[name] = data
     if f"{DEFAULT_MISSION}.md" not in captured:
         raise UnsafePath(f"shipped default mission {MISSIONS_DIR}/{DEFAULT_MISSION}.md is missing")

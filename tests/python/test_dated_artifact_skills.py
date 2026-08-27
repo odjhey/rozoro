@@ -78,7 +78,9 @@ class DatedArtifactSkillTests(unittest.TestCase):
             current = b"current working-tree policy\n"
             source.write_bytes(current)
             mission_bytes = b"current delivery mission policy\n"
+            triage_bytes = b"current triage mission policy\n"
             (checkout / "templates/missions/delivery.md").write_bytes(mission_bytes)
+            (checkout / "templates/missions/triage.md").write_bytes(triage_bytes)
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             artifact_root = root / "artifacts"
@@ -89,6 +91,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 "case \"$*\" in\n"
                 "  *'HEAD:templates/missions/delivery.md'*) printf '%040d\\n' 4 ;;\n"
+                "  *'HEAD:templates/missions/triage.md'*) printf '%040d\\n' 5 ;;\n"
                 "  *'HEAD:templates/watchtower.md'*) printf '%040d\\n' 2 ;;\n"
                 "  *'rev-parse HEAD'*) printf '%040d\\n' 1 ;;\n"
                 "  *'hash-object'*) printf '%040d\\n' 3 ;;\n"
@@ -126,6 +129,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
             self.assertEqual((first / "missions/delivery.md").read_bytes(), mission_bytes)
+            self.assertEqual((first / "missions/triage.md").read_bytes(), triage_bytes)
             metadata = json.loads((first / "metadata.json").read_text())
             self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v9")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
@@ -140,6 +144,10 @@ class DatedArtifactSkillTests(unittest.TestCase):
             )
             self.assertFalse(mission_meta["matches_git_commit"])
             self.assertEqual(metadata["files"]["missions/delivery.md"]["bytes"], len(mission_bytes))
+            triage_meta = metadata["missions"]["templates/missions/triage.md"]
+            self.assertEqual(triage_meta["sha256"], hashlib.sha256(triage_bytes).hexdigest())
+            self.assertEqual(triage_meta["composed_policy_sha256"], hashlib.sha256(current + triage_bytes).hexdigest())
+            self.assertEqual(metadata["files"]["missions/triage.md"]["bytes"], len(triage_bytes))
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
             self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
             self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v2")
