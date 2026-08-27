@@ -65,7 +65,10 @@ READY="$DIR/poller-ready.$INCARNATION"; rm -f "$READY"
   python3 "$RZR_BIN/rzr-claude-watchtower-poll.py" --home "$RZR_HOME" \
     --driver "$DRIVER" --session "$ADAPTER_SESSION" --pane "$PANE" --parent "$$" --ready-file "$READY" & poller=$!
   ready=0
-  for _ in $(seq 1 40); do [ -s "$READY" ] && ready=1 && break; kill -0 "$poller" 2>/dev/null || break; sleep .05; done
+  # A cold Python start on a loaded machine can exceed 2 seconds; the loop
+  # still exits early if the poller dies, so a longer bound only delays
+  # failure detection for a live-but-slow poller instead of killing it.
+  for _ in $(seq 1 200); do [ -s "$READY" ] && ready=1 && break; kill -0 "$poller" 2>/dev/null || break; sleep .05; done
   [ "$ready" -eq 1 ] || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
   python3 "$RZR_BIN/rzr-event-bus-client.py" authority-activate --driver "$DRIVER" >/dev/null \
     || { kill "$poller" 2>/dev/null || true; wait "$poller" 2>/dev/null || true; exit 1; }
