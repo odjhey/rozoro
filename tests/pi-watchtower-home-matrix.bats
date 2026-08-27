@@ -120,19 +120,34 @@ run_home_row() {
 @test "supported named-user tilde uses a provisioned passwd home and cleans success and failure" {
   make_pi_registrar
   account_record="$(ROZORO_TEST_NAMED_USER="${ROZORO_TEST_NAMED_USER:-}" python3 - <<'PY'
-import os, pwd
+import os, pwd, stat
 requested=os.environ.get("ROZORO_TEST_NAMED_USER")
-rows=[]
-if requested:
-    try: rows=[pwd.getpwnam(requested)]
-    except KeyError: raise SystemExit(f"named-user gate account {requested!r} is absent from passwd")
-else:
-    rows=list(pwd.getpwall())
-for row in rows:
-    if row.pw_name and row.pw_name != str(row.pw_uid) and os.path.isdir(row.pw_dir) and os.access(row.pw_dir, os.W_OK|os.X_OK):
-        print(row.pw_name); print(row.pw_dir); break
-else:
-    raise SystemExit("named-user gate provisioning absent: set ROZORO_TEST_NAMED_USER to a passwd-backed account with a writable home")
+if not requested:
+    raise SystemExit("named-user gate provisioning absent: ROZORO_TEST_NAMED_USER is required")
+try:
+    by_name=pwd.getpwnam(requested)
+except KeyError:
+    raise SystemExit(f"named-user gate account {requested!r} is absent from passwd")
+try:
+    by_uid=pwd.getpwuid(os.getuid())
+except KeyError:
+    raise SystemExit(f"named-user gate runtime uid {os.getuid()} is absent from passwd")
+if by_name != by_uid or by_name.pw_name != requested:
+    raise SystemExit("named-user gate account does not match the runtime uid passwd identity")
+if by_name.pw_uid != os.getuid() or by_name.pw_gid != os.getgid():
+    raise SystemExit("named-user gate passwd uid/gid does not match runtime uid/gid")
+home=os.path.realpath(by_name.pw_dir)
+if home != by_name.pw_dir:
+    raise SystemExit("named-user gate passwd home is not canonical")
+try: info=os.stat(home)
+except OSError as exc: raise SystemExit(f"named-user gate home is unavailable: {exc}")
+if info.st_uid != os.getuid() or info.st_gid != os.getgid():
+    raise SystemExit("named-user gate home owner uid/gid does not match runtime")
+if stat.S_IMODE(info.st_mode) != 0o700:
+    raise SystemExit("named-user gate home mode must be exactly 0700")
+if not os.access(home, os.W_OK|os.X_OK):
+    raise SystemExit("named-user gate home is not writable and searchable")
+print(by_name.pw_name); print(home)
 PY
 )"
   account="$(printf '%s\n' "$account_record" | sed -n '1p')"; account_home="$(printf '%s\n' "$account_record" | sed -n '2p')"
