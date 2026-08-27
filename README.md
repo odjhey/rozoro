@@ -258,7 +258,20 @@ Resident driver presets live under `$ROZORO_HOME/watchtower-presets/<name>.json`
 
 Launch with `./bin/rozoro pi-watchtower --preset luna [--wt-name north]` or `./bin/rozoro claude-watchtower --preset luna [--wt-name north]`. `--wt-name` can override the preset name or name an unpreset watchtower. Registrations are stored under `$ROZORO_HOME/watchtowers/<driver-id>/target.json` and its append-only `$ROZORO_HOME/watchtowers/<driver-id>/registrations.jsonl`; launchers derive the driver id from transport identity.
 
+The preset launch is the **canonical operator path**. An unpreset launch that passes model flags manually (`./bin/rozoro pi-watchtower -- --model … --thinking …`) still works and still registers, but the registration carries no name, preset, version, preset hash, policy hash, or model/effort attribution. Do not combine `--preset` with manual model flags after `--`: trailing arguments are appended after the preset-derived flags, so the harness would receive the option twice while the registration records only the preset's values.
+
 The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public configuration interface. Launchers clear inherited watchtower attribution before applying the command-line options, so an unpreset launch cannot reuse stale name, preset, hash, model, effort, or driver values.
+
+#### Where watchtower configuration lives
+
+Watchtower instructions used to be entirely VCS-managed. Today they are split across three authorities (ADR-0011, ADR-0012):
+
+- **policy content** stays in VCS: `templates/watchtower.md` is appended as the system prompt on every launch and hashed into the registration; presets have no policy override;
+- **launch selection** (harness, model, effort for the resident Watchtower itself) lives in `$ROZORO_HOME/watchtower-presets/<name>.json`;
+- **operator role/model policy** for crew dispatch lives in `$ROZORO_HOME/watchtower-policies/`, with `$ROZORO_HOME/config/machine.md` as machine-availability input;
+- **crew presets** are execution configurations for crew targets already authorized by repository/operator policy.
+
+Repository templates and skills describe role contracts and dispatch semantics only; they intentionally name no models. Watchtower presets select only the Watchtower launch target, while crew presets realize crew execution. Neither kind grants crew-role policy or fallback authority.
 
 ## Operator artifact skills
 

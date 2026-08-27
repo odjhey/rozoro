@@ -60,8 +60,12 @@ repository-local requirements still win.
 
 ## Crew roles
 
-The canonical role policy lives in
-`templates/watchtower-crew-dispatch-guidelines.md`.
+The canonical role contracts and dispatch semantics live in
+`templates/watchtower-crew-dispatch-guidelines.md`. Concrete per-role
+model/effort assignments and global denials are durable operator policy under
+`$ROZORO_HOME/watchtower-policies/` (ADR-0012). Machine profiles filter authorized
+targets by fresh availability; presets only realize authorized selections.
+Missing or ambiguous assignments fail closed.
 
 The important ownership boundaries are:
 

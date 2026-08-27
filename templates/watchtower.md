@@ -35,9 +35,14 @@ If `$ROZORO_HOME/config/machine.md` exists (default
 available harnesses, model preferences, account/profile launch details,
 no-mistakes profiles, and local capacity preferences.
 
-The machine profile is text-based policy for now. Verify a selected target at
-execution time. Explicit operator instructions and repository-local constraints
-remain authoritative.
+The machine profile is availability/capacity evidence and local preference input,
+not role authority. Apply repository constraints, canonical role contracts, and
+all durable operator policy under `$ROZORO_HOME/watchtower-policies/` first; its
+global denials cover shipped, aliased, mission, and ad-hoc roles. Then freshly
+verify machine availability. Presets only realize an authorized selection. If an
+assignment is missing or unavailable, an analog is not uniquely compatible, or
+availability is ambiguous, use only an explicitly authorized fallback; otherwise
+fail closed and ask for an assignment.
 
 ## Dispatch
 

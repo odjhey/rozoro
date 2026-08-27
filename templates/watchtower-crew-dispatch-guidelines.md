@@ -4,10 +4,23 @@ Use these defaults when dispatching **Rozoro crew**. Watchtower selects a task
 kind, resolves an available execution target for this machine, and writes the
 smallest useful task-specific brief.
 
-Canonical model IDs and reasoning effort below are **preferred role defaults**.
-`crew-model-selection` may choose a compatible available target using the optional
-`$ROZORO_HOME/config/machine.md`, current crew presets, repository constraints, or
-explicit operator instructions.
+This file owns **role contracts and dispatch semantics only**. Concrete
+harness/model/effort assignments are durable operator policy under
+`$ROZORO_HOME/watchtower-policies/`; this template intentionally names no models.
+
+For every fresh shipped, aliased, mission, or ad-hoc role, first apply explicit
+operator requirements and repository constraints, then the role contract and all
+durable policy (including global denials), then filter authorized candidates by
+freshly verified machine availability. Resolve an exact durable entry, a
+documented canonical alias, or one uniquely compatible nearest analog whose
+boundary contains and is only narrowed by the mission. Never splice role
+authority and target preferences. Missing or unavailable assignments, ambiguous
+availability, conflicting constraints, and non-unique analogs block unless an
+explicitly authorized fallback exists.
+
+`$ROZORO_HOME/config/machine.md` is availability/capacity evidence, not role
+authority. A crew preset only realizes an already-authorized selection; launcher
+defaults and presets cannot supply missing policy. See ADR-0012.
 
 ## Briefing style
 
@@ -21,7 +34,7 @@ workset state are added when they materially constrain the current turn.
 
 ## Standard crew roles
 
-### Task Decomposer / Planner — `gpt-5.6-sol`, high
+### Task Decomposer / Planner
 
 Turn raw intent into bounded executable work when scope, dependencies, acceptance
 criteria, execution strategy, integration order, or repository boundaries are not
@@ -171,7 +184,7 @@ turn to settle it rather than guessing "small means safe."
   evidence deficits — consume no Coder implementation attempts when no
   candidate-writing Coder turn occurred; `attempt-budget` owns the accounting.
 
-### Coder — `gpt-5.6-sol`, low
+### Coder
 
 Implement one bounded task. Follow repository-local rules and the supplied task
 boundary. Repair concrete reviewer/tester/no-mistakes/integration findings when
@@ -181,7 +194,7 @@ Report the exact committed candidate head and tree, plus its base and merge-base
 ready for the No-Mistakes gate so later roles can reason about the exact
 implementation that was produced.
 
-### Reviewer — `gpt-5.6-luna`, high
+### Reviewer
 
 Review a gate-green exact candidate in fresh context, applying judgment
 to its design, contracts, correctness reasoning, surrounding-code fit, and
@@ -195,7 +208,7 @@ every repeated finding class, the handoff must propose codification as
 suite, or a lint rule, so the gate owns future enforcement; novel and contextual
 judgment remains crew work.
 
-### Tester — `gpt-5.6-luna`, high
+### Tester
 
 Examine a gate-green exact candidate as a test designer, not a redundant
 suite runner. Drive behavior exploratorily from intended use cases and meaningful
@@ -213,7 +226,7 @@ green. For every repeated finding class, the handoff must propose
 lint rule; once codified, the gate owns future enforcement while novel and
 contextual test judgment remains crew work.
 
-### Escalation Replanner — `gpt-5.6-sol`, high
+### Escalation Replanner
 
 Use when implementation/review/test/integration loops stop converging or new
 evidence changes the task boundary, dependency graph, parallel/stacking strategy,
@@ -236,7 +249,7 @@ The third Replanner turn may still restructure/split/defer the work, but the har
 Coder ceiling remains 30 and it does not create attempts 31–40. Use the
 `attempt-budget` skill for the exact routing rules.
 
-### No-Mistakes Runner — `gpt-5.6-luna`, high
+### No-Mistakes Runner
 
 Operate the configured no-mistakes pipeline for an exact committed candidate.
 This is a thin execution/listening role, not another independent code reviewer.
@@ -284,7 +297,7 @@ Claude identities are required, prefer explicit machine-profile/no-mistakes
 profiles (for example separate `NM_HOME` instances) whose daemon environment is
 known and verified.
 
-### Workset Merger — `gpt-5.6-sol`, high
+### Workset Merger
 
 Own integration and landing execution for one workset.
 
@@ -327,8 +340,11 @@ mutation and asks the operator to confirm.
 
 ## Quick Crew
 
-`quick-crew-routing` owns eligibility for the bounded fast path. Eligible Quick
-Scout and Quick Coder prefer `gpt-5.3-codex-spark` at low effort.
+`quick-crew-routing` owns eligibility for the bounded fast path. Global denials
+apply to Quick Crew. Its target must be authorized by durable operator policy and
+freshly verified as available. When no eligible fast assignment exists, route to
+the appropriate standard role only if that role resolves independently;
+otherwise block. Never invent a fast target or inherit a standard role's target.
 
 Use Quick Crew for narrow, mechanical, low-risk work where latency matters.
 Eligibility depends on impact certainty and risk, never on apparent file count,
@@ -336,7 +352,12 @@ diff size, or task size: a one-line contract, configuration, or dependency chang
 is not quick merely because it is small. When the work expands beyond the
 boundary, route it into the appropriate standard role.
 
-## Watchtower — `gpt-5.6-sol`, high preferred
+## Watchtower
+
+Watchtower's own harness/model/effort is launch selection, not crew dispatch: the
+canonical operator path is a versioned watchtower preset under
+`$ROZORO_HOME/watchtower-presets/` (ADR-0011), which the launcher records in the
+registration attribution.
 
 Watchtower owns cross-project/workset priority, dispatch, routing, operator
 interaction, and the global view. It may manage multiple repositories at once by
