@@ -23,6 +23,24 @@ class WatchtowerDocumentationTests(unittest.TestCase):
             "Claude preset": ["yes (preset default or override)", "yes", "no", "yes, from preset"],
         })
 
+    def test_shared_facts_has_all_six_semantic_attribution_rows(self):
+        prose = " ".join(FACTS.split())
+        expected = {
+            "Pi unnamed/unpreset": ("policy tuple", "no preset/model attribution"),
+            "named/unpreset": ("policy tuple", "no preset/model attribution"),
+            "Pi presets": ("all three",),
+            "Claude unnamed/unpreset": ("none",),
+            "Claude named/unpreset": ("only a name",),
+            "Claude presets": ("name/preset/model attribution", "never the Pi tuple"),
+        }
+        # Parse the normative prose as six named clauses rather than accepting a
+        # nearby keyword bag. Deleting or changing any row must fail this test.
+        for row, claims in expected.items():
+            match = re.search(re.escape(row) + r"(.{0,180}?)(?:[.;]|$)", prose)
+            self.assertIsNotNone(match, row)
+            for claim in claims:
+                self.assertIn(claim, match.group(0), row)
+
     def test_home_and_clearing_prose_is_semantically_complete(self):
         for text in (README, FACTS):
             prose = " ".join(text.split())
