@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,9 +34,19 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
             cwd=initial, env=env, text=True, capture_output=True, timeout=30,
         )
 
-    def assert_snapshot(self, run):
+    def successful_artifact_path(self, run):
         self.assertEqual(run.returncode, 0, run.stderr)
-        artifact = Path(run.stdout.strip())
+        self.assertEqual(run.stderr, "")
+        lines = run.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        artifact = Path(lines[0])
+        self.assertTrue(artifact.is_absolute())
+        self.assertEqual(run.stdout, f"{artifact}\n")
+        self.assertEqual(artifact, artifact.resolve())
+        return artifact
+
+    def assert_snapshot(self, run):
+        artifact = self.successful_artifact_path(run)
         self.assertTrue((artifact / "watchtower-policy.md").is_file())
         metadata = json.loads((artifact / "metadata.json").read_text())
         self.assertEqual(metadata["artifact_type"], "watchtower-policy-snapshot")
@@ -44,8 +54,7 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
         return artifact
 
     def assert_progress(self, run, tasks, explicit):
-        self.assertEqual(run.returncode, 0, run.stderr)
-        artifact = Path(run.stdout.strip())
+        artifact = self.successful_artifact_path(run)
         for name in ("report.md", "evidence.json", "metadata.json"):
             self.assertTrue((artifact / name).is_file(), name)
         evidence = json.loads((artifact / "evidence.json").read_text())
@@ -125,9 +134,15 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
                 argv = [str(script), "--repo-root", str(ROOT), "--artifact-root", "artifacts", "--now", NOW]
                 if script == PROGRESS:
                     argv += ["--tasks-root", "tasks"]
-                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.dict(production_globals, {"normalized_path": moving_normalizer}), redirect_stdout(io.StringIO()) as output:
+                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.dict(production_globals, {"normalized_path": moving_normalizer}), redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(), 0)
-                    artifact = Path(output.getvalue().strip())
+                    self.assertEqual(errors.getvalue(), "")
+                    lines = output.getvalue().splitlines()
+                    self.assertEqual(len(lines), 1)
+                    artifact = Path(lines[0])
+                    self.assertEqual(output.getvalue(), f"{artifact}\n")
+                    self.assertTrue(artifact.is_absolute())
+                    self.assertEqual(artifact, artifact.resolve())
                     self.assertEqual(len(resolved), expected_calls)
                     expected_paths = ([ROOT, home / ".rozoro", initial / "artifacts"] if script == SNAPSHOT else
                                       [ROOT, home / ".rozoro", initial / "tasks", initial / "artifacts"])
@@ -153,6 +168,9 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
                 "## turn 1 — complete\nverdict:       done\ndid:           test\npending:       none\n"
                 "inputs-needed: none\nartifacts:     none\n"
             )
+            sentinel = root / "unresolved-sibling-sentinel"
+            sentinel_bytes = b"preserve unresolved sibling exactly\x00\xff"
+            sentinel.write_bytes(sentinel_bytes)
             cases = (
                 (SNAPSHOT, {"HOME": str(home), "ROZORO_HOME": bad}, []),
                 (PROGRESS, {"HOME": str(home), "ROZORO_HOME": bad}, []),
@@ -167,6 +185,7 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
                     self.assertNotIn("Traceback", result.stderr)
                     self.assertFalse(any(root.rglob("watchtower-policy-snapshots")))
                     self.assertFalse(any(root.rglob("watchtower-progress-reports")))
+                    self.assertEqual(sentinel.read_bytes(), sentinel_bytes)
 
     def test_forced_write_failures_leave_no_fixture_residue(self):
         with tempfile.TemporaryDirectory() as td:
@@ -175,25 +194,31 @@ class WatchtowerArtifactHomeMatrixTests(unittest.TestCase):
             tasks = root / "tasks"; tasks.mkdir()
             for script in (SNAPSHOT, PROGRESS):
                 artifact_root = root / f"failed-{script.stem}"
+                sentinel = root / f"sibling-{script.stem}"
+                sentinel_bytes = f"preserve sibling for {script.name}\n".encode()
+                sentinel.write_bytes(sentinel_bytes)
                 main = runpy.run_path(str(script))["main"]
                 production_globals = main.__globals__
                 safe_directory = production_globals["SafeDirectory"]
                 argv = [str(script), "--repo-root", str(ROOT), "--artifact-root", str(artifact_root), "--now", NOW]
                 if script == PROGRESS:
                     argv += ["--tasks-root", str(tasks)]
-                with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.object(safe_directory, "write_exclusive", side_effect=OSError("forced write failure")):
-                    with self.assertRaisesRegex(SystemExit, "cannot create safe artifact: forced write failure"):
-                        main()
-                category = "watchtower-policy-snapshots" if script == SNAPSHOT else "watchtower-progress-reports"
-                runs = list((artifact_root / category).glob("*/*"))
-                self.assertEqual(len(runs), 1)
-                self.assertTrue(runs[0].is_dir())
-                self.assertEqual(list(runs[0].iterdir()), [])
-                # The product's failed reservation is observed above.  This
-                # test owns the root, so remove only its fixture and prove it
-                # cannot pollute a later matrix cell.
-                shutil.rmtree(artifact_root)
+                try:
+                    with self.subTest(script=script.name), cwd(initial), patch.dict(os.environ, {"HOME": str(home)}, clear=True), patch.object(sys, "argv", argv), patch.object(safe_directory, "write_exclusive", side_effect=OSError("forced write failure")):
+                        with self.assertRaisesRegex(SystemExit, "cannot create safe artifact: forced write failure"):
+                            main()
+                    category = "watchtower-policy-snapshots" if script == SNAPSHOT else "watchtower-progress-reports"
+                    runs = list((artifact_root / category).glob("*/*"))
+                    self.assertEqual(len(runs), 1)
+                    self.assertTrue(runs[0].is_dir())
+                    self.assertEqual(list(runs[0].iterdir()), [])
+                finally:
+                    # The product's failed reservation is observed above.  This
+                    # test owns only artifact_root, never its sibling entries.
+                    if artifact_root.exists():
+                        shutil.rmtree(artifact_root)
                 self.assertFalse(artifact_root.exists())
+                self.assertEqual(sentinel.read_bytes(), sentinel_bytes)
 
 
 if __name__ == "__main__":
