@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import json
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -23,20 +22,21 @@ SOURCE_SUFFIXES = {".py", ".sh", ".ts", ".js", ".bash"}
 
 
 def tracked_sources() -> dict[str, str]:
-    names = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
-    ).stdout.decode().split("\0")
+    # CI's pinned test container intentionally has no git binary or .git mount.
+    # A clean checkout makes these production roots the tracked-source surface;
+    # restricting the roots also excludes docs and ignored local .claude copies.
     sources = {}
-    for name in names:
-        if not name or name.startswith(("tests/", "docs/")) or name.endswith(".md"):
-            continue
-        path = ROOT / name
-        if path.suffix not in SOURCE_SUFFIXES and not name.startswith("bin/"):
-            continue
-        try:
-            sources[name] = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            pass
+    for source_root in ("bin", "lib", "hooks", ".agents", ".pi"):
+        for path in (ROOT / source_root).rglob("*"):
+            name = path.relative_to(ROOT).as_posix()
+            if not path.is_file() or (
+                path.suffix not in SOURCE_SUFFIXES and source_root != "bin"
+            ):
+                continue
+            try:
+                sources[name] = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                pass
     return sources
 
 
