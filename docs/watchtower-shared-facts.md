@@ -91,3 +91,9 @@ contracts only; they intentionally name no models).
 Task kinds, fleet roles and their boundaries, assurance flow and what
 "verified" means, unattended-versus-ask authority, and the skill subset in
 use. `templates/missions/delivery.md` is the reference implementation.
+
+A mission may use an **ad-hoc specialist only when that mission explicitly opts
+in**. A silent mission retains a closed role list. An opted-in role is governed by
+ADR-0014: one bounded job, durable attribution, explicit authority fences, normal
+routing policy, and enforced graduation. The delivery mission opts in; no other
+mission gains this authority by implication.
