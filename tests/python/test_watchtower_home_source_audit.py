@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest import mock
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/watchtower-home-consumers.json"
@@ -31,32 +31,43 @@ def is_source(path: Path, mode_executable: bool) -> bool:
     return mode_executable or path.suffix in SOURCE_SUFFIXES
 
 
+def parse_git_records(data: bytes, root: Path) -> list[str]:
+    names, seen = [], {}
+    for raw in data.split(b"\0"):
+        if not raw: continue
+        row = raw.decode("utf-8", errors="strict")
+        metadata, name = row.split("\t", 1)
+        fields = metadata.split()
+        if (len(fields) != 3 or fields[0] not in {"100644", "100755", "120000", "160000"}
+                or not re.fullmatch(r"[0-9a-f]{40,64}", fields[1]) or fields[2] != "0"):
+            raise ValueError("invalid record metadata")
+        pure = PurePosixPath(name)
+        if (not name or name.startswith("/") or "\\" in name or any(p in {"", ".", ".."} for p in pure.parts)
+                or pure.as_posix() != name or name in seen):
+            raise ValueError("invalid or duplicate record name")
+        seen[name] = fields[0]
+        if fields[0] == "120000" and name not in ARCHIVE_GENERATED_ALIASES:
+            link = root / name
+            if not link.is_symlink(): raise ValueError("missing source symlink")
+            resolved = link.resolve(strict=True)
+            try: resolved.relative_to(root.resolve())
+            except ValueError as exc: raise ValueError("outside source symlink") from exc
+        if fields[0].startswith("100") and is_source(Path(name), fields[0] == "100755"):
+            names.append(name)
+    return names
+
+
 def git_source_names(root: Path) -> tuple[list[str] | None, list[str]]:
     """None means genuinely no git executable; every git error is fatal."""
-    if shutil.which("git") is None:
-        return None, []
-    try:
-        run = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=root, capture_output=True)
-    except OSError as exc:
-        return [], [f"git inventory failed closed: {exc}"]
+    if shutil.which("git") is None: return None, []
+    try: run = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=root, capture_output=True)
+    except OSError as exc: return [], [f"git inventory failed closed: {exc}"]
     if run.returncode:
         detail = run.stderr.decode(errors="replace").strip() or "invalid git inventory"
         return [], [f"git inventory failed closed: {detail}"]
-    names = []
-    try:
-        rows = run.stdout.decode().split("\0")
-        for row in rows:
-            if not row:
-                continue
-            metadata, name = row.split("\t", 1)
-            fields = metadata.split()
-            if len(fields) != 3 or fields[0] not in {"100644", "100755", "120000", "160000"}:
-                raise ValueError("invalid ls-files record")
-            if fields[0].startswith("100") and is_source(Path(name), fields[0] == "100755"):
-                names.append(name)
-    except (UnicodeDecodeError, ValueError):
+    try: return parse_git_records(run.stdout, root), []
+    except (UnicodeDecodeError, ValueError, OSError):
         return [], ["git inventory failed closed: invalid ls-files output"]
-    return names, []
 
 
 def archive_source_names(root: Path) -> list[str]:
@@ -116,21 +127,45 @@ def env_get_key(call: ast.Call) -> str | None:
 
 def default_path_node(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant) and node.value == "~/.rozoro": return True
+    if isinstance(node, ast.Call) and dotted(node.func) == "str" and len(node.args) == 1:
+        return default_path_node(node.args[0])
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         return (isinstance(node.right, ast.Constant) and node.right.value == ".rozoro"
-                and isinstance(node.left, ast.Call) and dotted(node.left.func) in {"Path.home"})
+                and isinstance(node.left, ast.Call) and dotted(node.left.func) == "Path.home")
     return False
+
+
+def home_selector_expression(node: ast.AST) -> bool:
+    """Require one contiguous OR dataflow chain ending env/env/default."""
+    if (isinstance(node, ast.Call) and dotted(node.func) == "normalized_path"
+            and len(node.args) == 1):
+        return home_selector_expression(node.args[0])
+    if isinstance(node, ast.IfExp):
+        return home_selector_expression(node.orelse)
+    if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or): return False
+    operands = []
+    def flatten(value: ast.AST) -> None:
+        if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+            for child in value.values: flatten(child)
+        else: operands.append(value)
+    flatten(node)
+    if len(operands) < 3: return False
+    tail = operands[-3:]
+    def selector_key(value: ast.AST) -> str | None:
+        if isinstance(value, ast.Call): return env_get_key(value)
+        if isinstance(value, ast.IfExp) and isinstance(value.orelse, ast.Call):
+            return env_get_key(value.orelse)
+        return None
+    keys = [selector_key(n) for n in tail[:2]]
+    return keys == ["ROZORO_HOME", "RZR_HOME"] and default_path_node(tail[2])
 
 
 def python_default(text: str) -> bool:
     tree = parse_python(text)
     if tree is None: return False
     for statement in ast.walk(tree):
-        if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Return)): continue
-        keys = {key for call in ast.walk(statement) if isinstance(call, ast.Call)
-                for key in [env_get_key(call)] if key}
-        if {"ROZORO_HOME", "RZR_HOME"} <= keys and any(default_path_node(n) for n in ast.walk(statement)):
-            return True
+        value = (statement.value if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Return)) else None)
+        if value is not None and home_selector_expression(value): return True
     return False
 
 
@@ -239,19 +274,21 @@ def ts_tokens(text: str) -> list[tuple[str, str]]:
 
 
 def typescript_default(text: str) -> bool:
-    statement: list[tuple[str, str]] = []
-    for token in ts_tokens(text) + [("code", ";")]:
-        statement.append(token)
-        if token != ("code", ";"): continue
-        code = [v for kind, v in statement if kind == "code"]
-        strings = {v[1:-1] for kind, v in statement if kind == "inert" and v[:1] in {'\"', "'"}}
-        joined = " ".join(code)
-        assignment = re.search(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*[Hh]ome[\w$]*)\s*=", joined)
-        if (assignment and "process . env . ROZORO_HOME" in joined
-                and "process . env . RZR_HOME" in joined and "homedir ( )" in joined
-                and ".rozoro" in strings):
-            return True
-        statement = []
+    # The real selector is one-line. Treat every physical newline and semicolon
+    # as an ASI boundary, so neighboring statements can never lend it tokens.
+    for physical in text.splitlines():
+        statement: list[tuple[str, str]] = []
+        for token in ts_tokens(physical) + [("code", ";")]:
+            statement.append(token)
+            if token != ("code", ";"): continue
+            code = [v for kind, v in statement if kind == "code"]
+            strings = {v[1:-1] for kind, v in statement if kind == "inert" and v[:1] in {'\"', "'"}}
+            joined = " ".join(code)
+            assignment = re.search(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*[Hh]ome[\w$]*)\s*=", joined)
+            if (assignment and "process . env . ROZORO_HOME" in joined
+                    and "process . env . RZR_HOME" in joined and "homedir ( )" in joined
+                    and ".rozoro" in strings): return True
+            statement = []
     return False
 
 
@@ -312,6 +349,29 @@ class HomeSourceAuditTests(unittest.TestCase):
                 _, errors = self.current()
                 self.assertTrue(any("invalid ls-files output" in e for e in errors))
 
+    def test_git_record_validation_and_outside_symlink_fail_closed(self):
+        sha = "a" * 40
+        malformed = [
+            f"100644 {sha} 0\t/absolute.py\0", f"100644 {sha} 0\ta/../escape.py\0",
+            f"100644 {sha} 0\ta//noncanonical.py\0", f"100999 {sha} 0\tbad.py\0",
+            f"100644 xyz 0\tbad.py\0", f"100644 {sha} 1\tstage.py\0",
+            f"100644 {sha} 0\tdup.py\0" * 2,
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for data in malformed:
+                with self.assertRaises((ValueError, UnicodeDecodeError)): parse_git_records(data.encode(), root)
+            with self.assertRaises(UnicodeDecodeError): parse_git_records(b"100644 " + b"a" * 40 + b" 0\tbad\xff.py\0", root)
+            outside = root.parent / "h8-outside.py"; outside.write_text("print('outside')\n")
+            link = root / "outside.py"; link.symlink_to(outside)
+            try:
+                with self.assertRaises(ValueError):
+                    parse_git_records(f"120000 {sha} 0\toutside.py\0".encode(), root)
+            finally:
+                link.unlink(missing_ok=True); outside.unlink(missing_ok=True)
+            with self.assertRaises(ValueError):
+                parse_git_records(f"120000 {sha} 0\tmissing.py\0".encode(), root)
+
     def test_archive_omission_outside_root_addition_and_missing_file_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); shutil.copytree(ROOT, root, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", ".worktrees", "__pycache__"))
@@ -324,37 +384,36 @@ class HomeSourceAuditTests(unittest.TestCase):
             _, errors = tracked_sources(root, mode="archive")
             self.assertIn("tracked-source manifest differs from source surface", errors)
 
-    def test_git_mode_ignores_actual_untracked_and_ignored_files(self):
-        if shutil.which("git") is None:
-            return
-        untracked = ROOT / "h8-untracked-source.py"
-        ignored = ROOT / "tests/python/__pycache__/h8_ignored.py"
-        try:
-            untracked.write_text('home=os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"\n')
-            ignored.parent.mkdir(exist_ok=True)
-            ignored.write_text(untracked.read_text())
-            status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
-                                    check=True, capture_output=True, text=True).stdout
-            self.assertIn("?? h8-untracked-source.py", status)
-            self.assertEqual(subprocess.run(["git", "check-ignore", "-q", str(ignored.relative_to(ROOT))], cwd=ROOT).returncode, 0)
-            sources, errors = self.current()
-            self.assertEqual(audit(load_fixture(), sources, errors), [])
-            self.assertNotIn("h8-untracked-source.py", sources)
-            self.assertNotIn("tests/python/__pycache__/h8_ignored.py", sources)
-        finally:
-            untracked.unlink(missing_ok=True)
-            ignored.unlink(missing_ok=True)
+    def test_injected_git_boundary_excludes_real_untracked_and_ignored_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracked, untracked, ignored = (root / name for name in ("tracked.py", "untracked.py", "ignored.py"))
+            try:
+                for path in (tracked, untracked, ignored): path.write_text("print('real candidate')\n")
+                self.assertTrue(all(path.is_file() for path in (tracked, untracked, ignored)))
+                supplied_ignored = {"ignored.py"}
+                self.assertIn(ignored.name, supplied_ignored)
+                record = f"100644 {'a' * 40} 0\ttracked.py\0".encode()
+                self.assertEqual(parse_git_records(record, root), ["tracked.py"])
+                self.assertNotIn("untracked.py", parse_git_records(record, root))
+                self.assertNotIn("ignored.py", parse_git_records(record, root))
+            finally:
+                for path in (tracked, untracked, ignored): path.unlink(missing_ok=True)
 
     def test_semantic_decoys_are_rejected_for_every_language(self):
         full = 'os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"'
         for decoy in (f'NOTE={full!r}\n', f'NOTE=({full!r}, "ROZORO_HOME", "RZR_HOME", "~/.rozoro")\n',
-                      f'"""{full}"""\n'):
+                      f'"""{full}"""\n',
+                      'NOTE=(os.environ.get("ROZORO_HOME"), os.environ.get("RZR_HOME"), "~/.rozoro")\n',
+                      'NOTE={"calls": [os.environ.get("ROZORO_HOME"), os.environ.get("RZR_HOME")], "default": "~/.rozoro"}\n'):
             self.assertFalse(python_default(decoy))
         shell = "${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
         self.assertFalse(shell_default(f"# RZR_HOME_RAW={shell}\nRZR_HOME_RAW='{shell}'\nNOTE=\"{shell}\"\n"))
         ts = 'process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro")'
         for decoy in (f'const selectedHome = "{ts}";', f'const selectedHome = `{ts}`;',
-                      r'const selectedHome = /process.env.ROZORO_HOME.*process.env.RZR_HOME.*homedir.*\\.rozoro/;'):
+                      r'const selectedHome = /process.env.ROZORO_HOME.*process.env.RZR_HOME.*homedir.*\\.rozoro/;',
+                      'const selectedHome = process.env.ROZORO_HOME\nprocess.env.RZR_HOME || join(homedir(), ".rozoro")',
+                      'const selectedHome = process.env.ROZORO_HOME // split by ASI\n|| process.env.RZR_HOME || join(homedir(), ".rozoro")'):
             self.assertFalse(typescript_default(decoy))
         self.assertFalse(monitor_home_delegate('NOTE=("--home", "MonitorServer", "args.home")\n'))
         self.assertFalse(python_argument('# parser.add_argument("--store")\nNOTE="--store"\n', "--store"))
