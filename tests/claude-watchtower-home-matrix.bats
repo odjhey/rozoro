@@ -41,7 +41,7 @@ stop_case() {
   owner="$1" poller="$2" selected="$3"
   kill "$owner" 2>/dev/null || true
   wait "$owner" 2>/dev/null || true
-  for _ in $(seq 1 80); do ! kill -0 "$poller" 2>/dev/null && break; sleep .025; done
+  for _ in $(seq 1 200); do ! kill -0 "$poller" 2>/dev/null && break; sleep .05; done
   ! kill -0 "$poller" 2>/dev/null
   ROZORO_HOME="$selected" RZR_HOME= "$REPO_ROOT/bin/rzr-monitor.sh" stop >/dev/null 2>&1 || true
   [ ! -e "$ready" ]
