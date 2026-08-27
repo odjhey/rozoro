@@ -118,6 +118,43 @@ artifacts: none
             self.assertEqual((after["verdict"], after["actionable_reason"]), ("done", "none"))
             self.assertEqual(after["projection_json"]["report"]["acked_through"], 1)
 
+    def test_changed_report_detail_with_same_reason_still_wakes(self):
+        self.write_handoff("""## turn 1 — action
+verdict: needs-action
+reason: choose
+ did: ignored
+pending: first choice
+inputs-needed: first choice
+artifacts: none
+""")
+        self.write_handoff((self.task / "handoff.md").read_text().replace(" did:", "did:"))
+        with EventStore(self.db) as store:
+            self.register(store)
+            before = store.health_snapshot()['generation']
+            self.assertEqual(self.projection(store)['actionable_reason'], 'needs-action')
+            self.write_handoff("""## turn 1 — action
+verdict: needs-action
+reason: choose
+ did: ignored
+pending: second choice
+inputs-needed: second choice
+artifacts: none
+
+## turn 2 — done
+verdict: done
+reason: continued
+did: work
+pending: none
+inputs-needed: none
+artifacts: none
+""")
+            self.write_handoff((self.task / "handoff.md").read_text().replace(" did:", "did:"))
+            accepted = store.accept_event(event("start", 2, "turn.start", turn_id="turn-1"))
+            self.assertEqual(accepted.generation, before + 1)
+            projection = self.projection(store)
+            self.assertEqual(projection['actionable_reason'], 'needs-action')
+            self.assertEqual(projection['projection_json']['report']['latest_verdict'], 'done')
+
     def test_structured_reasons_cover_invalid_failed_blocked_and_gone(self):
         cases = [
             ("## turn 2 — bad\nverdict: done\ndid: x\npending: none\ninputs-needed: none\nartifacts: none\n", "turn.stop", {"background_active": False}, "malformed-report"),
