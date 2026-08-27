@@ -30,17 +30,72 @@ load test_helper/common
     # dependency checks reach the preset section.
     run env -u ROZORO_HOME -u RZR_HOME "${home_env[@]}" \
       bash -c 'cd "$1"; "$2/bin/rozoro" doctor' _ "$initial" "$REPO_ROOT"
+    assert_success
+    assert_output_contains "rozoro doctor"
     assert_output_contains "home: $expected"
+    assert_output_contains "all good"
   done <<'MATRIX'
 P|public home|UNSET|INITIAL/public home
 L|UNSET|legacy home|INITIAL/legacy home
 B|public home|ignored legacy|INITIAL/public home
 E||legacy home|INITIAL/legacy home
-D|UNSET|UNSET|USER_HOME/.rozoro
+D-unset|UNSET|UNSET|USER_HOME/.rozoro
+D-empty|||USER_HOME/.rozoro
 R|relative/home|UNSET|INITIAL/relative/home
 T|~/tilde home|UNSET|USER_HOME/tilde home
 X|public home|UNSET|INITIAL/public home
 MATRIX
+}
+
+@test "supported named-user homes resolve identically and unresolved users fail cleanly" {
+  local initial="$TEST_ROOT/named-initial" username account_home unique expected
+  mkdir -p "$initial"
+  # Pinned containers may deliberately run as a uid absent from passwd. Pick a
+  # real named account in that case; state init is disabled so resolution itself
+  # remains testable even when that account home is not writable by the uid.
+  read -r username account_home < <(python3 -c 'import os,pwd; p=next((p for p in pwd.getpwall() if p.pw_uid==os.getuid()),pwd.getpwnam("root")); print(p.pw_name,p.pw_dir)')
+  unique=".rzr-h5-${BATS_TEST_NUMBER}-$$-$RANDOM"
+  expected="$account_home/$unique"
+  mkdir -m 700 "$expected" 2>/dev/null || true
+
+  run env -u RZR_HOME HOME="$HOME" ROZORO_HOME="~$username/$unique" \
+    RZR_LIB_NO_STATE_INIT=1 RZR_LIB_SKIP_HERDR_CHECK=1 bash -c 'cd "$1"; . "$2/bin/rzr-lib.sh"; printf "%s" "$RZR_HOME"' \
+    _ "$initial" "$REPO_ROOT"
+  local named_status="$status" named_output="$output"
+  rm -rf "$expected" 2>/dev/null || true
+  [ ! -e "$expected" ]
+  [ "$named_status" -eq 0 ]
+  [ "$named_output" = "$expected" ]
+
+  run env -u RZR_HOME HOME="$HOME" ROZORO_HOME='~rozoro-h5-no-such-user-135/path' \
+    RZR_LIB_SKIP_HERDR_CHECK=1 bash -c 'cd "$1"; . "$2/bin/rzr-lib.sh"' _ "$initial" "$REPO_ROOT"
+  assert_failure
+  [ "${#lines[@]}" -eq 1 ]
+  assert_output_contains "unresolved user home path"
+
+  run env -u RZR_HOME HOME="$HOME" ROZORO_HOME='~rozoro-h5-no-such-user-135/path' \
+    "$REPO_ROOT/bin/rozoro" doctor
+  assert_failure
+  assert_output_contains "unresolved user path"
+}
+
+@test "home validation failure leaves rejected and XDG decoy paths untouched" {
+  local rejected="$TEST_ROOT/rejected-home" decoy="$TEST_ROOT/xdg-decoy"
+  mkdir -p "$rejected" "$decoy"
+  chmod 755 "$rejected"
+  printf 'rejected sentinel\n' > "$rejected/sentinel"
+  printf 'decoy sentinel\n' > "$decoy/sentinel"
+  local rejected_before decoy_before
+  rejected_before="$(directory_snapshot "$rejected")"
+  decoy_before="$(directory_snapshot "$decoy")"
+
+  run env ROZORO_HOME="$rejected" RZR_HOME="$TEST_ROOT/legacy-decoy" \
+    XDG_CONFIG_HOME="$decoy" RZR_LIB_SKIP_HERDR_CHECK=1 bash -c '. "$1/bin/rzr-lib.sh"' _ "$REPO_ROOT"
+  assert_failure
+  assert_output_contains "unsafe ROZORO_HOME"
+  [ "$(directory_snapshot "$rejected")" = "$rejected_before" ]
+  [ "$(directory_snapshot "$decoy")" = "$decoy_before" ]
+  [ ! -e "$TEST_ROOT/legacy-decoy" ]
 }
 
 @test "shell-generated Codex child command holds quoted absolute home after cwd changes" {
@@ -55,8 +110,8 @@ MATRIX
   mkdir -p "$hook_bin"
   cat > "$hook_bin/python3" <<'SH'
 #!/usr/bin/env bash
-printf 'home=%s\ntask=%s\ncwd=%s\nscript=%s\n' \
-  "$ROZORO_HOME" "$ROZORO_TASK_ID" "$PWD" "$1" > "$HOOK_LOG"
+printf 'home-set=%s\nhome=%s\ntask=%s\ncwd=%s\nscript=%s\n' \
+  "${ROZORO_HOME+x}" "$ROZORO_HOME" "$ROZORO_TASK_ID" "$PWD" "$1" > "$HOOK_LOG"
 SH
   chmod +x "$hook_bin/python3"
 
@@ -72,9 +127,13 @@ SH
         esac
       done
       cd /
+      # The child gets no ambient home knob: only the generated, explicitly
+      # quoted assignment may provide it.
+      unset ROZORO_HOME RZR_HOME
       PATH="$4:$PATH" HOOK_LOG="$5" bash -c "$command"
     ' _ "$initial" "$REPO_ROOT" "$task" "$hook_bin" "$log"
   assert_success
+  assert_file_contains "$log" "home-set=x"
   assert_file_contains "$log" "home=$selected"
   assert_file_contains "$log" "task=$task"
   assert_file_contains "$log" "cwd=/"
