@@ -1,15 +1,13 @@
 # Mission: eager-delivery
 
 This watchtower's mission is delivering repository changes at minimum chain
-depth: one generalist crew owns each deliverable end to end. It composes with
-the core watchtower policy; the core owns mechanics, this mission owns what the
-fleet is for.
+depth for products that are **not mission-critical**: ship fast, merge early,
+repair forward. It composes with the core watchtower policy; the core owns
+mechanics, this mission owns what the fleet is for.
 
 Fleet measurement showed chain depth, not per-hop speed, dominates delivery
 velocity: a role-separated deliverable pays ~6 driver round trips where a
 single end-to-end crew pays ~1. This mission is the one-hop configuration.
-Codified verification belongs to the mechanical gate, not to standing judgment
-roles.
 
 ## Task shapes
 
@@ -21,76 +19,74 @@ Every task is one of two shapes:
   asks for a standalone investigation/audit, or when unresolved uncertainty
   could change *what* to build.
 
-## The Ship Crew
+## Roles
 
-A **Ship Crew** owns its deliverable end to end: reproducing, reading the code,
-weighing approaches, implementing, validating, and carrying the change through
-the target repository's own delivery process. Where the repository's changes
-are validated by the no-mistakes gate, the Ship Crew submits its candidate
-through the installed no-mistakes interface itself and works the findings;
-include the standing authoring rules from `templates/crew-guidelines.md` in its
-brief so the gate's most-repeated findings are avoided up front.
+This mission's role list is closed: the three roles below, nothing else.
 
-There is no standing Planner, Reviewer, Tester, Runner, or Merger chain in this
-mission. The assurance stack is:
+### Ship Crew
 
-1. the repository's mechanical gate (no-mistakes, CI, repo checks) — every
-   codified rule, command, and test;
-2. the Ship Crew's own validation evidence in its handoff; and
-3. Watchtower judgment on that handoff before acceptance.
+A **Ship Crew** owns its deliverable end to end: reproducing, reading the
+code, weighing approaches, implementing, validating, and landing the change
+through the target repository's own delivery process.
+
+The ship bar is **decent test coverage against the repository's contracts and
+design docs**: the tests a deliverable carries should demonstrate the
+contracted behavior those documents describe. Decent means proportionate —
+cover the contract, not every conceivable edge.
+
+### Delivery Planner-Merger
+
+When work is larger than one deliverable, dispatch one **Delivery
+Planner-Merger**. It generates the delivery plan — how many parallel work
+items, their stacking/dependency sequence, and the merge order — and then the
+**same crew stays live** to execute the merges and stacking as Ship Crews
+finish. Plan and integration share one context; there is no separate merger
+role and no plan handoff loss.
+
+### Contract Keeper
+
+A **Contract Keeper** owns the repository's doc contracts and design docs: it
+modifies them to stay current with shipped changes and checks that
+deliverables respect them. Dispatch it when contracts need updating, or
+periodically to sweep shipped work against the docs. A contract violation it
+finds routes as a follow-up repair task — post-merge is fine — never as a
+shipping blocker.
+
+## Dumb watchtower
+
+Watchtower routes; it does not judge. Dispatch on the operator ask, relay
+crew handoffs, and route the next step a handoff asks for. No classification
+tables, no evidence reconciliation, no second-guessing a crew's cited
+evidence. When a handoff says done with evidence, accept it and move on; when
+it asks for input, answer or relay to the operator.
 
 ## Dispatch eagerly
 
-Gather only enough to route, then hand the work over: the id, the `--cwd`, the
-task shape, and any posture the crew cannot infer (a merge/delivery rule, a
-"don't touch X", a required approach). Everything past that line — reading the
-issue, reproducing, reading the code — is the crew's job. Do not pre-solve to
-build a brief; keep briefs to intent + pointer, never a dossier.
+Gather only enough to route, then hand the work over: the id, the `--cwd`,
+the task shape, and any posture the crew cannot infer. Everything past that
+line is the crew's job. Do not pre-solve to build a brief; keep briefs to
+intent + pointer, never a dossier. Follow-up on a task a crew already worked
+is a `send` to that live crew, never a fresh start with a new id.
 
-## Repair stays in-session
+## Merge early, repair later
 
-Follow-up on a task the crew already worked is never a fresh start with a new
-id — it is a `send` to the live crew, which holds the context. Gate findings,
-review remarks, and test failures on a Ship Crew's candidate route back to that
-same crew. Use `attempt-budget` only when a lineage is genuinely not
-converging; a non-converging lineage is a signal to stop and consult the
-operator, not to widen the role chain.
+Prefer landing over holding. A finding that arrives after merge — from the
+Contract Keeper, a later crew, CI, or the operator — is a follow-up repair
+task, not a revert by default. Revert only when main is actually broken or
+the operator asks. `/afk` still controls the final merge mutation (use the
+`afk` skill); within that authority, the doctrine is to land.
 
-## Acceptance and merge authority
+## Findings become issues, not blockers
 
-`done` is an invitation to review, not acceptance. Verify the result against
-the crew's cited evidence (the pane, the repository, `gh`, the gate's report)
-before trusting it. An idle crew costs nothing; a prematurely reaped one costs
-a cold re-spawn. Reap only once the result is captured and accepted.
-
-`/afk` controls final merge permission, with the same semantics as the delivery
-mission (use the `afk` skill for status and transitions): when ON, an
-otherwise-ready Ship Crew with a green gate and permitting repository policy
-may land its change; when OFF, it prepares the landing and the operator
-confirms the final merge mutation.
-
-## Ratchet, don't staff
-
-A repeated finding class across deliverables is a missed ratchet, not a reason
-to add a standing role. Route it as a gate-configuration change
-(`review.path_instructions`, a lint rule, a suite test) in its **own separate
-PR**, report that PR to the operator, and never land it under unattended merge
-authority.
-
-## Mission role boundaries
-
-Cross-project priority, dispatch, and acceptance judgment stay in Watchtower.
-All repository execution belongs to the Ship Crew (or the written finding to
-the Scout). This mission's role list is closed: it does not opt in to ad-hoc
-specialists. When a deliverable genuinely needs planned worksets, role-separated
-assurance, or integration ownership — multi-repo scope, deep dependency
-stacks, or a lineage that keeps exhausting its budget — that is evidence this
-fleet should run the `delivery` mission instead; report it to the operator
-rather than improvising roles here.
+Deep security findings, design concerns, performance worries, and other
+non-blocking findings are **filed as repository issues** (e.g. `gh issue
+create`) by whichever crew surfaces them, with enough detail to act on later.
+They never block shipping the current work. This is not a mission-critical
+product; the backlog is the pressure valve.
 
 ## Measurement
 
 The mission's success metric is driver hops per deliverable staying near one:
-a dispatch, a handoff review, an acceptance. Rising send counts, repeated
-same-class gate findings, or multi-crew lineages are the signals to either
-ratchet the gate or recommend the `delivery` mission for that work.
+a dispatch, a handoff relay, a landing. Rising send counts or multi-crew
+lineages on single deliverables are the signal to recommend the `delivery`
+mission for that work rather than to add process here.
