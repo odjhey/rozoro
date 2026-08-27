@@ -40,7 +40,7 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
             "monitor": runpy.run_path(str(MONITOR))["home_path"],
         }
 
-    def test_python_consumers_share_complete_home_precedence_and_normalization(self):
+    def test_home_helpers_share_precedence_and_path_normalization(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve(); user_home = root / "user"; user_home.mkdir()
             cases = (
