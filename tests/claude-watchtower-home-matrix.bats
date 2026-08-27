@@ -27,7 +27,17 @@ else
     "${ROZORO_HOME-<unset>}" "${ROZORO_WT_POLICY_SHA256-<unset>}" \
     "${ROZORO_WT_POLICY_CORE_SHA256-<unset>}" "${ROZORO_WT_POLICY_MISSION_NAME-<unset>}" \
     "${ROZORO_WT_POLICY_MISSION_SOURCE-<unset>}" "${ROZORO_WT_POLICY_MISSION_SHA256-<unset>}" >> "$CLAUDE_ENV_LOG"
-  if [ -n "${FAKE_CLAUDE_LAUNCH_FAILURE:-}" ]; then sleep "${FAKE_CLAUDE_FAILURE_DELAY:-1}"; exit "$FAKE_CLAUDE_LAUNCH_FAILURE"; fi
+  if [ -n "${FAKE_CLAUDE_LAUNCH_FAILURE:-}" ]; then
+    if [ "${FAKE_CLAUDE_WAIT_READY:-0}" = 1 ]; then
+      for _ in $(seq 1 400); do
+        ready="$(find "$ROZORO_HOME/watchtowers" -name 'poller-ready.*' -type f 2>/dev/null | head -1)"
+        [ -n "$ready" ] && [ -s "$ready" ] && { sleep 1; break; }
+        sleep .025
+      done
+    else sleep "${FAKE_CLAUDE_FAILURE_DELAY:-1}"
+    fi
+    exit "$FAKE_CLAUDE_LAUNCH_FAILURE"
+  fi
 fi
 exec "$CLAUDE_FAKE" "$@"
 SH
@@ -150,7 +160,7 @@ PY
   CASE_OWNER="" CASE_POLLER="" CASE_READY="" CASE_HOME="$selected" CASE_GUARD=""
   trap 'cleanup_case "$?"' EXIT HUP INT TERM
   env ROZORO_HOME="$selected" RZR_HOME= CLAUDE_ENV_LOG="$TEST_ROOT/$label.env" FAKE_CLAUDE_LOG="$TEST_ROOT/$label.argv" \
-    FAKE_CLAUDE_LAUNCH_FAILURE=17 FAKE_CLAUDE_FAILURE_DELAY=2 HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.1.241 PATH="$PATH" \
+    FAKE_CLAUDE_LAUNCH_FAILURE=17 FAKE_CLAUDE_WAIT_READY=1 HERDR_PANE_ID=p1 FAKE_CLAUDE_VERSION=2.1.241 PATH="$PATH" \
     "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --cwd "$TEST_ROOT" >"$TEST_ROOT/$label.launch" 2>&1 & CASE_OWNER=$!
   for _ in $(seq 1 200); do
     CASE_READY="$(find "$selected/watchtowers" -name 'poller-ready.*' -type f 2>/dev/null | head -1)"
