@@ -59,7 +59,39 @@ jobs="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 
 # Keep the TypeScript extension matrix in the same pinned, networkless suite as
 # Bats. Its Node test runner exercises both native Node and Bun child paths.
+# Capture TAP without a pipeline so the runner's status is not lost. Only
+# top-level, exact TAP summary lines are accepted; child diagnostics are
+# comment-indented by node:test and cannot impersonate this summary.
+h3_tap="$(mktemp "${TMPDIR:-/tmp}/rozoro-h3-tap.XXXXXX")"
+trap 'rm -f "$h3_tap"' EXIT
+set +e
 "$engine" "${run_args[@]}" --entrypoint node "$IMAGE" \
-  --test /workspace/tests/pi-extension-home-matrix.test.ts
+  --test --test-reporter=tap /workspace/tests/pi-extension-home-matrix.test.ts >"$h3_tap" 2>&1
+h3_status=$?
+set -e
+cat "$h3_tap"
+if [ "$h3_status" -ne 0 ]; then
+  exit "$h3_status"
+fi
+if ! awk '
+  /^1\.\.[0-9]+$/ { plan++; plan_value=$0; next }
+  /^# tests [0-9]+$/ { tests++; tests_value=$3; next }
+  /^# pass [0-9]+$/ { pass++; pass_value=$3; next }
+  /^# fail [0-9]+$/ { fail++; fail_value=$3; next }
+  /^# cancelled [0-9]+$/ { cancelled++; cancelled_value=$3; next }
+  /^# skipped [0-9]+$/ { skipped++; skipped_value=$3; next }
+  /^# todo [0-9]+$/ { todo++; todo_value=$3; next }
+  END {
+    exit !(plan == 1 && plan_value == "1..6" &&
+           tests == 1 && tests_value == 6 && pass == 1 && pass_value == 6 &&
+           fail == 1 && fail_value == 0 &&
+           cancelled == 1 && cancelled_value == 0 &&
+           skipped == 1 && skipped_value == 0 &&
+           todo == 1 && todo_value == 0)
+  }
+' "$h3_tap"; then
+  echo "error: H3 requires exactly 6 passing, non-skipped top-level tests" >&2
+  exit 1
+fi
 
 exec "$engine" "${run_args[@]}" "$IMAGE" --formatter tap --jobs "$jobs" /workspace/tests
