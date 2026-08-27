@@ -5,14 +5,22 @@ kind, resolves an available execution target for this machine, and writes the
 smallest useful task-specific brief.
 
 This file owns **role contracts and dispatch semantics only**. Concrete
-harness/model/effort assignments are durable operator policy, not repository
-policy: read them from `$ROZORO_HOME/watchtower-policies/` (for example
-`roles-and-models.md`). `crew-model-selection` resolves the actual target in this
-order: explicit operator instructions, repository-local constraints, durable
-operator policy, machine availability from the optional
-`$ROZORO_HOME/config/machine.md`, then current crew presets. On a machine with no
-durable policy set, selection is machine-profile/preset/operator driven; this
-template intentionally names no models. See ADR-0012.
+harness/model/effort assignments are durable operator policy under
+`$ROZORO_HOME/watchtower-policies/`; this template intentionally names no models.
+
+For every fresh shipped, aliased, mission, or ad-hoc role, first apply explicit
+operator requirements and repository constraints, then the role contract and all
+durable policy (including global denials), then filter authorized candidates by
+freshly verified machine availability. Resolve an exact durable entry, a
+documented canonical alias, or one uniquely compatible nearest analog whose
+boundary contains and is only narrowed by the mission. Never splice role
+authority and target preferences. Missing or unavailable assignments, ambiguous
+availability, conflicting constraints, and non-unique analogs block unless an
+explicitly authorized fallback exists.
+
+`$ROZORO_HOME/config/machine.md` is availability/capacity evidence, not role
+authority. A crew preset only realizes an already-authorized selection; launcher
+defaults and presets cannot supply missing policy. See ADR-0012.
 
 ## Briefing style
 
@@ -332,10 +340,11 @@ mutation and asks the operator to confirm.
 
 ## Quick Crew
 
-`quick-crew-routing` owns eligibility for the bounded fast path. The Quick Crew
-model/effort target comes from durable operator policy and machine availability,
-like every other role; when no eligible fast target is available, route to the
-appropriate standard role instead of inventing another quick tier.
+`quick-crew-routing` owns eligibility for the bounded fast path. Global denials
+apply to Quick Crew. Its target must be authorized by durable operator policy and
+freshly verified as available. When no eligible fast assignment exists, route to
+the appropriate standard role only if that role resolves independently;
+otherwise block. Never invent a fast target or inherit a standard role's target.
 
 Use Quick Crew for narrow, mechanical, low-risk work where latency matters.
 Eligibility depends on impact certainty and risk, never on apparent file count,

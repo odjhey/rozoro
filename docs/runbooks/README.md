@@ -32,6 +32,8 @@ assurance results, workset integration, delivery outcomes, and operator steering
 Keep facts scoped to the project/workset that produced them and reuse durable
 results when they constrain later work.
 
-The optional machine profile answers a different question from repository docs:
-**what can this machine run?** Repository/operator policy answers **what should
-this project do?** The Watchtower combines both when selecting and routing crew.
+The optional machine profile answers **what can this machine run?** Canonical
+repository role contracts and durable operator role assignments answer **what is
+authorized?** Apply constraints and durable policy first, then use freshly
+verified machine facts only to filter authorized candidates. Missing or ambiguous
+authority fails closed; machine preferences and presets cannot supply it.

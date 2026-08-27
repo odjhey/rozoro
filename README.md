@@ -267,10 +267,11 @@ The `ROZORO_WT_*` variables are launcher-internal handoff metadata, not a public
 Watchtower instructions used to be entirely VCS-managed. Today they are split across three authorities (ADR-0011, ADR-0012):
 
 - **policy content** stays in VCS: `templates/watchtower.md` is appended as the system prompt on every launch and hashed into the registration; presets have no policy override;
-- **launch selection** (harness, model, effort for the Watchtower itself) lives in `$ROZORO_HOME/watchtower-presets/<name>.json`;
-- **operator role/model policy** for crew dispatch lives in `$ROZORO_HOME/watchtower-policies/`, with `$ROZORO_HOME/config/machine.md` as machine-availability input.
+- **launch selection** (harness, model, effort for the resident Watchtower itself) lives in `$ROZORO_HOME/watchtower-presets/<name>.json`;
+- **operator role/model policy** for crew dispatch lives in `$ROZORO_HOME/watchtower-policies/`, with `$ROZORO_HOME/config/machine.md` as machine-availability input;
+- **crew presets** are execution configurations for crew targets already authorized by repository/operator policy.
 
-Repository templates and skills describe role contracts and dispatch semantics only; they intentionally name no models.
+Repository templates and skills describe role contracts and dispatch semantics only; they intentionally name no models. Watchtower presets select only the Watchtower launch target, while crew presets realize crew execution. Neither kind grants crew-role policy or fallback authority.
 
 ## Operator artifact skills
 

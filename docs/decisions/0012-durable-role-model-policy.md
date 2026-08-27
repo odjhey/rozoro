@@ -1,8 +1,8 @@
 # ADR-0012: Role model assignments live in durable operator policy
 
-review: pending
+review: approved
 date: 2026-08-27
-supersedes: ADR-0006 (residual model-routing authority)
+supersedes: ADR-0006's concrete repository-owned role/model/effort table and Quick Crew model choice only
 
 ## Context
 
@@ -43,17 +43,35 @@ Choose option 3.
   intentionally name no models.
 - Concrete per-role harness/model/effort assignments are durable operator policy
   under `$ROZORO_HOME/watchtower-policies/`.
-- Resolution order for a fresh dispatch: explicit operator instructions,
-  repository-local constraints, durable operator policy, machine availability
-  from `$ROZORO_HOME/config/machine.md`, then current crew presets. On a machine
-  with no durable policy set, selection is machine-profile/preset/operator
-  driven.
+- Resolve a fresh dispatch in phases: (1) apply explicit operator requirements
+  and repository constraints; incompatible mandatory constraints block, (2)
+  apply the role contract and all durable operator policy, including global
+  denials, (3) filter authorized candidates through freshly verified machine
+  availability, and (4) realize the authorized selection with a crew preset or
+  use an ordered fallback only when operator or durable policy explicitly names
+  it. Machine facts, presets, and launcher defaults never grant authorization.
+- Durable global prohibitions and operational limits apply to every shipped,
+  aliased, mission, and ad-hoc role. Resolve an exact durable role entry first,
+  then a documented canonical alias, then one nearest analogous named role. An
+  analog is valid only when exactly one role boundary contains the work and the
+  mission narrows it, considering authority, mutation rights, work type, and
+  assurance posture. Never splice one role's authority with another's target.
+- Missing policy, a missing role assignment, unavailable or ambiguously available
+  targets, and non-unique analogs fail closed. Split the mission or obtain an
+  explicit authorized assignment. Do not fall through to machine guidance,
+  presets, or built-in defaults. Re-verify stale availability claims; dated
+  operator prohibitions remain binding until explicitly superseded.
+- Quick Crew uses an authorized fast assignment or routes to an independently
+  resolvable standard role; it never invents a fast target. Existing live crews
+  are not restarted solely for a later policy change.
 - The Watchtower's own harness/model/effort is launch selection, not crew
-  dispatch: the canonical operator path is a versioned preset under
-  `$ROZORO_HOME/watchtower-presets/` (ADR-0011). Unpreset launches remain
-  supported but register without attribution.
+  dispatch: watchtower presets under `$ROZORO_HOME/watchtower-presets/` select
+  only the resident Watchtower target (ADR-0011). Crew presets are execution
+  configurations for an already-authorized crew target. Neither is role policy.
 - Policy *content* (`templates/watchtower.md`) stays VCS-managed and hashed into
-  each registration; presets have no policy override (ADR-0011 v1).
+  each registration; presets have no policy override (ADR-0011 v1). No-mistakes
+  pipeline target/fallback selection remains governed separately by trusted
+  repository/global no-mistakes configuration.
 
 ## Consequences
 
@@ -62,10 +80,12 @@ Choose option 3.
 - Model/effort changes no longer require a repository PR and therefore lose VCS
   review. Attribution comes from `watchtower-policy-snapshot` artifacts, preset
   version/byte hashes, and registration records instead.
-- Fresh machines without a durable policy set get no model defaults from the
-  repository; the machine profile, presets, or the operator must supply them.
-- ADR-0006's first authority bullet ("standard role/model/effort selection in
-  `templates/watchtower-crew-dispatch-guidelines.md`") is retired; the rest of
-  the ADR-0006/ADR-0009 resolution is unchanged.
+- Fresh machines without durable role policy block unless an explicit
+  operator/repository-authorized target is supplied.
+- ADR-0012 supersedes only ADR-0006's concrete repository-owned role/model/effort
+  table and concrete Quick Crew model choice. ADR-0009 already supersedes
+  ADR-0006 for its stated scope and remains authoritative for machine-profile
+  purpose and runtime verification; ADR-0012 does not supersede ADR-0009.
+  ADR-0011 remains orthogonal launch-attribution authority.
 - Future cross-machine policy snapshots reconcile against the durable policy
   set, not against repository templates.

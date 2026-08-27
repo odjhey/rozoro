@@ -58,9 +58,9 @@ the secret value.
 
 ## Preferences
 
-- Planner/Coder: prefer the canonical role default when available.
-- Reviewer/Tester/Workset Merger: prefer the strongest available review target.
-- Quick Crew: prefer the configured Spark target while quota is healthy.
+- Among policy-authorized targets, prefer `pi-luna` when capacity is healthy.
+- Treat these preferences as local routing input, never role authorization.
+- Re-verify availability before each fresh selection.
 
 ## no-mistakes profiles
 
@@ -79,18 +79,27 @@ The exact names are local conventions. The important property is that Watchtower
 can understand what is available without encoding one machine's account layout in
 repository policy.
 
-## Resolution order
+## Resolution and freshness
 
-When choosing a crew/no-mistakes target, apply these inputs together:
+Durable policy under `$ROZORO_HOME/watchtower-policies/` is crew assignment
+authority; this profile is availability, capacity, and local preference evidence.
+For a fresh crew, apply explicit operator and repository constraints, then the
+role contract and all durable policy. Only then filter authorized candidates with
+freshly verified machine/profile facts. Machine preferences may choose among
+those candidates but cannot add one. A crew preset can realize an authorized
+selection; it cannot authorize one.
 
-1. explicit operator requirement;
-2. repository-local constraints and trusted tool configuration;
-3. the role/workset requirement for the current action;
-4. verified machine-profile availability/preferences; and
-5. canonical role defaults as the fallback preference.
+Treat positive availability claims as stale unless verified for the current
+selection. A dated operator prohibition does not expire with time. If a probe
+contradicts an old machine fact, refresh that fact while continuing to enforce
+independent prohibitions.
 
-The machine profile can say that a target is available or preferred; it cannot
-weaken repository policy or grant authority the operator has not delegated.
+If an assigned harness, model, account, or profile is unavailable, use only an
+ordered fallback explicitly authorized by durable policy or the current operator
+instruction. Missing role policy, ambiguous or contradictory availability, and
+unavailable assignments otherwise block; do not fall through to this profile, a
+preset, or launcher defaults. No-mistakes target/fallback resolution remains
+separate under its trusted repository/global configuration.
 
 ## no-mistakes specifics
 

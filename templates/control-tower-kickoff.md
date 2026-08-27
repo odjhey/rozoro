@@ -23,10 +23,12 @@ Role model/effort assignments come from the durable operator policy under
 `$ROZORO_HOME/watchtower-policies/` (ADR-0012); do not restate them here. Use
 this section only for run-specific deviations:
 
-- deviations from durable policy for this run: `{{none, or role: override}}`
-- Escalate coding effort by `{{one tier, or "none"}}` for concurrency,
-  persistence, and protocol slices — one expensive coder turn beats six review
-  rounds.
+- explicit operator-authorized assignments for this run: `{{none, or role: target}}`
+- Such assignments may override durable preferences only where repository policy
+  permits; they cannot silently waive repository constraints or global denials.
+- coding effort assignment: `{{durable policy, or explicit authorized target}}`
+  for concurrency, persistence, and protocol slices — one expensive coder turn
+  beats six review rounds.
 
 ## 3. Autonomy
 

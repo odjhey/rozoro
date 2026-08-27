@@ -66,12 +66,24 @@ selected harness/profile can actually run. Keep these identities separate:
 - reasoning effort; and
 - optional fast/priority tier.
 
-Role assignments from the durable operator policy
-(`$ROZORO_HOME/watchtower-policies/`) are the starting point. When the assigned
-target is unavailable, or no durable policy exists on this machine, select a
-compatible available target described by the machine profile or current Rozoro
-crew presets. Explicit operator requirements and repository-local constraints
-take precedence.
+Apply explicit operator requirements and repository-local constraints first as
+mandatory constraints; a run-specific target may override durable preferences
+only when repository policy permits it. Then apply the role contract and every
+applicable durable operator rule, including global denials for shipped, aliased,
+mission, and ad-hoc roles. Resolve an exact role entry, then a documented alias,
+then one nearest analogous named role whose authority, mutation rights, work type,
+and assurance boundary uniquely contains and is only narrowed by this mission.
+Never splice authority from one role with another role's target.
+
+Use freshly verified machine/profile facts only to filter authorized candidates.
+A machine preference cannot authorize a target. A crew preset may realize an
+already-authorized target; it is not policy or fallback authority. If policy is
+missing, the role is unassigned, no unique analog exists, availability is
+ambiguous, or an assigned target is unavailable, use only an explicitly
+operator/policy-authorized fallback. Otherwise split the mission or block and ask
+for an assignment; never fall through to a machine profile, preset, or launcher
+default. Stale positive availability must be re-verified, while operator
+prohibitions remain binding until explicitly superseded.
 
 For no-mistakes, the selected Rozoro crew model is the model used by the thin
 No-Mistakes Runner itself. The no-mistakes pipeline's own agent/model/fallback is
@@ -112,5 +124,6 @@ Run fresh selection when Watchtower intentionally changes task kind or replaces 
 active crew, for example Planner -> parallel/stacked Coders, Coder -> Reviewer,
 candidate -> No-Mistakes Runner, or planned candidate set -> Workset Merger.
 
-If current policy or machine availability is ambiguous, report the ambiguity and
-choose the safest usable target that preserves the requested role boundary.
+If policy or machine availability is ambiguous, contradictory, or unverifiable,
+report it and fail closed. Do not dispatch until an authorized target is uniquely
+resolved and freshly verified.
