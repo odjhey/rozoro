@@ -13,7 +13,8 @@ COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 COPY --from=node-runtime /usr/lib/libstdc++.so.6.0.34 /usr/lib/libstdc++.so.6.0.34
 COPY --from=jq-runtime /jq /usr/local/bin/jq
-RUN ln -s /usr/local/bin/python3 /usr/bin/python3 \
+RUN apk add --no-cache git \
+    && ln -s /usr/local/bin/python3 /usr/bin/python3 \
     && ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/lib/libstdc++.so.6.0.34 /usr/lib/libstdc++.so.6 \
     && ln -s /usr/local/bin/jq /usr/bin/jq
