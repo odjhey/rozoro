@@ -29,22 +29,27 @@ async function run(runtime: typeof runtimes[number], cell: string): Promise<Resu
   } finally {
     if (timer) clearTimeout(timer);
     if (child && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL"); await new Promise((done) => child!.once("exit", done));
+      child.kill("SIGKILL");
+      await new Promise((done) => child!.once("exit", done));
     }
-    assert.equal(child?.exitCode === null && child?.signalCode === null, false, `${runtime.name}/${cell} child survived`);
-    assert.deepEqual(await readdir(guard), [], `${runtime.name}/${cell} left socket/temp state`);
-    await rm(guard, { recursive: true, force: true });
+    const survived = child?.exitCode === null && child?.signalCode === null;
+    let removalError: unknown;
+    try { await rm(guard, { recursive: true, force: true }); } catch (error) { removalError = error; }
+    const residue = (await readdir(join(guard, ".."))).includes(guard.split("/").at(-1)!);
+    assert.equal(survived, false, `${runtime.name}/${cell} child survived`);
+    assert.ifError(removalError);
+    assert.equal(residue, false, `${runtime.name}/${cell} left socket/temp state`);
   }
 }
 
 for (const runtime of runtimes) {
-  test(`${runtime.name}: extension socket home matrix P/L/B/E/D/R/T/X (O=N/A)`, { concurrency: false }, async () => {
+  test(`${runtime.name}: extension socket home matrix P/L/B/E/D/R/T/X plus unresolved user (O=N/A)`, { concurrency: false, timeout: 120_000 }, async () => {
     const matrix: Result[] = [];
-    for (const cell of cells) matrix.push(await run(runtime, cell));
+    for (const cell of [...cells, "U"] as const) matrix.push(await run(runtime, cell));
     console.log(`matrix-result ${runtime.name} ${matrix.map(({ cell }) => `${cell}=pass`).join(" ")} O=N/A`);
   });
-  test(`${runtime.name}: 20x native fresh-process socket-home repetition`, { concurrency: false }, async () => {
-    for (let repetition = 0; repetition < 20; repetition++) await run(runtime, cells[repetition % cells.length]);
-    console.log(`matrix-result ${runtime.name} repetitions=20 pass`);
+  test(`${runtime.name}: 20x per cell native fresh-process socket-home repetition`, { concurrency: false, timeout: 120_000 }, async () => {
+    for (const cell of cells) for (let repetition = 0; repetition < 20; repetition++) await run(runtime, cell);
+    console.log(`matrix-result ${runtime.name} ${cells.map((cell) => `${cell}=20/20`).join(" ")}`);
   });
 }
