@@ -63,7 +63,19 @@ jobs="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 # top-level, exact TAP summary lines are accepted; child diagnostics are
 # comment-indented by node:test and cannot impersonate this summary.
 h3_tap="$(mktemp "${TMPDIR:-/tmp}/rozoro-h3-tap.XXXXXX")"
-trap 'rm -f "$h3_tap"' EXIT
+cleanup_h3_tap() {
+  rm -f -- "$h3_tap"
+}
+on_h3_signal() {
+  signal_status="$1"
+  cleanup_h3_tap
+  trap - EXIT HUP INT TERM
+  exit "$signal_status"
+}
+trap cleanup_h3_tap EXIT
+trap 'on_h3_signal 129' HUP
+trap 'on_h3_signal 130' INT
+trap 'on_h3_signal 143' TERM
 set +e
 "$engine" "${run_args[@]}" --entrypoint node "$IMAGE" \
   --test --test-reporter=tap /workspace/tests/pi-extension-home-matrix.test.ts >"$h3_tap" 2>&1
@@ -74,6 +86,22 @@ if [ "$h3_status" -ne 0 ]; then
   exit "$h3_status"
 fi
 if ! awk '
+  BEGIN {
+    expected[1] = "Node: extension socket home matrix P/L/B/E/D/R/T/X plus unresolved user (O=N/A)"
+    expected[2] = "Node: 20x per cell native fresh-process socket-home repetition"
+    expected[3] = "Node: forced timeout and peer-close write race leave no survivors"
+    expected[4] = "Bun: extension socket home matrix P/L/B/E/D/R/T/X plus unresolved user (O=N/A)"
+    expected[5] = "Bun: 20x per cell native fresh-process socket-home repetition"
+    expected[6] = "Bun: forced timeout and peer-close write race leave no survivors"
+  }
+  /^TAP version 13$/ { header++; next }
+  /^(not )?ok([[:space:]]|$)/ {
+    results++
+    id = $2
+    prefix = "ok " id " - "
+    if ($1 != "ok" || id != results || index($0, prefix) != 1 || substr($0, length(prefix) + 1) != expected[results]) bad_result=1
+    next
+  }
   /^1\.\.[0-9]+$/ { plan++; plan_value=$0; next }
   /^# tests [0-9]+$/ { tests++; tests_value=$3; next }
   /^# pass [0-9]+$/ { pass++; pass_value=$3; next }
@@ -82,7 +110,8 @@ if ! awk '
   /^# skipped [0-9]+$/ { skipped++; skipped_value=$3; next }
   /^# todo [0-9]+$/ { todo++; todo_value=$3; next }
   END {
-    exit !(plan == 1 && plan_value == "1..6" &&
+    exit !(header == 1 && results == 6 && !bad_result &&
+           plan == 1 && plan_value == "1..6" &&
            tests == 1 && tests_value == 6 && pass == 1 && pass_value == 6 &&
            fail == 1 && fail_value == 0 &&
            cancelled == 1 && cancelled_value == 0 &&
@@ -94,4 +123,11 @@ if ! awk '
   exit 1
 fi
 
-exec "$engine" "${run_args[@]}" "$IMAGE" --formatter tap --jobs "$jobs" /workspace/tests
+# Do not exec while the TAP tempfile exists: EXIT traps are skipped by exec.
+cleanup_h3_tap
+trap - EXIT HUP INT TERM
+set +e
+"$engine" "${run_args[@]}" "$IMAGE" --formatter tap --jobs "$jobs" /workspace/tests
+suite_status=$?
+set -e
+exit "$suite_status"

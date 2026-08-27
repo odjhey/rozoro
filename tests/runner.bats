@@ -18,16 +18,28 @@ fi
 case " $* " in
   *" --entrypoint node "*)
     case "${H3_TAP_MODE:-pass}" in
-      pass) printf '%s\n' 'TAP version 13' 'ok 1 - a' 'ok 2 - b' 'ok 3 - c' 'ok 4 - d' 'ok 5 - e' 'ok 6 - f' '1..6' '# tests 6' '# suites 0' '# pass 6' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' '# duration_ms 1' ;;
-      skip) printf '%s\n' '1..6' '# tests 6' '# pass 5' '# fail 0' '# cancelled 0' '# skipped 1' '# todo 0' ;;
+      pass|literal-skip|not-ok|duplicate-header|duplicate-results)
+        printf '%s\n' 'TAP version 13'
+        [ "${H3_TAP_MODE:-pass}" = duplicate-header ] && printf '%s\n' 'TAP version 13'
+        printf '%s\n' \
+          'ok 1 - Node: extension socket home matrix P/L/B/E/D/R/T/X plus unresolved user (O=N/A)' \
+          'ok 2 - Node: 20x per cell native fresh-process socket-home repetition' \
+          'ok 3 - Node: forced timeout and peer-close write race leave no survivors' \
+          'ok 4 - Bun: extension socket home matrix P/L/B/E/D/R/T/X plus unresolved user (O=N/A)' \
+          'ok 5 - Bun: 20x per cell native fresh-process socket-home repetition' \
+          'ok 6 - Bun: forced timeout and peer-close write race leave no survivors' |
+          if [ "${H3_TAP_MODE:-pass}" = literal-skip ]; then sed 's/$/ # SKIP/'; elif [ "${H3_TAP_MODE:-pass}" = not-ok ]; then sed '3s/^ok/not ok/'; else cat; fi
+        [ "${H3_TAP_MODE:-pass}" = duplicate-results ] && printf '%s\n' 'ok 6 - Bun: forced timeout and peer-close write race leave no survivors'
+        printf '%s\n' '1..6' '# tests 6' '# suites 0' '# pass 6' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' '# duration_ms 1'
+        ;;
+      summary-only) printf '%s\n' 'TAP version 13' '1..6' '# tests 6' '# pass 6' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' ;;
+      child-spoof) printf '%s\n' '    TAP version 13' '    ok 1 - child' '    ok 2 - child' '    ok 3 - child' '    ok 4 - child' '    ok 5 - child' '    ok 6 - child' '    1..6' '    # tests 6' '    # pass 6' '    # fail 0' '    # cancelled 0' '    # skipped 0' '    # todo 0' ;;
+      indented) printf '%s\n' 'TAP version 13' '    ok 1 - child' '    ok 2 - child' '    ok 3 - child' '    ok 4 - child' '    ok 5 - child' '    ok 6 - child' '1..6' '# tests 6' '# pass 6' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' ;;
       removed) : ;;
-      count) printf '%s\n' '1..5' '# tests 5' '# pass 5' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' ;;
-      fail) printf '%s\n' '1..6' '# tests 6' '# pass 5' '# fail 1' '# cancelled 0' '# skipped 0' '# todo 0' ;;
-      cancelled) printf '%s\n' '1..6' '# tests 6' '# pass 5' '# fail 0' '# cancelled 1' '# skipped 0' '# todo 0' ;;
-      todo) printf '%s\n' '1..6' '# tests 6' '# pass 5' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 1' ;;
-      malformed) printf '%s\n' '1..6' '# tests six' '# pass 6' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' ;;
-      spoof) printf '%s\n' '    1..6' '    # tests 6' '    # pass 6' '    # fail 0' '    # cancelled 0' '    # skipped 0' '    # todo 0' ;;
+      count) printf '%s\n' 'TAP version 13' 'ok 1 - wrong' '1..5' '# tests 5' '# pass 5' '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0' ;;
+      fail|cancelled|todo|malformed) printf '%s\n' 'TAP version 13' '1..6' '# tests six' '# pass 5' '# fail 1' '# cancelled 0' '# skipped 0' '# todo 0' ;;
       status) echo 'original H3 failure output'; exit 42 ;;
+      signal) kill -TERM "$PPID"; sleep 1 ;;
     esac
     ;;
 esac
@@ -102,16 +114,42 @@ SH
   [ "$(wc -l < "$ENGINE_LOG")" -eq 3 ]
 }
 
-@test "runner rejects skipped, absent, drifted, non-passing, and malformed H3 summaries" {
+@test "runner rejects spoofed or incomplete TAP and mismatched H3 evidence" {
   make_engine custom-engine
   export ENGINE_LOG="$TEST_ROOT/engine.log"
 
-  for mode in skip removed count fail cancelled todo malformed spoof; do
+  for mode in summary-only child-spoof indented duplicate-header duplicate-results literal-skip not-ok removed count fail cancelled todo malformed; do
     : > "$ENGINE_LOG"
     run env CONTAINER_ENGINE="$TEST_ROOT/engines/custom-engine" H3_TAP_MODE="$mode" bash "$REPO_ROOT/tests/run.sh"
     assert_failure
     assert_output_contains "H3 requires exactly 6 passing, non-skipped top-level tests"
     [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  done
+}
+
+@test "runner removes its exact TAP tempfile before full Bats" {
+  make_engine custom-engine
+  export ENGINE_LOG="$TEST_ROOT/engine.log"
+  mkdir -p "$TEST_ROOT/tmp"
+  touch "$TEST_ROOT/tmp/sentinel"
+
+  run env CONTAINER_ENGINE="$TEST_ROOT/engines/custom-engine" TMPDIR="$TEST_ROOT/tmp" bash "$REPO_ROOT/tests/run.sh"
+  assert_success
+  [ "$(find "$TEST_ROOT/tmp" -mindepth 1 -maxdepth 1 -print | wc -l)" -eq 1 ]
+  [ -e "$TEST_ROOT/tmp/sentinel" ]
+}
+
+@test "runner removes its TAP tempfile on H3 failure and signal" {
+  make_engine custom-engine
+  export ENGINE_LOG="$TEST_ROOT/engine.log"
+  mkdir -p "$TEST_ROOT/tmp"
+  touch "$TEST_ROOT/tmp/sentinel"
+
+  for mode in status signal; do
+    run env CONTAINER_ENGINE="$TEST_ROOT/engines/custom-engine" TMPDIR="$TEST_ROOT/tmp" H3_TAP_MODE="$mode" bash "$REPO_ROOT/tests/run.sh"
+    assert_failure
+    [ "$(find "$TEST_ROOT/tmp" -mindepth 1 -maxdepth 1 -print | wc -l)" -eq 1 ]
+    [ -e "$TEST_ROOT/tmp/sentinel" ]
   done
 }
 
