@@ -19,3 +19,18 @@ RUN ln -s /usr/local/bin/python3 /usr/bin/python3 \
     && ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/lib/libstdc++.so.6.0.34 /usr/lib/libstdc++.so.6 \
     && ln -s /usr/local/bin/jq /usr/bin/jq
+
+# Match the numeric identity selected by tests/run.sh without assuming that its
+# host GID is absent from Alpine. The runner mounts this empty home as a tmpfs,
+# because the remainder of the test container is deliberately read-only.
+ARG ROZORO_TEST_UID
+ARG ROZORO_TEST_GID
+RUN case "$ROZORO_TEST_UID:$ROZORO_TEST_GID" in \
+      *[!0-9:]*|:*|*:|*:*:*) exit 2 ;; \
+    esac \
+    && ! grep -q '^rozoro-test:' /etc/passwd \
+    && ! awk -F: -v uid="$ROZORO_TEST_UID" '$3 == uid { found=1 } END { exit !found }' /etc/passwd \
+    && printf 'rozoro-test:x:%s:%s:Rozoro test account:/home/rozoro-test:/sbin/nologin\n' \
+      "$ROZORO_TEST_UID" "$ROZORO_TEST_GID" >> /etc/passwd \
+    && mkdir -m 700 /home/rozoro-test \
+    && chown "$ROZORO_TEST_UID:$ROZORO_TEST_GID" /home/rozoro-test
