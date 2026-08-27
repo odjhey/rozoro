@@ -9,17 +9,17 @@ const cells = ["P", "L", "B", "E", "D", "R", "T", "X"] as const; // O: N/A (the 
 const runtimes = [{ name: "Node", command: process.env.NODE ?? "node" }, { name: "Bun", command: process.env.BUN ?? "bun" }] as const;
 
 type Result = { cell: string; selected: string; matrixResult: "pass" };
-async function run(runtime: typeof runtimes[number], cell: string): Promise<Result> {
+async function run(runtime: typeof runtimes[number], cell: string, options: { mode?: "normal" | "timeout" | "peer-close"; timeoutMs?: number } = {}): Promise<Result> {
   const guard = await mkdtemp(join("/tmp", `rpp-${runtime.name[0]}${cell}-`));
   let child: ChildProcess | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const fixtureRoot = join(guard, "root");
-    child = spawn(runtime.command, [fixture, cell], { cwd: guard, env: { ...process.env, HOME: join(fixtureRoot, "user"), ROZORO_HOME_FIXTURE_ROOT: fixtureRoot }, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(runtime.command, [fixture, cell, options.mode ?? "normal"], { cwd: guard, env: { ...process.env, HOME: join(fixtureRoot, "user"), ROZORO_HOME_FIXTURE_ROOT: fixtureRoot }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
     child.stdout!.on("data", (chunk) => { stdout += chunk; }); child.stderr!.on("data", (chunk) => { stderr += chunk; });
     const code = await new Promise<number | null>((resolve, reject) => {
-      timer = setTimeout(() => { child!.kill("SIGKILL"); reject(new Error(`${runtime.name}/${cell} timed out`)); }, 8000);
+      timer = setTimeout(() => { child!.kill("SIGKILL"); reject(new Error(`${runtime.name}/${cell} timed out`)); }, options.timeoutMs ?? 8000);
       child!.once("error", reject); child!.once("exit", resolve);
     });
     assert.equal(code, 0, `${runtime.name}/${cell}: ${stderr || stdout}`);
@@ -51,5 +51,9 @@ for (const runtime of runtimes) {
   test(`${runtime.name}: 20x per cell native fresh-process socket-home repetition`, { concurrency: false, timeout: 120_000 }, async () => {
     for (const cell of cells) for (let repetition = 0; repetition < 20; repetition++) await run(runtime, cell);
     console.log(`matrix-result ${runtime.name} ${cells.map((cell) => `${cell}=20/20`).join(" ")}`);
+  });
+  test(`${runtime.name}: forced timeout and peer-close write race leave no survivors`, { concurrency: false, timeout: 20_000 }, async () => {
+    await assert.rejects(run(runtime, "P", { mode: "timeout", timeoutMs: 500 }), /timed out/);
+    await run(runtime, "P", { mode: "peer-close" });
   });
 }

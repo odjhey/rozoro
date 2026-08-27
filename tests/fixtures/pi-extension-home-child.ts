@@ -11,7 +11,7 @@ const waitFor = async (predicate: () => boolean, timeout = 3000) => {
   const deadline = Date.now() + timeout;
   while (!predicate()) { if (Date.now() >= deadline) throw new Error("socket connection timed out"); await delay(10); }
 };
-async function listen(home: string): Promise<Listener> {
+async function listen(home: string, closeOnFirstFrame = false): Promise<Listener> {
   await mkdir(home, { recursive: true, mode: 0o700 }); await chmod(home, 0o700);
   const state: Listener = { server: undefined as unknown as Server, sockets: new Set(), connections: 0, frames: [] };
   state.server = createServer((socket) => {
@@ -23,6 +23,7 @@ async function listen(home: string): Promise<Listener> {
         const newline = buffered.indexOf("\n"); if (newline < 0) break;
         const frame = JSON.parse(buffered.slice(0, newline)); buffered = buffered.slice(newline + 1);
         state.frames.push(frame.type);
+        if (closeOnFirstFrame) { socket.destroy(); continue; }
         if (["session.register", "turn.start", "turn.stop"].includes(frame.type) && !socket.destroyed && socket.writable)
           socket.write(JSON.stringify({ v: 1, type: "ack", event_id: frame.event_id, durable_seq: frame.producer_seq }) + "\n", () => undefined);
       }
@@ -39,6 +40,7 @@ async function close(listener: Listener) {
 }
 
 const cell = process.argv[2];
+const mode = process.argv[3] ?? "normal";
 const root = process.env.ROZORO_HOME_FIXTURE_ROOT!;
 assert.ok(root, "ROZORO_HOME_FIXTURE_ROOT is required");
 const initial = join(root, "initial"), later = join(root, "later"), user = join(root, "user");
@@ -46,13 +48,14 @@ const publicHome = join(initial, "public"), legacyHome = join(initial, "legacy")
 const defaultHome = join(user, ".rozoro"), relativeHome = join(initial, "relative"), tildeHome = join(user, "tilde");
 const xdgHome = join(root, "xdg", "rozoro"), deferredRelative = join(later, "relative");
 const homes = [publicHome, legacyHome, defaultHome, relativeHome, tildeHome, xdgHome, deferredRelative];
-const expected: Record<string, string> = { P: publicHome, L: legacyHome, B: publicHome, E: legacyHome, D: defaultHome, R: relativeHome, T: tildeHome, X: publicHome };
+const expected: Record<string, string> = { P: publicHome, L: legacyHome, B: publicHome, E: legacyHome, D: defaultHome, R: relativeHome, T: tildeHome, X: defaultHome };
 assert.ok(expected[cell] || cell === "U", `unknown matrix cell ${cell}`);
 await mkdir(root, { recursive: true }); await Promise.all([mkdir(initial), mkdir(later), mkdir(user, { recursive: true })]);
 const listeners = new Map<string, Listener>();
 const oldCwd = process.cwd();
 try {
-  for (const home of homes) listeners.set(home, await listen(home));
+  for (const home of homes) listeners.set(home, await listen(home, mode === "peer-close" && home === expected[cell]));
+  if (mode === "timeout") await new Promise(() => undefined);
   delete process.env.ROZORO_HOME; delete process.env.RZR_HOME;
   process.env.HOME = user; process.env.XDG_CONFIG_HOME = join(root, "xdg");
   if (cell === "P") process.env.ROZORO_HOME = "public";
@@ -61,14 +64,16 @@ try {
   if (cell === "E") { process.env.ROZORO_HOME = ""; process.env.RZR_HOME = "legacy"; }
   if (cell === "R") process.env.ROZORO_HOME = "relative";
   if (cell === "T") process.env.ROZORO_HOME = "~/tilde";
-  if (cell === "X") { process.env.ROZORO_HOME = "public"; process.env.RZR_HOME = "legacy"; }
+  if (cell === "X") { process.env.ROZORO_HOME = ""; process.env.RZR_HOME = ""; }
   if (cell === "U") process.env.ROZORO_HOME = "~rozoro-no-such-user-h3/home";
   process.chdir(initial);
   const handlers = new Map<string, Handler[]>();
+  let releaseInitialization!: () => void;
+  const initializationBarrier = new Promise<void>((done) => { releaseInitialization = done; });
   const pi = {
     on(name: string, handler: Handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
     registerCommand() {}, sendMessage() {},
-    async exec() { return { code: 0, stdout: "", stderr: "" }; },
+    async exec() { await initializationBarrier; return { code: 0, stdout: "", stderr: "" }; },
   };
   if (cell === "U") {
     assert.throws(() => extension(pi as any), /unresolved user home path/);
@@ -80,13 +85,25 @@ try {
     if (cell === "R") process.chdir(later);
     const ctx = { getSystemPrompt: () => "rozoro-task: task-home-matrix", sessionManager: { getSessionId: () => `session-${cell}` }, ui: { setStatus() {}, notify() {} } };
     for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
-    await waitFor(() => listeners.get(expected[cell])!.connections === 1);
     for (const handler of handlers.get("agent_start") ?? []) handler();
     for (const handler of handlers.get("agent_settled") ?? []) handler();
-    await waitFor(() => listeners.get(expected[cell])!.frames.includes("turn.stop"));
-    assert.deepEqual(listeners.get(expected[cell])!.frames.slice(0, 3), ["session.register", "turn.start", "turn.stop"]);
+    await delay(20);
+    assert.equal([...listeners.values()].reduce((sum, listener) => sum + listener.connections, 0), 0, "initialization barrier leaked a connection");
+    releaseInitialization();
+    await waitFor(() => listeners.get(expected[cell])!.connections === 1);
+    if (mode === "peer-close") {
+      await waitFor(() => listeners.get(expected[cell])!.frames.includes("session.register"));
+      await delay(30);
+    } else {
+      await waitFor(() => listeners.get(expected[cell])!.frames.includes("turn.stop"));
+      assert.deepEqual(listeners.get(expected[cell])!.frames.slice(0, 3), ["session.register", "turn.start", "turn.stop"]);
+    }
     assert.equal(listeners.get(expected[cell])!.connections, 1);
     for (const [home, listener] of listeners) if (home !== expected[cell]) assert.equal(listener.connections, 0, `connected to decoy ${home}`);
+    if (cell === "X") {
+      assert.equal(listeners.get(xdgHome)!.connections, 0, "XDG socket was connected");
+      assert.deepEqual(listeners.get(xdgHome)!.frames, [], "XDG socket was written");
+    }
     for (const handler of handlers.get("session_shutdown") ?? []) await handler();
     await waitFor(() => listeners.get(expected[cell])!.sockets.size === 0);
     console.log(JSON.stringify({ cell, selected: resolve(expected[cell]), matrixResult: "pass" }));
