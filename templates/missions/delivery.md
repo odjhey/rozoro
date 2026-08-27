@@ -28,8 +28,12 @@ A gate or CI check may not assume the repository remains in its bootstrap
 state. When a work item transitions repository state — placeholder package to
 real API, zero implemented tests to real tests, no consumers to real
 consumers — verify the existing checks still function under the new state
-before broad fan-out continues. Check failures caused by previously untested
-repository evolution are NEEDS_GATE_REPAIR, not NEEDS_REPLAN.
+before broad fan-out continues. The transition-owning Coder flags the boundary and supplies/updates its check or
+fixture; Planner records it in the assurance map. The No-Mistakes Runner is the
+named verification owner and must explicitly report that checks execute
+meaningfully before Watchtower permits broad post-Coder judgment fan-out. A broken
+check is `NEEDS_GATE_REPAIR`; a functioning check exposing a candidate defect is
+not.
 
 ## Planning and dispatch strategy
 
@@ -207,3 +211,70 @@ Planner/Replanner, integration execution in the Workset Merger, no-mistakes
 execution in the No-Mistakes Runner, repository implementation in the
 appropriate specialist crew, and any ad-hoc specialist inside the written
 boundary of its brief.
+
+
+## Normative per-edge routing contract
+
+Statuses classify an **actionable edge**, not a mutable whole-task state. Assign
+exactly one status per edge; one work item may have separately routed (and when the
+plan permits concurrently dispatched) edges. Reclassify on new evidence; never
+report overlapping statuses for one edge. Watchtower alone is accountable for
+classification, preserved evidence, and routing; crews may recommend but cannot
+self-authorize or charge counters.
+
+| Status | Exclusive definition for one actionable edge | Owner / route | Accounting |
+|---|---|---|---|
+| `DONE` | No required implementation, assurance, decision, repair, replan, external dependency, delivery, or required acceptance remains. | Watchtower records closure; operator acceptance remains where not delegated. | None |
+| `NEEDS_IMPLEMENTATION` | Product/repository behavior or code must change within the current task and direction. | Existing Coder; otherwise reclassify `NEEDS_REPLAN`. | Next candidate-writing Coder increments `attempt_count`. |
+| `NEEDS_TESTS` | Behavior exploration, test-design judgment, or durable test contribution is missing; no product defect is established. | Tester/Test Designer; a contribution creates a candidate and re-enters the gate. | No Coder attempt unless reclassified. |
+| `NEEDS_REVIEW` | Independent design/contract/correctness/scope judgment is missing. | Reviewer after a green exact-head gate, except labeled red-candidate advisory. | None |
+| `NEEDS_DECISION` | A policy, contract, scope, risk, priority, waiver, or authority choice is required. | Governing decision owner, else operator. | None merely for deciding. |
+| `NEEDS_REPLAN` | Evidence invalidates task, direction, dependency graph, stack/fan-in, or integration order. | Escalation Replanner. | Its turn increments `replan_count`. |
+| `NEEDS_INFRA_REPAIR` | A non-gate execution substrate (toolchain/workspace/harness runtime/corpus or fixture provisioning) is defective or absent. | Bounded Infrastructure Repair Specialist. | Mutating repair increments `infra_repair_count`. |
+| `NEEDS_GATE_REPAIR` | A required check, CI/no-mistakes configuration, adapter, or check fixture is defective, stale, or not meaningful; not a functioning check rejecting a defect. | Bounded Gate Repair Specialist; Runner retains rerun/green authority. | Mutating repair increments `gate_repair_count`. |
+| `BLOCKED_EXTERNAL` | No authorized internal repair/decision can clear the edge; an external actor, service, credential/quota, event, or execution target is required. | Watchtower records dependency, owner, and objective resume trigger; no blind retry. | None |
+
+## Repair incident contract
+
+Every repair incident records `repair_lineage_id`, linked
+`implementation_lineage_id` when applicable, `infra_repair_count`,
+`gate_repair_count`, `repair_limit: 3`, and `caused_by`. Counts derive from durable
+history and never reset across actors, sessions, branches, worktrees, resumes, or
+reclassification. Only an authorized mutating repair increments exactly one repair
+counter; diagnosis/reruns/reports do not. The combined per-incident cap is
+`infra_repair_count + gate_repair_count <= 3`. Two unsuccessful same-root attempts
+require an ownership/authority checkpoint; attempt 3 needs a changed hypothesis
+and named owner. No fourth attempt is allowed. Repair counters never increment
+`attempt_count` or `replan_count`; product-code work is reclassified
+`NEEDS_IMPLEMENTATION`, while only a true plan change is `NEEDS_REPLAN`.
+
+## Delivery mission ad-hoc opt-in
+
+This mission explicitly opts in to ad-hoc specialists under ADR-0014.
+
+An opted-in ad-hoc role instance has one bounded work item and lasts until it
+reports `DONE`, hands back a classified unresolved edge, or is stopped. `send` may
+only finish that declared job; expanded scope, authority, or evidence shape needs
+a new declaration and instance. Before dispatch, record in the task/work item and
+attention ledger: `role_instance_id`, role name, mission, task/work-item ID,
+creation time, unowned-gap rationale, must/must-not boundary, stop condition,
+expected evidence, analogous standard role (or none), routing-policy source and
+selected/fallback target, creating Watchtower registration/policy attribution,
+and later termination/outcome.
+
+It may execute only that job and create a bounded repair artifact only when
+authorized. It may not absorb or waive operator priority/final acceptance;
+Watchtower classification/routing; repository contract/policy/scope decisions;
+Planner/Replanner strategy; Coder product implementation; Reviewer acceptance;
+Tester acceptance; Runner gate operation/green determination; or Merger
+integration/landing/post-merge authority. It may not merge, waive evidence, accept
+its own work, or broaden its brief.
+
+Count materially equivalent functions per mission (same purpose, authority
+boundary, and evidence shape; renaming does not reset). The third creation
+requires graduation review and may finish. A fourth dispatch is prohibited until
+the mission names a permanent role/contract or its decision authority records why
+it remains ad hoc and sets a new bounded review point.
+
+Ad-hoc execution targets use `crew-model-selection`'s operator > repository >
+durable policy > machine > preset precedence and execution-time verification.

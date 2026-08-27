@@ -28,9 +28,8 @@ Choose among the roles that fit the next bounded action:
 - Workset Merger
 - Quick Scout / Quick Coder when `quick-crew-routing` qualifies
 - an ad-hoc specialist, when the mission permits one and no listed role owns
-  the bounded work — resolve its model/effort from the nearest analogous
-  role's durable assignment or the machine profile, and give its brief an
-  explicit boundary per the dispatch guidelines
+  the bounded work — only when the selected mission explicitly opts in; give it the full
+  declaration and fences required by the dispatch guidelines
 
 For new implementation work, Planner is the normal bridge from raw intent to a
 bounded **workset execution strategy** when scope, dependencies, acceptance
@@ -70,12 +69,21 @@ selected harness/profile can actually run. Keep these identities separate:
 - reasoning effort; and
 - optional fast/priority tier.
 
-Role assignments from the durable operator policy
-(`$ROZORO_HOME/watchtower-policies/`) are the starting point. When the assigned
-target is unavailable, or no durable policy exists on this machine, select a
-compatible available target described by the machine profile or current Rozoro
-crew presets. Explicit operator requirements and repository-local constraints
-take precedence.
+Resolve every role, including ad-hoc roles, in this strict order: **explicit
+operator requirement > repository-local constraint > durable operator policy
+(nearest analogous role assignment, including its ordered fallback) > machine
+profile availability/preferences > current compatible crew preset**. Analogy maps
+the role semantically into durable policy; it does not transfer authority or allow
+copying model names from templates.
+
+Immediately before every fresh dispatch, verify that the launcher/harness,
+account/profile, exact model ID, effort/tier, and required credentials/capacity are
+usable. If unavailable, take the next compatible target allowed by the highest
+still-applicable layer, then machine profile, then presets. Never violate operator
+or repository constraints for availability. If none is compatible, classify
+`BLOCKED_EXTERNAL`, or `NEEDS_DECISION` only if an authorized policy choice can
+resolve it, and record attempted targets/reasons. A same-live-crew follow-up does
+not reselect unless availability is lost or task kind changes.
 
 For no-mistakes, the selected Rozoro crew model is the model used by the thin
 No-Mistakes Runner itself. The no-mistakes pipeline's own agent/model/fallback is
