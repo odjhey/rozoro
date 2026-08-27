@@ -57,4 +57,9 @@ esac
 # which keeps concurrent tests independent. TEST_JOBS=1 restores serial runs.
 jobs="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 
+# Keep the TypeScript extension matrix in the same pinned, networkless suite as
+# Bats. Its Node test runner exercises both native Node and Bun child paths.
+"$engine" "${run_args[@]}" --entrypoint node "$IMAGE" \
+  --test /workspace/tests/pi-extension-home-matrix.test.ts
+
 exec "$engine" "${run_args[@]}" "$IMAGE" --formatter tap --jobs "$jobs" /workspace/tests

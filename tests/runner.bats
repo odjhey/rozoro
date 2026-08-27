@@ -36,11 +36,12 @@ SH
 
   run env PATH="$TEST_ROOT/engines:$PATH" TEST_JOBS=4 bash "$REPO_ROOT/tests/run.sh"
   assert_success
-  [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  [ "$(wc -l < "$ENGINE_LOG")" -eq 3 ]
   assert_file_contains "$ENGINE_LOG" $'call\tbuild'
   assert_file_contains "$ENGINE_LOG" "$REPO_ROOT/tests/Containerfile"
   assert_file_contains "$ENGINE_LOG" $'localhost/rozoro-tests:bats-1.14.0\t'
   assert_file_contains "$ENGINE_LOG" $'call\trun\t--rm\t--network\tnone\t--read-only'
+  assert_file_contains "$ENGINE_LOG" $'label=disable\t--entrypoint\tnode\tlocalhost/rozoro-tests:bats-1.14.0\t--test\t/workspace/tests/pi-extension-home-matrix.test.ts'
   assert_file_contains "$ENGINE_LOG" "$REPO_ROOT:/workspace:ro"
   assert_file_contains "$ENGINE_LOG" $'label=disable\tlocalhost/rozoro-tests:bats-1.14.0\t--formatter\ttap\t--jobs\t4\t/workspace/tests'
 }
@@ -51,9 +52,10 @@ SH
 
   run env PATH="$TEST_ROOT/engines:$PATH" bash "$REPO_ROOT/tests/run.sh"
   assert_success
-  [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  [ "$(wc -l < "$ENGINE_LOG")" -eq 3 ]
   assert_file_contains "$ENGINE_LOG" $'call\tbuild'
   assert_file_contains "$ENGINE_LOG" $'call\trun'
+  assert_file_contains "$ENGINE_LOG" $'--entrypoint\tnode\tlocalhost/rozoro-tests:bats-1.14.0\t--test\t/workspace/tests/pi-extension-home-matrix.test.ts'
   case "$(cat "$ENGINE_LOG")" in
     *label=disable*) return 1 ;;
   esac
@@ -66,9 +68,10 @@ SH
 
   run env PATH="$TEST_ROOT/engines:$PATH" bash "$REPO_ROOT/tests/run.sh"
   assert_success
-  [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  [ "$(wc -l < "$ENGINE_LOG")" -eq 3 ]
   assert_file_contains "$ENGINE_LOG" $'call\tbuild'
   assert_file_contains "$ENGINE_LOG" $'call\trun'
+  assert_file_contains "$ENGINE_LOG" $'--entrypoint\tnode\tlocalhost/rozoro-tests:bats-1.14.0\t--test\t/workspace/tests/pi-extension-home-matrix.test.ts'
   case "$(cat "$ENGINE_LOG")" in
     *label=disable*) return 1 ;;
   esac
@@ -80,7 +83,7 @@ SH
 
   run env CONTAINER_ENGINE="$TEST_ROOT/engines/custom-engine" bash "$REPO_ROOT/tests/run.sh"
   assert_success
-  [ "$(wc -l < "$ENGINE_LOG")" -eq 2 ]
+  [ "$(wc -l < "$ENGINE_LOG")" -eq 3 ]
 }
 
 @test "missing explicit container engine fails before a build" {
