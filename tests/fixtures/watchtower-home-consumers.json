@@ -159,6 +159,7 @@
     "tests/python/test_watchtower_docs.py",
     "tests/python/test_watchtower_home_matrix.py",
     "tests/python/test_watchtower_home_source_audit.py",
+    "tests/python/test_watchtower_ledger_home_matrix.py",
     "tests/registration-behavior-probe.sh",
     "tests/registration-concurrency-probe.sh",
     "tests/rollback-process.py",
