@@ -124,6 +124,15 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                                         env=env, text=True, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(Path(result.stdout.strip()).is_relative_to(explicit))
+            tilde_artifacts = user_home / "tilde-artifacts"
+            tilde_tasks = user_home / "tilde-tasks"; tilde_tasks.mkdir()
+            for script, args in ((SNAPSHOT, ["--repo-root", str(ROOT)]),
+                                 (PROGRESS, ["--repo-root", str(ROOT), "--tasks-root", "~/tilde-tasks",
+                                             "--now", "2026-01-01T00:00:00Z"])):
+                result = subprocess.run([sys.executable, str(script), *args, "--artifact-root", "~/tilde-artifacts"],
+                                        cwd=initial, env={"HOME": str(user_home)}, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(Path(result.stdout.strip()).is_relative_to(tilde_artifacts))
             bad = dict(os.environ, HOME=str(user_home), RZR_HOME="~rozoro-no-such-user-129/home")
             bad.pop("ROZORO_HOME", None)
             for script in (SNAPSHOT, PROGRESS):
@@ -139,6 +148,7 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                      ({"ROZORO_HOME": "public", "RZR_HOME": "legacy"}, initial / "public"),
                      ({}, home / ".rozoro"),
                      ({"ROZORO_HOME": "", "RZR_HOME": ""}, home / ".rozoro"),
+                     ({"ROZORO_HOME": "relative/home"}, initial / "relative/home"),
                      ({"RZR_HOME": "~/legacy"}, home / "legacy"))
             for bits, expected in cases:
                 expected.mkdir(parents=True, exist_ok=True); expected.chmod(0o700)
@@ -155,6 +165,48 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                 # The real AuthorityBoundary creates this beneath the fd opened
                 # by the real client._open_home before the absent socket fails.
                 self.assertTrue((expected / "watchtowers").is_dir())
+            bad = {"HOME": str(home), "ROZORO_HOME": "~rozoro-no-such-user-135/x"}
+            for script, args in ((MONITOR, ["status", "--json"]),
+                                 (EVENT_BRIDGE, ["authority-activate", "--driver", "d"])):
+                failed = subprocess.run([sys.executable, str(script), *args], cwd=initial, env=bad,
+                                        text=True, capture_output=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertNotIn("Traceback", failed.stderr)
+
+    def test_ledger_cli_cells_P_L_B_E_D_R_T_O_X_use_actual_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve(); home = root / "home"; initial = root / "initial"
+            home.mkdir(); initial.mkdir()
+            rows = {
+                "P": ({"ROZORO_HOME": "public"}, initial / "public"),
+                "L": ({"RZR_HOME": "legacy"}, initial / "legacy"),
+                "B": ({"ROZORO_HOME": "public", "RZR_HOME": "ignored"}, initial / "public"),
+                "E": ({"ROZORO_HOME": "", "RZR_HOME": "legacy"}, initial / "legacy"),
+                "D-unset": ({}, home / ".rozoro"),
+                "D-empty": ({"ROZORO_HOME": "", "RZR_HOME": ""}, home / ".rozoro"),
+                "R": ({"ROZORO_HOME": "relative/home"}, initial / "relative/home"),
+                "T": ({"ROZORO_HOME": "~/tilde-home"}, home / "tilde-home"),
+                "X": ({"ROZORO_HOME": "public", "XDG_CONFIG_HOME": str(root / "decoy")}, initial / "public"),
+            }
+            for index, (cell, (bits, selected)) in enumerate(rows.items(), 1):
+                env = {"HOME": str(home), **bits}
+                result = subprocess.run([sys.executable, str(LEDGER), "add", "--task", f"task-{cell}",
+                                         "--reason", "other", "--summary", cell, "--now", "2026-01-01T00:00:00Z",
+                                         "--nonce", f"{index:08x}"], cwd=initial, env=env,
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, f"{cell}: {result.stderr}")
+                self.assertTrue(any((selected / "watchtowers/attention/items").glob("*.md")), cell)
+            explicit = root / "explicit"
+            result = subprocess.run([sys.executable, str(LEDGER), "add", "--home", str(explicit),
+                                     "--task", "task-O", "--reason", "other", "--summary", "O",
+                                     "--now", "2026-01-01T00:00:00Z", "--nonce", "deadbeef"], cwd=initial,
+                                    env={"HOME": str(home), "ROZORO_HOME": str(root / "wrong")},
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(any((explicit / "watchtowers/attention/items").glob("*.md")))
+            bad = subprocess.run([sys.executable, str(LEDGER), "doctor", "--home", "~rozoro-no-such-user-135/x"],
+                                 cwd=initial, env={"HOME": str(home)}, text=True, capture_output=True)
+            self.assertNotEqual(bad.returncode, 0); self.assertNotIn("Traceback", bad.stderr)
 
     def test_shell_library_and_doctor_use_the_same_selected_absolute_home(self):
         with tempfile.TemporaryDirectory() as td:
@@ -172,6 +224,33 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
                 self.assertEqual(lib.returncode, 0, lib.stderr); self.assertEqual(lib.stdout, str(expected))
                 doctor = subprocess.run(["bash", str(ROOT / "bin/rzr-doctor.sh")], cwd=initial, env=env, text=True, capture_output=True)
                 self.assertIn(f"home: {expected}", doctor.stdout)
+
+            import pwd
+            username = pwd.getpwuid(os.getuid()).pw_name
+            account_home = Path(pwd.getpwnam(username).pw_dir)
+            supported = account_home / f".rzr-pr136-{os.getpid()}"
+            supported.mkdir(mode=0o700)
+            try:
+                env = dict(os.environ, HOME=str(home), ROZORO_HOME=f"~{username}/{supported.name}",
+                           RZR_HOME="ignored", XDG_CONFIG_HOME=str(root / "xdg"))
+                lib = subprocess.run(["bash", "-c", f'source {ROOT}/bin/rzr-lib.sh; printf "%s" "$RZR_HOME"'],
+                                     cwd=initial, env=env, text=True, capture_output=True)
+                self.assertEqual(lib.stdout, str(supported), lib.stderr)
+                doctor = subprocess.run(["bash", str(ROOT / "bin/rzr-doctor.sh")], cwd=initial, env=env,
+                                        text=True, capture_output=True)
+                self.assertIn(f"home: {supported}", doctor.stdout)
+            finally:
+                import shutil
+                shutil.rmtree(supported)
+
+            bad = dict(os.environ, HOME=str(home), ROZORO_HOME="~rozoro-no-such-user-135/home",
+                       XDG_CONFIG_HOME=str(root / "xdg"))
+            for command in (["bash", "-c", f"source {ROOT}/bin/rzr-lib.sh"],
+                            ["bash", str(ROOT / "bin/rzr-doctor.sh")]):
+                failed = subprocess.run(command, cwd=initial, env=bad, text=True, capture_output=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertNotIn("Traceback", failed.stderr)
+                self.assertEqual(len((failed.stderr or failed.stdout).splitlines()), 1)
 
 
 if __name__ == "__main__": unittest.main()
