@@ -239,7 +239,10 @@ class DatedArtifactSkillTests(unittest.TestCase):
         for kind in ("symlink", "hardlink", "fifo", "directory"):
             for relative in entries:
                 with self.subTest(kind=kind, entry=relative), tempfile.TemporaryDirectory() as temporary:
-                    root = Path(temporary); checkout = fixture(root); entry = checkout / relative
+                    # macOS spells TemporaryDirectory under /var, a symlink to
+                    # /private/var. Resolve before SafeDirectory traversal so
+                    # every subtest reaches and mutates the consumed entry.
+                    root = Path(temporary).resolve(); checkout = fixture(root); entry = checkout / relative
                     original = entry.read_bytes(); entry.unlink()
                     if kind == "symlink":
                         decoy = root / "decoy"; decoy.write_bytes(original); entry.symlink_to(decoy)

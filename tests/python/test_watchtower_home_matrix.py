@@ -1,17 +1,23 @@
+import io
+import json
 import os
 import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+
+from lib.rozoro_monitor.client import resolve_home as client_resolve_home
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / ".agents/skills/watchtower-policy-snapshot/scripts/snapshot.py"
 PROGRESS = ROOT / ".agents/skills/watchtower-progress-report/scripts/report.py"
 LEDGER = ROOT / ".agents/skills/watchtower-attention-ledger/scripts/ledger.py"
 MONITOR = ROOT / "bin/rzr-monitor.py"
+EVENT_BRIDGE = ROOT / "bin/rzr-event-bus-client.py"
 
 
 @contextmanager
@@ -31,6 +37,7 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
             "snapshot": lambda value=None: snapshot_path(selected() if value is None else value),
             "progress": lambda value=None: progress_path(selected() if value is None else value),
             "ledger": runpy.run_path(str(LEDGER))["resolve_home"],
+            "monitor-client": client_resolve_home,
             "monitor": runpy.run_path(str(MONITOR))["home_path"],
         }
 
@@ -71,6 +78,87 @@ class WatchtowerHomeMatrixTests(unittest.TestCase):
             with patch.dict(os.environ, {"HOME": str(home)}, clear=True), cwd(initial):
                 self.assertEqual(self.normalizers["ledger"]("relative/path"), initial / "relative/path")
                 self.assertEqual(self.normalizers["ledger"]("~/explicit"), home / "explicit")
+
+    def test_snapshot_and_progress_main_select_real_environment_and_overrides(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve(); user_home = root / "user"; initial = root / "initial"
+            user_home.mkdir(); initial.mkdir()
+            cases = [
+                ({"RZR_HOME": "legacy"}, initial / "legacy"),
+                ({"ROZORO_HOME": "", "RZR_HOME": "legacy"}, initial / "legacy"),
+                ({"ROZORO_HOME": "", "RZR_HOME": ""}, user_home / ".rozoro"),
+                ({"RZR_HOME": "~/legacy"}, user_home / "legacy"),
+            ]
+            # A current-UID passwd entry exists on macOS and ordinary Linux.
+            # The pinned uid-only container intentionally has none.
+            try:
+                import pwd
+                username = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError:
+                username = None
+            if username:
+                cases.append(({"RZR_HOME": f"~{username}/rzr-entrypoint-matrix"},
+                              Path(pwd.getpwnam(username).pw_dir) / "rzr-entrypoint-matrix"))
+            for env_bits, selected in cases:
+                env = dict(os.environ, HOME=str(user_home), XDG_CONFIG_HOME=str(root / "xdg"))
+                env.pop("ROZORO_HOME", None); env.pop("RZR_HOME", None); env.update(env_bits)
+                (selected / "tasks").mkdir(parents=True, exist_ok=True)
+                for script, args in ((SNAPSHOT, ["--repo-root", str(ROOT)]),
+                                     (PROGRESS, ["--repo-root", str(ROOT), "--now", "2026-01-01T00:00:00Z"])):
+                    with self.subTest(script=script.name, env=env_bits):
+                        result = subprocess.run(["python3", str(script), *args], cwd=initial, env=env,
+                                                text=True, capture_output=True, timeout=20)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertTrue(Path(result.stdout.strip()).is_relative_to(selected / "artifacts"))
+            explicit = root / "explicit"
+            env = dict(os.environ, HOME=str(user_home), ROZORO_HOME=str(root / "wrong"), RZR_HOME=str(root / "also-wrong"))
+            for script, args in ((SNAPSHOT, ["--repo-root", str(ROOT)]),
+                                 (PROGRESS, ["--repo-root", str(ROOT), "--tasks-root", str(initial), "--now", "2026-01-01T00:00:00Z"])):
+                result = subprocess.run(["python3", str(script), *args, "--artifact-root", str(explicit)], cwd=initial,
+                                        env=env, text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(Path(result.stdout.strip()).is_relative_to(explicit))
+            bad = dict(os.environ, HOME=str(user_home), RZR_HOME="~rozoro-no-such-user-129/home")
+            bad.pop("ROZORO_HOME", None)
+            for script in (SNAPSHOT, PROGRESS):
+                result = subprocess.run(["python3", str(script), "--repo-root", str(ROOT)], cwd=initial,
+                                        env=bad, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0); self.assertNotIn("Traceback", result.stderr)
+
+    def test_monitor_and_event_bridge_mains_select_home_without_test_selector(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve(); home = root / "home"; initial = root / "initial"; home.mkdir(); initial.mkdir()
+            cases = (({"RZR_HOME": "legacy"}, initial / "legacy"),
+                     ({"ROZORO_HOME": "", "RZR_HOME": "legacy"}, initial / "legacy"),
+                     ({"ROZORO_HOME": "public", "RZR_HOME": "legacy"}, initial / "public"),
+                     ({"ROZORO_HOME": "", "RZR_HOME": ""}, home / ".rozoro"),
+                     ({"RZR_HOME": "~/legacy"}, home / "legacy"))
+            for bits, expected in cases:
+                env = {"HOME": str(home), "XDG_CONFIG_HOME": str(root / "xdg"), **bits}
+                with self.subTest(entry="monitor", bits=bits), patch.dict(os.environ, env, clear=True), cwd(initial):
+                    ns = runpy.run_path(str(MONITOR)); seen = []
+                    ns["main"].__globals__["health"] = lambda selected: seen.append(selected) or {"running": True}
+                    with patch.object(sys, "argv", [str(MONITOR), "status", "--json"]), redirect_stdout(io.StringIO()):
+                        self.assertEqual(ns["main"](), 0)
+                    self.assertEqual(seen, [expected])
+                with self.subTest(entry="event-bridge", bits=bits), patch.dict(os.environ, env, clear=True), cwd(initial):
+                    ns = runpy.run_path(str(EVENT_BRIDGE)); seen = []
+                    class Boundary:
+                        def __init__(self, fd): pass
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def require_clean(self, driver): pass
+                        def activate(self, driver): pass
+                    class Flow:
+                        def __init__(self, selected, fd): seen.append(selected)
+                        def request(self, request): return {"authority": "active"}
+                    globals_ = ns["main"].__globals__
+                    globals_["_open_home"] = lambda raw, create=False: (Path(os.path.abspath(os.path.expanduser(raw))), os.open(initial, os.O_RDONLY))
+                    globals_["AuthorityBoundary"] = Boundary; globals_["DaemonFlow"] = Flow
+                    with patch.object(sys, "argv", [str(EVENT_BRIDGE), "authority-activate", "--driver", "d"]), redirect_stdout(io.StringIO()):
+                        try: ns["main"]()
+                        except Exception: pass
+                    self.assertEqual(seen, [expected])
 
     def test_shell_library_and_doctor_use_the_same_selected_absolute_home(self):
         with tempfile.TemporaryDirectory() as td:

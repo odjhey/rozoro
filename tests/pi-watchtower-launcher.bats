@@ -140,6 +140,14 @@ SH
     grep -Fx "tuple=$composed:$core_sha:$mission:$source:$mission_sha" "$PI_LOG"
     [ "$(grep -cFx passthrough "$PI_LOG")" = 1 ]
   done
+  : > "$PI_LOG"
+  run rzr-pi-watchtower.sh --cwd "$TEST_ROOT" -- --append-system-prompt caller-policy
+  assert_failure; [ "$output" = 'rzr: Pi policy prompt options are launcher-owned' ]; [ ! -s "$PI_LOG" ]
+  printf '%s\n' '{"harness":"pi","mission":""}' > "$ROZORO_HOME/watchtower-presets/empty.json"
+  rm -f "$PI_LOG"; run rzr-pi-watchtower.sh --preset empty --cwd "$TEST_ROOT"
+  assert_success
+  grep -Fx "$REPO_ROOT/templates/missions/delivery.md" "$PI_LOG"
+  grep -Fx "tuple=$(cat "$REPO_ROOT/templates/watchtower.md" "$REPO_ROOT/templates/missions/delivery.md" | sha256sum | awk '{print $1}'):$(sha256sum "$REPO_ROOT/templates/watchtower.md" | awk '{print $1}'):delivery:shipped:$(sha256sum "$REPO_ROOT/templates/missions/delivery.md" | awk '{print $1}')" "$PI_LOG"
 }
 
 @test "Pi mission defined by both shipped and operator files fails closed" {
@@ -218,10 +226,13 @@ SH
   chmod +x "$TEST_ROOT/pi"
   run rzr-pi-watchtower.sh --preset op --wt-name north --cwd "$TEST_ROOT"; assert_success
   driver="$(cat "$DRIVER_LOG")"; target="$ROZORO_HOME/watchtowers/$driver/target.json"; history="${target%/target.json}/registrations.jsonl"
+  core_sha="$(sha256sum "$REPO_ROOT/templates/watchtower.md" | awk '{print $1}')"
+  mission_sha="$(sha256sum "$ROZORO_HOME/watchtower-missions/operator.md" | awk '{print $1}')"
+  policy_sha="$(cat "$REPO_ROOT/templates/watchtower.md" "$ROZORO_HOME/watchtower-missions/operator.md" | sha256sum | awk '{print $1}')"
   for file in "$target" "$history"; do
-    [ "$(jq -r '.watchtower_name,.policy_mission_name,.policy_mission_source' "$file" | paste -sd: -)" = north:operator:operator ]
+    [ "$(jq -r '.watchtower_name' "$file")" = north ]
+    [ "$(jq -r '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | join(":")' "$file")" = "$policy_sha:$core_sha:operator:operator:$mission_sha" ]
     [ "$(jq -r '.policy_mission_source' "$file")" != "$ROZORO_HOME/watchtower-missions/operator.md" ]
-    [ "$(jq -r '.policy_sha256' "$file")" = "$(cat "$REPO_ROOT/templates/watchtower.md" "$ROZORO_HOME/watchtower-missions/operator.md" | sha256sum | awk '{print $1}')" ]
   done
 }
 
@@ -276,6 +287,14 @@ SH
   setup_pi
   copy="$TEST_ROOT/copy"; mkdir -p "$copy/bin" "$copy/templates/missions" "$copy/.pi/extensions"
   cp "$REPO_ROOT/bin/rzr-lib.sh" "$REPO_ROOT/bin/rzr-pi-watchtower.sh" "$copy/bin/"
+  python3 - "$copy/bin/rzr-lib.sh" <<'PY'
+import sys
+path=sys.argv[1]; text=open(path).read()
+inject='''\n# Test-fixture-only deterministic resolver fault injection.\nfault=os.environ.get("RZR_TEST_POLICY_OSERROR")\nmarker=os.environ.get("RZR_TEST_POLICY_FINAL_MARKER")\nif marker:\n    if os.path.exists(marker):\n        original_open=os.open\n        os.open=lambda *a,**k: (_ for _ in ()).throw(OSError("injected final open"))\n    else: open(marker,"w").close()\nif fault=="stat": os.stat=lambda *a,**k: (_ for _ in ()).throw(OSError("injected stat"))\nif fault=="open": os.open=lambda *a,**k: (_ for _ in ()).throw(OSError("injected open"))\nif fault=="read": os.read=lambda *a,**k: (_ for _ in ()).throw(OSError("injected read"))\n'''
+needle='checkout=root(os.environ["RZR_POLICY_ROOT"],False,"checkout root")'
+assert text.count(needle)==1
+open(path,'w').write(text.replace(needle,inject+needle))
+PY
   cp "$REPO_ROOT/templates/watchtower.md" "$copy/templates/watchtower.md"
   cp "$REPO_ROOT/templates/missions/delivery.md" "$copy/templates/missions/delivery.md"
   : > "$copy/.pi/extensions/rozoro-watchtower.ts"
@@ -287,6 +306,15 @@ SH
   rmdir "$copy/templates/watchtower.md"; cp "$REPO_ROOT/templates/watchtower.md" "$copy/templates/watchtower.md"; rm "$copy/templates/missions/delivery.md"
   run "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"; assert_failure; check_one_line; assert_output_contains 'missing mission'
   cp "$REPO_ROOT/templates/missions/delivery.md" "$copy/templates/missions/delivery.md"
+  for family in stat open read; do
+    run env RZR_TEST_POLICY_OSERROR="$family" HERDR_PANE_ID="$HERDR_PANE_ID" ROZORO_HOME="$ROZORO_HOME" "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"
+    assert_failure; check_one_line
+    case "$family:$output" in stat:'rzr: watchtower policy source is unsafe or unreadable'|open:'rzr: unsafe checkout root'|read:'rzr: watchtower policy source is unsafe or unreadable') ;; *) return 1 ;; esac
+    [ ! -e "$PI_LOG" ]; [ ! -e "$ROZORO_HOME/watchtowers" ]
+  done
+  marker="$TEST_ROOT/final-marker"
+  run env RZR_TEST_POLICY_FINAL_MARKER="$marker" HERDR_PANE_ID="$HERDR_PANE_ID" ROZORO_HOME="$ROZORO_HOME" "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"
+  assert_failure; [ "$output" = 'rzr: watchtower policy changed during launch' ]; [ ! -e "$PI_LOG" ]; [ ! -e "$ROZORO_HOME/watchtowers" ]
   mkdir "$TEST_ROOT/wrap"; real_jq="$(command -v jq)"
   cat > "$TEST_ROOT/wrap/jq" <<'SH'
 #!/bin/sh
@@ -302,26 +330,28 @@ SH
 @test "preset failure families are exact controlled and create no state" {
   setup_pi
   assert_controlled() {
-    run rzr-pi-watchtower.sh --preset "$1" --cwd "$TEST_ROOT"
+    name="$1" expected="$2"
+    run rzr-pi-watchtower.sh --preset "$name" --cwd "$TEST_ROOT"
     assert_failure
     [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" = 1 ]
+    printf '%s\n' "$output" | grep -Eq "^$expected$"
     ! printf '%s' "$output" | grep -Eq 'Traceback|File ".*", line|Error:'
     [ ! -e "$ROZORO_HOME/state" ]; [ ! -e "$PI_LOG" ]
   }
   rm -rf "$ROZORO_HOME/state" "$ROZORO_HOME/watchtower-presets"
-  assert_controlled missing
+  assert_controlled missing 'rzr: watchtower preset not found'
   mkdir "$ROZORO_HOME/watchtower-presets"; chmod 700 "$ROZORO_HOME/watchtower-presets"
-  assert_controlled missing
-  for name in '../escape' '/absolute' $'bad\nname'; do assert_controlled "$name"; done
-  printf '{bad\n' > "$ROZORO_HOME/watchtower-presets/bad.json"; assert_controlled bad
-  printf '%s\n' '{"harness":"claude"}' > "$ROZORO_HOME/watchtower-presets/wrong.json"; assert_controlled wrong
+  assert_controlled missing 'rzr: watchtower preset not found'
+  for name in '../escape' '/absolute' 'bad=name'; do assert_controlled "$name" 'rzr: watchtower preset name .* is unsafe; use letters, digits, .*'; done
+  printf '{bad\n' > "$ROZORO_HOME/watchtower-presets/bad.json"; assert_controlled bad 'rzr: watchtower preset content is invalid'
+  printf '%s\n' '{"harness":"claude"}' > "$ROZORO_HOME/watchtower-presets/wrong.json"; assert_controlled wrong "rzr: watchtower preset 'wrong' is not for harness pi"
   printf '%s\n' '{"harness":"pi"}' > "$ROZORO_HOME/watchtower-presets/unsafe.json"
   ln -s "$ROZORO_HOME/watchtower-presets" "$TEST_ROOT/preset-link"
   mv "$ROZORO_HOME/watchtower-presets" "$TEST_ROOT/private-presets"; ln -s "$TEST_ROOT/private-presets" "$ROZORO_HOME/watchtower-presets"
-  assert_controlled unsafe
-  rm "$ROZORO_HOME/watchtower-presets"; printf x > "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe
-  rm "$ROZORO_HOME/watchtower-presets"; mv "$TEST_ROOT/private-presets" "$ROZORO_HOME/watchtower-presets"; chmod 755 "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe
-  chmod 700 "$ROZORO_HOME/watchtower-presets"; rm "$ROZORO_HOME/watchtower-presets/unsafe.json"; mkfifo "$ROZORO_HOME/watchtower-presets/unsafe.json"; assert_controlled unsafe
+  assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  rm "$ROZORO_HOME/watchtower-presets"; printf x > "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  rm "$ROZORO_HOME/watchtower-presets"; mv "$TEST_ROOT/private-presets" "$ROZORO_HOME/watchtower-presets"; chmod 755 "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  chmod 700 "$ROZORO_HOME/watchtower-presets"; rm "$ROZORO_HOME/watchtower-presets/unsafe.json"; mkfifo "$ROZORO_HOME/watchtower-presets/unsafe.json"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
 }
 
 @test "watchtower launcher refuses outside an owning Herdr pane" {
