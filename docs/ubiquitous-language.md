@@ -9,6 +9,7 @@ Use these terms consistently in code, docs, prompts, issues, and reviews. Prefer
 | **Watchtower name** | Optional operator label for a resident watchtower; attribution metadata, not its delivery identity. | driver identity |
 | **Driver identity** | Transport-derived stable identity used to reattach a watchtower registration to its backend target. | watchtower name, native session |
 | **Watchtower preset** | Optional versioned JSON launch metadata for a Pi or Claude resident driver; its boot-time bytes are attributable by hash. | crew preset |
+| **Watchtower mission** | Policy file defining what a watchtower's fleet is for (roles, assurance flow, authority); composed after the mechanics core at launch and selected by the preset `mission` field. | mechanics core, watchtower preset |
 | **Crew** | Independent agent session assigned a durable task. | harness-native subagent |
 | **Task** | Durable unit of delegated work with identity, brief, handoff history, and session linkage. | pane, turn, PR |
 | **Turn** | One conversational work interval inside a harness session. | task |

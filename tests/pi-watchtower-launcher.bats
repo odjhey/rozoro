@@ -37,6 +37,7 @@ SH
   grep -Fx "$REPO_ROOT/.pi/extensions/rozoro-watchtower.ts" "$PI_LOG"
   grep -Fx -- '--append-system-prompt' "$PI_LOG"
   grep -Fx "$REPO_ROOT/templates/watchtower.md" "$PI_LOG"
+  grep -Fx "$REPO_ROOT/templates/missions/delivery.md" "$PI_LOG"
   grep -Fx -- '--approve' "$PI_LOG"
 }
 
@@ -48,6 +49,7 @@ SH
   grep -A1 -Fx -- '--session' "$PI_LOG" | grep -Fx session-123
   grep -Fx "$REPO_ROOT/.pi/extensions/rozoro-watchtower.ts" "$PI_LOG"
   grep -Fx "$REPO_ROOT/templates/watchtower.md" "$PI_LOG"
+  grep -Fx "$REPO_ROOT/templates/missions/delivery.md" "$PI_LOG"
 }
 
 @test "Pi no-preset launch clears inherited watchtower attribution" {
@@ -97,6 +99,49 @@ SH
   grep -A1 -Fx -- '--model' "$PI_LOG" | grep -Fx new-model
   grep -A1 -Fx -- '--thinking' "$PI_LOG" | grep -Fx high
   grep -F "preset_sha=$expected" "$PI_LOG"
+}
+
+@test "Pi preset mission selects an operator mission file" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi","mission":"pm"}' > "$ROZORO_HOME/watchtower-presets/pm.json"
+  printf '%s\n' 'pm mission policy' > "$ROZORO_HOME/watchtower-missions/pm.md"
+  run rzr-pi-watchtower.sh --preset pm --cwd "$TEST_ROOT"
+  assert_success
+  grep -Fx "$REPO_ROOT/templates/watchtower.md" "$PI_LOG"
+  grep -Fx "$ROZORO_HOME/watchtower-missions/pm.md" "$PI_LOG"
+  expected="$(cat "$REPO_ROOT/templates/watchtower.md" "$ROZORO_HOME/watchtower-missions/pm.md" | shasum -a 256 | awk '{print $1}')"
+  grep -F "policy_sha=$expected" "$PI_LOG"
+}
+
+@test "Pi mission defined by both shipped and operator files fails closed" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi","mission":"delivery"}' > "$ROZORO_HOME/watchtower-presets/dup.json"
+  printf '%s\n' 'shadowing delivery mission' > "$ROZORO_HOME/watchtower-missions/delivery.md"
+  run rzr-pi-watchtower.sh --preset dup --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains ambiguous
+  [ ! -e "$PI_LOG" ]
+}
+
+@test "Pi unknown mission fails before launch" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets"
+  printf '%s\n' '{"harness":"pi","mission":"no-such-mission"}' > "$ROZORO_HOME/watchtower-presets/ghost.json"
+  run rzr-pi-watchtower.sh --preset ghost --cwd "$TEST_ROOT"
+  assert_failure
+  assert_output_contains "not found"
+  [ ! -e "$PI_LOG" ]
+}
+
+@test "Pi preset mission with unsafe name is rejected" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets"
+  printf '%s\n' '{"harness":"pi","mission":"../evil"}' > "$ROZORO_HOME/watchtower-presets/evil.json"
+  run rzr-pi-watchtower.sh --preset evil --cwd "$TEST_ROOT"
+  assert_failure
+  [ ! -e "$PI_LOG" ]
 }
 
 @test "Pi watchtower unknown preset fails before launch" {

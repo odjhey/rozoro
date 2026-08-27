@@ -64,18 +64,21 @@ class DatedArtifactSkillTests(unittest.TestCase):
     def assert_private_tree(self, run: Path) -> None:
         for directory in (run, run.parent, run.parent.parent, run.parent.parent.parent):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, directory)
-        for child in run.iterdir():
-            self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o600, child)
+        for child in run.rglob("*"):
+            expected = 0o700 if child.is_dir() else 0o600
+            self.assertEqual(stat.S_IMODE(child.stat().st_mode), expected, child)
 
     def test_policy_snapshot_captures_current_source_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             source = checkout / "templates/watchtower.md"
             current = b"current working-tree policy\n"
             source.write_bytes(current)
+            mission_bytes = b"current delivery mission policy\n"
+            (checkout / "templates/missions/delivery.md").write_bytes(mission_bytes)
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             artifact_root = root / "artifacts"
@@ -85,6 +88,7 @@ class DatedArtifactSkillTests(unittest.TestCase):
             fake_git.write_text(
                 "#!/bin/sh\n"
                 "case \"$*\" in\n"
+                "  *'HEAD:templates/missions/delivery.md'*) printf '%040d\\n' 4 ;;\n"
                 "  *'HEAD:templates/watchtower.md'*) printf '%040d\\n' 2 ;;\n"
                 "  *'rev-parse HEAD'*) printf '%040d\\n' 1 ;;\n"
                 "  *'hash-object'*) printf '%040d\\n' 3 ;;\n"
@@ -121,13 +125,25 @@ class DatedArtifactSkillTests(unittest.TestCase):
             self.assertEqual(first.parent.name, "2026-08-24")
             self.assertRegex(first.name, r"^20260824T032536\.123456Z-[0-9a-f]{8}$")
             self.assertEqual((first / "watchtower-policy.md").read_bytes(), current)
+            self.assertEqual((first / "missions/delivery.md").read_bytes(), mission_bytes)
             metadata = json.loads((first / "metadata.json").read_text())
-            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v8")
+            self.assertEqual(metadata["schema"], "rozoro.watchtower-policy-snapshot/v9")
             self.assertEqual(metadata["source"]["repository_relative_path"], "templates/watchtower.md")
             self.assertEqual(metadata["source"]["applies_to_harnesses"], ["pi"])
+            self.assertEqual(metadata["default_mission"], "delivery")
+            mission_meta = metadata["missions"]["templates/missions/delivery.md"]
+            self.assertEqual(mission_meta["mission"], "delivery")
+            self.assertEqual(mission_meta["sha256"], hashlib.sha256(mission_bytes).hexdigest())
+            self.assertEqual(
+                mission_meta["composed_policy_sha256"],
+                hashlib.sha256(current + mission_bytes).hexdigest(),
+            )
+            self.assertFalse(mission_meta["matches_git_commit"])
+            self.assertEqual(metadata["files"]["missions/delivery.md"]["bytes"], len(mission_bytes))
             self.assertEqual(metadata["harness_coverage"]["pi"]["status"], "captured")
             self.assertEqual(metadata["harness_coverage"]["claude"]["status"], "unverified-no-consumed-policy-args-array")
-            self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v1")
+            self.assertEqual(metadata["harness_coverage"]["validation"], "exact-shipped-pi-launcher-sha256-plus-grammar-v2")
+            self.assertEqual(metadata["harness_coverage"]["mission_sources"]["operator_status"], "not-captured")
             self.assertEqual(metadata["git_provenance"]["status"], "verified")
             self.assertFalse(metadata["source"]["matches_git_commit"])
             self.assertNotIn(str(checkout), (first / "metadata.json").read_text())
@@ -158,9 +174,10 @@ class DatedArtifactSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n", encoding="utf-8")
             (checkout / "bin/rzr-claude-watchtower.sh").write_text(
                 'args=(--settings overlay.json)\nexec "$CLAUDE_BIN" "${args[@]}"\n', encoding="utf-8"
             )
@@ -265,10 +282,11 @@ class DatedArtifactSkillTests(unittest.TestCase):
             root = Path(temporary).resolve()
             checkout = root / "checkout"
             held = root / "checkout-held"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             policy = b"held policy bytes\n"
             (checkout / "templates/watchtower.md").write_bytes(policy)
+            (checkout / "templates/missions/delivery.md").write_bytes(b"held mission bytes\n")
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
@@ -311,9 +329,10 @@ class DatedArtifactSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             checkout = root / "checkout"
-            (checkout / "templates").mkdir(parents=True)
+            (checkout / "templates/missions").mkdir(parents=True)
             (checkout / "bin").mkdir()
             (checkout / "templates/watchtower.md").write_text("policy\n", encoding="utf-8")
+            (checkout / "templates/missions/delivery.md").write_text("mission\n", encoding="utf-8")
             (checkout / "bin/rzr-pi-watchtower.sh").write_bytes(PI_LAUNCHER_BYTES)
             (checkout / "bin/rzr-claude-watchtower.sh").write_bytes(CLAUDE_LAUNCHER_BYTES)
             fake_bin = root / "bin"
