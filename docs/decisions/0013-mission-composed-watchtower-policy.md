@@ -85,5 +85,21 @@ Choose option 3.
   without VCS review. The filesystem contract from ADR-0011 (owner-private,
   no-follow, owned regular files, same-UID sabotage out of scope) applies to
   mission resolution unchanged; this ADR does not broaden that threat model.
+- Project skills under `.agents/skills/` remain shared across all missions and
+  are **not** scoped per preset or per mission. Presets must never carry their
+  own skill set: two presets may share one mission, and preset identity is
+  metadata (ADR-0011), so behavior must not vary by preset. A mission scopes
+  skill *usage* textually by naming the skills it uses and staying silent on
+  the rest; trigger-gated skills a mission never invokes are accepted context
+  overhead. If shared skills prove harmful in practice (for example a
+  delivery-only skill like `afk` misfiring on a non-delivery watchtower), the
+  designated fix is mission tagging in skill frontmatter plus launcher/harness
+  filtering, decided by a new ADR — not per-preset or per-mission skill
+  directories.
+- Known attribution gap, explicitly deferred: skill bodies steer watchtower
+  behavior but are not part of `policy_sha256` or the policy snapshot. Any
+  future decision that formalizes per-mission skills must also fold the
+  effective skill set (paths and hashes) into policy attribution, or the
+  mission hash stays precise while part of the effective policy floats free.
 - ADR-0011's registration, locking, and attribution decisions are otherwise
   unchanged.
