@@ -39,7 +39,7 @@ def parse_git_records(data: bytes, root: Path) -> list[str]:
         metadata, name = row.split("\t", 1)
         fields = metadata.split()
         if (len(fields) != 3 or fields[0] not in {"100644", "100755", "120000", "160000"}
-                or not re.fullmatch(r"[0-9a-f]{40,64}", fields[1]) or fields[2] != "0"):
+                or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", fields[1]) or fields[2] != "0"):
             raise ValueError("invalid record metadata")
         pure = PurePosixPath(name)
         if (not name or name.startswith("/") or "\\" in name or any(p in {"", ".", ".."} for p in pure.parts)
@@ -71,28 +71,43 @@ def git_source_names(root: Path) -> tuple[list[str] | None, list[str]]:
 
 
 def archive_source_names(root: Path) -> list[str]:
-    """Independently enumerate all source/executable files present in an archive."""
+    """Independently enumerate with lstat only; never follow a source symlink."""
     names = []
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        name = relative.as_posix()
-        if (relative.parts and relative.parts[0] in ARCHIVE_ARTIFACT_ROOTS
-                or any(name == alias or name.startswith(alias + "/") for alias in ARCHIVE_GENERATED_ALIASES)
-                or not path.is_file()):
-            continue
-        if is_source(path, os.access(path, os.X_OK)):
-            names.append(relative.as_posix())
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        base = Path(directory)
+        kept = []
+        for entry in dirs:
+            path = base / entry; name = path.relative_to(root).as_posix()
+            if (name in ARCHIVE_ARTIFACT_ROOTS
+                    or any(name == alias or name.startswith(alias + "/") for alias in ARCHIVE_GENERATED_ALIASES)):
+                continue
+            if path.is_symlink():
+                if path.suffix in SOURCE_SUFFIXES: raise ValueError(f"archive source symlink: {name}")
+                continue
+            kept.append(entry)
+        dirs[:] = kept
+        for entry in files:
+            path = base / entry; name = path.relative_to(root).as_posix()
+            if any(name == alias or name.startswith(alias + "/") for alias in ARCHIVE_GENERATED_ALIASES): continue
+            info = path.lstat()
+            if __import__("stat").S_ISLNK(info.st_mode):
+                if path.suffix in SOURCE_SUFFIXES: raise ValueError(f"archive source symlink: {name}")
+                continue
+            if __import__("stat").S_ISREG(info.st_mode) and is_source(path, bool(info.st_mode & 0o111)):
+                names.append(name)
     return sorted(names)
 
 
 def tracked_sources(root: Path = ROOT, *, mode: str = "auto") -> tuple[dict[str, str], list[str]]:
     manifest = load_fixture(root)["tracked_executable_sources"]
     if mode == "archive":
-        actual, errors = archive_source_names(root), []
+        try: actual, errors = archive_source_names(root), []
+        except (OSError, ValueError) as exc: actual, errors = [], [f"archive inventory failed closed: {exc}"]
     else:
         actual, errors = git_source_names(root)
         if actual is None:
-            actual = archive_source_names(root)
+            try: actual = archive_source_names(root)
+            except (OSError, ValueError) as exc: actual, errors = [], [f"archive inventory failed closed: {exc}"]
     if actual != manifest:
         errors.append("tracked-source manifest differs from source surface")
     sources = {}
@@ -238,7 +253,9 @@ def shell_default(text: str) -> bool:
         match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*HOME[A-Za-z0-9_]*)=(.*)", raw)
         if not match: continue
         expression = match.group(2)
-        if "${ROZORO_HOME" in expression and "${RZR_HOME" in expression and ".rozoro" in expression:
+        if ("$(" not in expression and "`" not in expression
+                and "${ROZORO_HOME" in expression and "${RZR_HOME" in expression
+                and ".rozoro" in expression):
             return True
     return False
 
@@ -262,7 +279,7 @@ def ts_tokens(text: str) -> list[tuple[str, str]]:
     pattern = re.compile(
         r"/\*.*?\*/|//[^\n]*|`(?:\\.|[^`\\])*`|"
         r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|"
-        r"/(?:\\.|[^/\\\n])+/[a-z]*|[A-Za-z_$][\w$]*|\S", re.S
+        r"/(?:\\.|[^/\\\n])+/[a-z]*|\|\||[A-Za-z_$][\w$]*|\S", re.S
     )
     out = []
     for match in pattern.finditer(text):
@@ -273,21 +290,49 @@ def ts_tokens(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def ts_scalar_selector(tokens: list[tuple[str, str]]) -> bool:
+    values = [value for _, value in tokens]
+    # Allow only one single-argument repository path normalizer wrapper.
+    wrappers = (["resolve"], ["path", ".", "resolve"])
+    for wrapper in wrappers:
+        if values[:len(wrapper) + 1] == wrapper + ["("] and values[-1:] == [")"]:
+            inner = tokens[len(wrapper) + 1:-1]
+            depth = 0
+            for _, value in inner:
+                if value in "([{": depth += 1
+                elif value in ")]}": depth -= 1
+                elif value == "," and depth == 0: return False
+            return ts_scalar_selector(inner)
+    depth, parts, current = 0, [], []
+    for token in tokens:
+        value = token[1]
+        if value in "([{": depth += 1
+        elif value in ")]}": depth -= 1
+        if value == "||" and depth == 0: parts.append(current); current = []
+        else: current.append(token)
+    parts.append(current)
+    if len(parts) != 3: return False
+    code = [[v for kind, v in part if kind == "code"] for part in parts]
+    return (code[0] == ["process", ".", "env", ".", "ROZORO_HOME"]
+            and code[1] == ["process", ".", "env", ".", "RZR_HOME"]
+            and code[2] == ["join", "(", "homedir", "(", ")", ",", ")"]
+            and [v[1:-1] for kind, v in parts[2] if kind == "inert" and v[:1] in {'\"', "'"}] == [".rozoro"])
+
+
 def typescript_default(text: str) -> bool:
-    # The real selector is one-line. Treat every physical newline and semicolon
-    # as an ASI boundary, so neighboring statements can never lend it tokens.
+    # Physical newlines and semicolons are hard ASI boundaries.
     for physical in text.splitlines():
-        statement: list[tuple[str, str]] = []
+        statement = []
         for token in ts_tokens(physical) + [("code", ";")]:
             statement.append(token)
             if token != ("code", ";"): continue
-            code = [v for kind, v in statement if kind == "code"]
-            strings = {v[1:-1] for kind, v in statement if kind == "inert" and v[:1] in {'\"', "'"}}
-            joined = " ".join(code)
-            assignment = re.search(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*[Hh]ome[\w$]*)\s*=", joined)
-            if (assignment and "process . env . ROZORO_HOME" in joined
-                    and "process . env . RZR_HOME" in joined and "homedir ( )" in joined
-                    and ".rozoro" in strings): return True
+            values = [v for _, v in statement]
+            start = None
+            if values[:1] == ["return"]: start = 1
+            else:
+                for i, value in enumerate(values):
+                    if value == "=" and i >= 2 and re.search(r"[Hh]ome", values[i - 1]): start = i + 1; break
+            if start is not None and ts_scalar_selector(statement[start:-1]): return True
             statement = []
     return False
 
@@ -332,6 +377,20 @@ class HomeSourceAuditTests(unittest.TestCase):
     def current(self, mode="auto"): return tracked_sources(mode=mode)
 
     def test_git_and_independent_archive_surfaces_are_complete(self):
+        manifest = load_fixture()["tracked_executable_sources"]
+        git_names, git_errors = git_source_names(ROOT)
+        if git_names is None:
+            self.fail("NEEDS_GATE: git executable required for independent count parity")
+        archive_names = archive_source_names(ROOT)
+        self.assertEqual(git_errors, [])
+        inventory = load_fixture()
+        self.assertEqual((len(inventory["direct_default"]), len(inventory["inherited_explicit_only"]), len(inventory["excluded"])), (10, 8, 1))
+        self.assertEqual(95, len(manifest), "bound 94 + H2 monitor matrix source")
+        for names in (manifest, git_names, archive_names):
+            self.assertEqual(names, sorted(set(names)))
+            self.assertEqual(len(names), 95)
+            self.assertEqual(names, manifest)
+        self.assertEqual((len(manifest), len(git_names), len(archive_names)), (95, 95, 95))
         for mode in ("auto", "archive"):
             sources, errors = self.current(mode)
             self.assertEqual(audit(load_fixture(), sources, errors), [])
@@ -356,6 +415,9 @@ class HomeSourceAuditTests(unittest.TestCase):
             f"100644 {sha} 0\ta//noncanonical.py\0", f"100999 {sha} 0\tbad.py\0",
             f"100644 xyz 0\tbad.py\0", f"100644 {sha} 1\tstage.py\0",
             f"100644 {sha} 0\tdup.py\0" * 2,
+            f"100644 {sha} 0\tconflict.py\0" + f"100755 {'b' * 40} 0\tconflict.py\0",
+            f"100644 {'a' * 41} 0\tlength41.py\0", f"100644 {'a' * 63} 0\tlength63.py\0",
+            f"100644 {'A' * 40} 0\tuppercase.py\0",
         ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -365,12 +427,23 @@ class HomeSourceAuditTests(unittest.TestCase):
             outside = root.parent / "h8-outside.py"; outside.write_text("print('outside')\n")
             link = root / "outside.py"; link.symlink_to(outside)
             try:
+                with self.assertRaises(ValueError): archive_source_names(root)
                 with self.assertRaises(ValueError):
                     parse_git_records(f"120000 {sha} 0\toutside.py\0".encode(), root)
             finally:
                 link.unlink(missing_ok=True); outside.unlink(missing_ok=True)
             with self.assertRaises(ValueError):
                 parse_git_records(f"120000 {sha} 0\tmissing.py\0".encode(), root)
+            internal = root / "real.py"; internal.write_text("print('not symlink evidence')\n")
+            link = root / "internal.py"; link.symlink_to("real.py")
+            self.assertEqual(parse_git_records(f"120000 {sha} 0\tinternal.py\0".encode(), root), [])
+
+    def test_archive_uses_stored_executable_mode_not_effective_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); tool = root / "tool"
+            tool.write_text("#!/bin/sh\nexit 0\n"); tool.chmod(0o755)
+            with mock.patch("os.access", return_value=False):
+                self.assertEqual(archive_source_names(root), ["tool"])
 
     def test_archive_omission_outside_root_addition_and_missing_file_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -383,6 +456,26 @@ class HomeSourceAuditTests(unittest.TestCase):
             (root / "tools/new.py").unlink(); (root / "vendor/hidden.py").unlink(); (root / "bin/rzr-monitor.py").unlink()
             _, errors = tracked_sources(root, mode="archive")
             self.assertIn("tracked-source manifest differs from source surface", errors)
+
+    def test_real_git_boundary_excludes_tracked_untracked_and_ignored(self):
+        if shutil.which("git") is None:
+            self.fail("NEEDS_GATE: git executable required for tracked classification")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / ".gitignore").write_text("ignored.py\n")
+            tracked, untracked, ignored = (root / name for name in ("tracked.py", "untracked.py", "ignored.py"))
+            try:
+                for path in (tracked, untracked, ignored): path.write_text("print('candidate')\n")
+                subprocess.run(["git", "add", ".gitignore", "tracked.py"], cwd=root, check=True)
+                self.assertEqual(subprocess.run(["git", "check-ignore", "-q", "ignored.py"], cwd=root).returncode, 0)
+                names, errors = git_source_names(root)
+                self.assertEqual(errors, [])
+                self.assertIn("tracked.py", names)
+                self.assertNotIn("untracked.py", names)
+                self.assertNotIn("ignored.py", names)
+            finally:
+                for path in (tracked, untracked, ignored): path.unlink(missing_ok=True)
 
     def test_injected_git_boundary_excludes_real_untracked_and_ignored_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -409,12 +502,18 @@ class HomeSourceAuditTests(unittest.TestCase):
             self.assertFalse(python_default(decoy))
         shell = "${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
         self.assertFalse(shell_default(f"# RZR_HOME_RAW={shell}\nRZR_HOME_RAW='{shell}'\nNOTE=\"{shell}\"\n"))
+        self.assertFalse(shell_default(f'RZR_HOME_RAW="$(printf %s "{shell}")"\n'))
         ts = 'process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro")'
         for decoy in (f'const selectedHome = "{ts}";', f'const selectedHome = `{ts}`;',
+                      f'const selectedHome = [{ts}];', f'const selectedHome = {{value: {ts}}};',
+                      f'const selectedHome = arbitrary({ts});', f'const selectedHome = resolve({ts}, "extra");',
                       r'const selectedHome = /process.env.ROZORO_HOME.*process.env.RZR_HOME.*homedir.*\\.rozoro/;',
                       'const selectedHome = process.env.ROZORO_HOME\nprocess.env.RZR_HOME || join(homedir(), ".rozoro")',
                       'const selectedHome = process.env.ROZORO_HOME // split by ASI\n|| process.env.RZR_HOME || join(homedir(), ".rozoro")'):
             self.assertFalse(typescript_default(decoy))
+        self.assertTrue(typescript_default(f'const selectedHome = {ts};'))
+        self.assertTrue(typescript_default(f'const selectedHome = resolve({ts});'))
+        self.assertTrue(typescript_default(f'return path.resolve({ts});'))
         self.assertFalse(monitor_home_delegate('NOTE=("--home", "MonitorServer", "args.home")\n'))
         self.assertFalse(python_argument('# parser.add_argument("--store")\nNOTE="--store"\n', "--store"))
 
