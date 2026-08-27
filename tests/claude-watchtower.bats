@@ -11,9 +11,13 @@ load test_helper/common
   chmod 700 "$ROZORO_HOME" "$ROZORO_HOME/state" "$ROZORO_HOME/tasks"
   "$REPO_ROOT/bin/rozoro" monitor start >/dev/null || { cat "$ROZORO_HOME/monitor.log" >&2; false; }
   "$REPO_ROOT/bin/rzr-claude-watchtower.sh" --cwd "$TEST_ROOT" -- --permission-mode auto >"$TEST_ROOT/launcher.log" 2>&1 & owner=$!; register_pid "$owner"
-  for _ in $(seq 1 80); do session="$(grep -- '--session-id' "$FAKE_CLAUDE_LOG" 2>/dev/null | tail -1 | sed 's/.*--session-id //; s/ .*//')"; [ -n "${session:-}" ] && [ -f "$ROZORO_HOME/watchtowers/claude-$session/.event-bus-authority" ] && break; sleep .05; done
+  for _ in $(seq 1 80); do session="$(grep -- '--session-id' "$FAKE_CLAUDE_LOG" 2>/dev/null | tail -1 | sed 's/.*--session-id //; s/ .*//')"; [ -n "${session:-}" ] && break; sleep .05; done
   [ -n "${session:-}" ] || { cat "$TEST_ROOT/launcher.log" >&2; cat "$FAKE_CLAUDE_LOG" >&2; false; }
-  dir="$ROZORO_HOME/watchtowers/claude-$session"; [ -f "$dir/.event-bus-authority" ] || { cat "$TEST_ROOT/launcher.log" >&2; find "$dir" -maxdepth 2 -ls >&2; cat "$ROZORO_HOME/monitor.log" >&2; false; }
+  dir="$ROZORO_HOME/watchtowers/claude-$session"
+  # Claude starts before registration and authority activation. Under a loaded
+  # parallel runner, observing its argv is not evidence that authority is ready.
+  for _ in $(seq 1 240); do [ -f "$dir/.event-bus-authority" ] && break; sleep .05; done
+  [ -f "$dir/.event-bus-authority" ] || { cat "$TEST_ROOT/launcher.log" >&2; find "$dir" -maxdepth 2 -print >&2; cat "$ROZORO_HOME/monitor.log" >&2; false; }
   ready="$(find "$dir" -name 'poller-ready.*' -type f | head -1)"; [ -s "$ready" ]; poller="$(cat "$ready")"; kill -0 "$poller"
   [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/target.json")" -eq 0 ]
   [ "$(jq '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | map(select(. != null)) | length' "$dir/registrations.jsonl")" -eq 0 ]
