@@ -119,6 +119,16 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
             finally:
                 if survivors: self.fail(f"surviving owned sockets: {survivors}")
 
+    @staticmethod
+    def pid_live(pid):
+        try: os.kill(pid, 0)
+        except ProcessLookupError: return False
+        stat_path = Path(f"/proc/{pid}/stat")
+        if stat_path.exists():
+            try: return stat_path.read_text().split()[2] != "Z"
+            except (OSError, IndexError): pass
+        return True
+
     def env(self, bits=None):
         env = dict(os.environ, HOME=str(self.user), XDG_CONFIG_HOME=str(self.root / "xdg-decoy"))
         env.pop("ROZORO_HOME", None); env.pop("RZR_HOME", None)
@@ -223,8 +233,10 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         deadline = time.monotonic() + 3
         while (self.cwd / "owned/monitor.sock").exists() and time.monotonic() < deadline: time.sleep(.03)
         self.assertFalse((self.cwd / "owned/monitor.sock").exists())
-        with self.assertRaises(ProcessLookupError): os.kill(owned_pid, 0)
-        os.kill(self.baseline_process.pid, 0)
+        deadline = time.monotonic() + 3
+        while self.pid_live(owned_pid) and time.monotonic() < deadline: time.sleep(.03)
+        self.assertFalse(self.pid_live(owned_pid))
+        self.assertTrue(self.pid_live(self.baseline_process.pid))
         after = ((sentinel / "monitor.lock").read_bytes(), (sentinel / "monitor.lock").stat().st_ino,
                  (sentinel / "monitor.sock").stat().st_ino, self.baseline_process.pid)
         self.assertEqual(after, before)
