@@ -113,9 +113,6 @@ PY
 )
 
 @test "Claude launcher holds P L B E D R T X through actual child poller hooks and registration with per-row cleanup" {
-  # Let the older short-timeout Claude integration row clear its startup window
-  # when Bats runs files job-wide; this matrix intentionally starts many daemons.
-  sleep 5
   export ROZORO_WT_POLICY_SHA256=stale ROZORO_WT_POLICY_CORE_SHA256=stale \
     ROZORO_WT_POLICY_MISSION_NAME=stale ROZORO_WT_POLICY_MISSION_SOURCE=stale \
     ROZORO_WT_POLICY_MISSION_SHA256=stale XDG_CONFIG_HOME="$TEST_ROOT/xdg-decoy"
