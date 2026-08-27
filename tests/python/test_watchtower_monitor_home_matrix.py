@@ -38,7 +38,26 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         self.processes = []
         self.homes = set()
         self.started_at = time.time()
-        self.preexisting_locks = {p.resolve() for p in ROOT.rglob("monitor.lock")}
+        # A harmless baseline peer is deliberately engineered to satisfy the
+        # later argv + socket identity matcher. Baseline exclusion, not an
+        # accidental mismatch, must protect it.
+        self.baseline_home = self.root / "baseline"; self.baseline_home.mkdir(mode=0o700)
+        self.baseline_peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.baseline_peer.bind(str(self.baseline_home / "monitor.sock"))
+        os.chmod(self.baseline_home / "monitor.sock", 0o600); self.baseline_peer.listen()
+        self.baseline_process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)", str(DAEMON)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        info = (self.baseline_home / "monitor.sock").lstat()
+        self.baseline_lock_fd = os.open(self.baseline_home / "monitor.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        baseline_bytes = json.dumps({"pid": self.baseline_process.pid, "socket_dev": info.st_dev,
+                                     "socket_ino": info.st_ino}).encode()
+        os.write(self.baseline_lock_fd, baseline_bytes); os.fsync(self.baseline_lock_fd)
+        fcntl.flock(self.baseline_lock_fd, fcntl.LOCK_EX)
+        self.baseline_snapshot = (baseline_bytes, (self.baseline_home / "monitor.lock").stat().st_ino,
+                                  info.st_ino, self.baseline_process.pid)
+        self.preexisting_locks = ({p.resolve() for p in ROOT.rglob("monitor.lock")} |
+                                  {self.baseline_home.joinpath("monitor.lock").resolve()})
         self.owned_detached = {}
 
     def discover_owned_detached(self):
@@ -48,8 +67,8 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
                 record = json.loads(lock.read_text()); pid = record["pid"]
                 command = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True)
                 info = (lock.parent / "monitor.sock").lstat()
-                if (str(DAEMON) in command and info.st_ino == record["socket_ino"]
-                        and info.st_dev == record["socket_dev"]):
+                if (lock.resolve() not in self.preexisting_locks and str(DAEMON) in command
+                        and info.st_ino == record["socket_ino"] and info.st_dev == record["socket_dev"]):
                     self.owned_detached[pid] = lock.parent
             except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
                 continue
@@ -83,10 +102,19 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
                 shutil.rmtree(home, ignore_errors=True)
         survivors = [str(home / "monitor.sock") for home in self.owned_detached.values()
                      if (home / "monitor.sock").exists()]
-        # Always remove the private tree before surfacing cleanup failure.
-        try: self.tmp.cleanup()
+        # Always close baseline fixtures and remove the private tree before
+        # surfacing cleanup failure; no assertion can bypass resource closure.
+        try:
+            self.baseline_peer.close(); os.close(self.baseline_lock_fd)
+            if self.baseline_process.poll() is None:
+                self.baseline_process.terminate()
+                try: self.baseline_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.baseline_process.kill(); self.baseline_process.wait(timeout=3)
         finally:
-            if survivors: self.fail(f"surviving owned sockets: {survivors}")
+            try: self.tmp.cleanup()
+            finally:
+                if survivors: self.fail(f"surviving owned sockets: {survivors}")
 
     def env(self, bits=None):
         env = dict(os.environ, HOME=str(self.user), XDG_CONFIG_HOME=str(self.root / "xdg-decoy"))
@@ -175,37 +203,28 @@ class WatchtowerMonitorHomeMatrix(unittest.TestCase):
         reset = self.command([sys.executable, str(MONITOR), "reset", "--force"], self.env({"ROZORO_HOME": "reset"}))
         self.assertEqual(reset.returncode, 0, reset.stderr); self.assertFalse((reset_home / "monitor.db").exists())
 
-    def test_detached_cleanup_preserves_preexisting_held_pid_socket_fixture(self):
-        sentinel = self.root / "sentinel"; sentinel.mkdir(mode=0o700)
-        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        peer.bind(str(sentinel / "monitor.sock")); os.chmod(sentinel / "monitor.sock", 0o600); peer.listen()
-        info = (sentinel / "monitor.sock").lstat()
-        lock_fd = os.open(sentinel / "monitor.lock", os.O_RDWR | os.O_CREAT, 0o600)
-        payload = json.dumps({"pid": os.getpid(), "socket_dev": info.st_dev, "socket_ino": info.st_ino}).encode()
-        os.write(lock_fd, payload); os.fsync(lock_fd); fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        before = (os.readlink(f"/proc/{os.getpid()}/exe") if Path(f"/proc/{os.getpid()}/exe").exists() else None,
-                  (sentinel / "monitor.lock").read_bytes(), (sentinel / "monitor.lock").stat().st_ino,
-                  (sentinel / "monitor.sock").stat().st_ino)
+    def test_detached_cleanup_excludes_matching_baseline_and_reaps_owned_after_assertion(self):
+        sentinel = self.baseline_home; before = self.baseline_snapshot
         env = self.env({"ROZORO_HOME": "owned", "RZR_HOME": str(sentinel)})
-        try:
-            started = self.command([sys.executable, str(MONITOR), "start"], env)
-            self.assertEqual(started.returncode, 0, started.stderr)
-            self.discover_owned_detached()
-            self.assertNotIn(os.getpid(), self.owned_detached)
-            # Committed forced-assertion regression: cleanup still targets only
-            # the positively identified detached daemon, never this held peer.
-            try: self.assertEqual("forced", "failure")
-            except AssertionError:
-                self.assertEqual(self.command([sys.executable, str(MONITOR), "stop"], env).returncode, 0)
-            os.kill(os.getpid(), 0)
-            after = (before[0], (sentinel / "monitor.lock").read_bytes(),
-                     (sentinel / "monitor.lock").stat().st_ino, (sentinel / "monitor.sock").stat().st_ino)
-            self.assertEqual(after, before)
-        finally:
-            peer.close(); os.close(lock_fd)
-            for path in (sentinel / "monitor.sock", sentinel / "monitor.lock"):
-                try: path.unlink()
-                except FileNotFoundError: pass
+        started = self.command([sys.executable, str(MONITOR), "start"], env)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        owned_lock = self.cwd / "owned/monitor.lock"
+        owned_record = json.loads(owned_lock.read_text()); owned_pid = owned_record["pid"]
+        self.discover_owned_detached()
+        self.assertIn(owned_pid, self.owned_detached)
+        self.assertNotIn(self.baseline_process.pid, self.owned_detached)
+        # Simulate a body failure and perform the same positive-identity cleanup.
+        try: self.assertEqual("forced", "failure")
+        except AssertionError:
+            self.assertEqual(self.command([sys.executable, str(MONITOR), "stop"], env).returncode, 0)
+        deadline = time.monotonic() + 3
+        while (self.cwd / "owned/monitor.sock").exists() and time.monotonic() < deadline: time.sleep(.03)
+        self.assertFalse((self.cwd / "owned/monitor.sock").exists())
+        with self.assertRaises(ProcessLookupError): os.kill(owned_pid, 0)
+        os.kill(self.baseline_process.pid, 0)
+        after = ((sentinel / "monitor.lock").read_bytes(), (sentinel / "monitor.lock").stat().st_ino,
+                 (sentinel / "monitor.sock").stat().st_ino, self.baseline_process.pid)
+        self.assertEqual(after, before)
 
     def test_monitor_named_user_and_unresolved_user_rows(self):
         import pwd
