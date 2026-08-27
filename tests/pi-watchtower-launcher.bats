@@ -7,6 +7,7 @@ setup_pi() {
 #!/bin/sh
 printf 'role=%s\n' "${ROZORO_WATCHTOWER:-}" > "$PI_LOG"
 printf 'wt=%s preset=%s version=%s driver=%s preset_sha=%s policy_sha=%s\n' "${ROZORO_WT_NAME:-}" "${ROZORO_WT_PRESET:-}" "${ROZORO_WT_PRESET_VERSION:-}" "${ROZORO_WT_DRIVER:-}" "${ROZORO_WT_PRESET_SHA256:-}" "${ROZORO_WT_POLICY_SHA256:-}" >> "$PI_LOG"
+printf 'tuple=%s:%s:%s:%s:%s\n' "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_NAME:-}" "${ROZORO_WT_POLICY_MISSION_SOURCE:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}" >> "$PI_LOG"
 printf '%s\n' "$@" >> "$PI_LOG"
 SH
   chmod +x "$TEST_ROOT/pi"
@@ -119,6 +120,28 @@ SH
   grep -F "policy_sha=$expected" "$PI_LOG"
 }
 
+@test "four Pi launch forms deliver exactly core then one mission with exact attribution" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"; chmod 700 "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi"}' > "$ROZORO_HOME/watchtower-presets/base.json"
+  printf '%s\n' '{"harness":"pi","mission":"operator"}' > "$ROZORO_HOME/watchtower-presets/op.json"
+  printf '%s\n' 'operator policy' > "$ROZORO_HOME/watchtower-missions/operator.md"; chmod 600 "$ROZORO_HOME/watchtower-missions/operator.md"
+  core="$REPO_ROOT/templates/watchtower.md"
+  for row in 'unnamed||delivery|shipped' 'named|--wt-name north|delivery|shipped' 'preset|--preset base|delivery|shipped' 'operator|--preset op --wt-name north|operator|operator'; do
+    IFS='|' read -r label options mission source <<< "$row"; : > "$PI_LOG"
+    # shellcheck disable=SC2086
+    run rzr-pi-watchtower.sh $options --cwd "$TEST_ROOT" -- --model passthrough
+    assert_success
+    mission_file="$REPO_ROOT/templates/missions/$mission.md"; [ "$source" = operator ] && mission_file="$ROZORO_HOME/watchtower-missions/operator.md"
+    [ "$(grep -Fx -e "$core" -e "$mission_file" "$PI_LOG" | wc -l | tr -d ' ')" = 2 ]
+    [ "$(grep -nFx -e "$core" -e "$mission_file" "$PI_LOG" | cut -d: -f2-)" = "$(printf '%s\n%s' "$core" "$mission_file")" ]
+    core_sha="$(sha256sum "$core" | awk '{print $1}')"; mission_sha="$(sha256sum "$mission_file" | awk '{print $1}')"
+    composed="$(cat "$core" "$mission_file" | sha256sum | awk '{print $1}')"
+    grep -Fx "tuple=$composed:$core_sha:$mission:$source:$mission_sha" "$PI_LOG"
+    [ "$(grep -cFx passthrough "$PI_LOG")" = 1 ]
+  done
+}
+
 @test "Pi mission defined by both shipped and operator files fails closed" {
   setup_pi
   mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
@@ -179,6 +202,27 @@ SH
   [ "$(jq -r '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | join(":")' "$target")" = "$composed:$core:delivery:shipped:$mission" ]
   [ "$(jq -r '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | join(":")' "$history")" = "$composed:$core:delivery:shipped:$mission" ]
   [ "$(jq 'has("watchtower_name") or has("preset")' "$target")" = false ]
+}
+
+@test "named operator launcher provenance reaches real registration without absolute source path" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"; chmod 700 "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi","mission":"operator"}' > "$ROZORO_HOME/watchtower-presets/op.json"
+  printf '%s\n' 'operator mission' > "$ROZORO_HOME/watchtower-missions/operator.md"; chmod 600 "$ROZORO_HOME/watchtower-missions/operator.md"
+  fake_pane manual:p1 idle pi true
+  export RZR_REGISTER="$REPO_ROOT/bin/rzr-register.sh" DRIVER_LOG="$TEST_ROOT/driver"
+  cat > "$TEST_ROOT/pi" <<'SH'
+#!/bin/sh
+"$RZR_REGISTER" --harness pi > "$DRIVER_LOG"
+SH
+  chmod +x "$TEST_ROOT/pi"
+  run rzr-pi-watchtower.sh --preset op --wt-name north --cwd "$TEST_ROOT"; assert_success
+  driver="$(cat "$DRIVER_LOG")"; target="$ROZORO_HOME/watchtowers/$driver/target.json"; history="${target%/target.json}/registrations.jsonl"
+  for file in "$target" "$history"; do
+    [ "$(jq -r '.watchtower_name,.policy_mission_name,.policy_mission_source' "$file" | paste -sd: -)" = north:operator:operator ]
+    [ "$(jq -r '.policy_mission_source' "$file")" != "$ROZORO_HOME/watchtower-missions/operator.md" ]
+    [ "$(jq -r '.policy_sha256' "$file")" = "$(cat "$REPO_ROOT/templates/watchtower.md" "$ROZORO_HOME/watchtower-missions/operator.md" | sha256sum | awk '{print $1}')" ]
+  done
 }
 
 @test "relative effective home is anchored before cwd and exported absolute" {
