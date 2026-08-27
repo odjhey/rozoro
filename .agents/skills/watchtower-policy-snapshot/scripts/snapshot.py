@@ -26,7 +26,7 @@ MISSIONS_DIR = "templates/missions"
 DEFAULT_MISSION = "delivery"
 OPERATOR_MISSIONS = "$ROZORO_HOME/watchtower-missions"
 PI_LAUNCHER = "bin/rzr-pi-watchtower.sh"
-PI_LAUNCHER_SHA256 = "cdbf70bf0e0ccdae43fdd1fa2184d81a9ba46fb8d2c211517566590751fe14fd"
+PI_LAUNCHER_SHA256 = "4f63ae862ed3332d21e244562316b9a36dbe7fdece82c977d2912c5de6386763"
 CLAUDE_LAUNCHER = "bin/rzr-claude-watchtower.sh"
 POLICY_OPTION = "--append-system-prompt"
 POLICY_VALUE = "$ROOT/templates/watchtower.md"
@@ -41,6 +41,17 @@ def utc_now(value: str | None) -> dt.datetime:
     if parsed.tzinfo is None:
         raise ValueError("--now must include a timezone")
     return parsed.astimezone(dt.timezone.utc)
+
+
+def normalized_path(value: str | os.PathLike[str]) -> Path:
+    raw = os.fspath(value)
+    try:
+        expanded = os.path.expanduser(raw)
+    except RuntimeError as exc:
+        raise UnsafePath(f"unresolved user path: {raw}") from exc
+    if raw.startswith("~") and expanded.startswith("~"):
+        raise UnsafePath(f"unresolved user path: {raw}")
+    return Path(os.path.abspath(expanded))
 
 
 def digest(data: bytes) -> str:
@@ -235,7 +246,7 @@ def main() -> int:
     parser.add_argument("--now", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    repo_path = Path(os.path.abspath(os.path.expanduser(os.fspath(args.repo_root or SCRIPT_REPO))))
+    repo_path = normalized_path(args.repo_root or SCRIPT_REPO)
     try:
         with SafeDirectory.open_path(repo_path, create=False, require_owner=True) as repo:
             if stat.S_IMODE(repo.stat().st_mode) & 0o022:
@@ -276,8 +287,8 @@ def main() -> int:
     applicable = ["pi"] + (["claude"] if claude_captured else [])
     identity_id = "fs-" + digest(f"{identity[0]}:{identity[1]}".encode())[:20]
 
-    home = Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser().absolute()
-    artifact_root = (args.artifact_root or home / "artifacts").expanduser().absolute()
+    home = normalized_path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro")
+    artifact_root = normalized_path(args.artifact_root or home / "artifacts")
     now = utc_now(args.now)
     created_at = now.isoformat(timespec="microseconds").replace("+00:00", "Z")
     snapshot_name = "watchtower-policy.md"
@@ -381,4 +392,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except UnsafePath as exc:
+        raise SystemExit(f"cannot create safe artifact: {exc}") from None

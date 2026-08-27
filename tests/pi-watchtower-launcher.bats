@@ -140,7 +140,7 @@ SH
   printf '%s\n' '{"harness":"pi","mission":"no-such-mission"}' > "$ROZORO_HOME/watchtower-presets/ghost.json"
   run rzr-pi-watchtower.sh --preset ghost --cwd "$TEST_ROOT"
   assert_failure
-  assert_output_contains "missing or unsafe"
+  assert_output_contains "missing mission"
   [ ! -e "$PI_LOG" ]
 }
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+SOURCE_FILE_FLAGS = FILE_FLAGS | getattr(os, "O_NONBLOCK", 0)
 
 
 class UnsafePath(RuntimeError):
@@ -168,7 +169,9 @@ class SafeDirectory:
         name = _component(name)
         try:
             before = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
-            fd = os.open(name, FILE_FLAGS, dir_fd=self.fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise UnsafePath(f"unsafe repository source: {name}")
+            fd = os.open(name, SOURCE_FILE_FLAGS, dir_fd=self.fd)
         except OSError as exc:
             raise UnsafePath(f"unsafe repository source: {name}") from exc
         try:
@@ -176,11 +179,14 @@ class SafeDirectory:
             if not trusted_source_metadata(before, info, os.geteuid()):
                 raise UnsafePath(f"unsafe repository source: {name}")
             chunks: list[bytes] = []
-            while True:
-                chunk = os.read(fd, 1024 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
+            try:
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except OSError as exc:
+                raise UnsafePath(f"unreadable repository source: {name}") from exc
             return b"".join(chunks)
         finally:
             os.close(fd)

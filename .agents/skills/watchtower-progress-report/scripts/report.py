@@ -20,6 +20,14 @@ sys.path.insert(0, str(SCRIPT_REPO))
 from lib.rozoro_artifacts.safe_fs import SafeDirectory, UnsafePath  # noqa: E402
 
 SCHEMA = "rozoro.watchtower-progress-report/v2"
+
+def normalized_path(value: str | os.PathLike[str]) -> Path:
+    raw=os.fspath(value)
+    try: expanded=os.path.expanduser(raw)
+    except RuntimeError as exc: raise UnsafePath(f"unresolved user path: {raw}") from exc
+    if raw.startswith("~") and expanded.startswith("~"): raise UnsafePath(f"unresolved user path: {raw}")
+    return Path(os.path.abspath(expanded))
+
 SAFE_TASK = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 BAD_AUXILIARY = {"missing", "unsafe", "unreadable", "malformed"}
 NONE = {"", "none", "n/a", "na", "-"}
@@ -299,9 +307,9 @@ def main() -> int:
     except (OSError, UnsafePath) as exc:
         raise SystemExit(f"cannot safely load canonical handoff parser: {exc}") from exc
 
-    home = Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro").expanduser().absolute()
-    tasks_path = (args.tasks_root or home / "tasks").expanduser().absolute()
-    artifact_root = (args.artifact_root or home / "artifacts").expanduser().absolute()
+    home = normalized_path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro")
+    tasks_path = normalized_path(args.tasks_root or home / "tasks")
+    artifact_root = normalized_path(args.artifact_root or home / "artifacts")
 
     records: list[dict[str, Any]] = []
     skipped = 0
@@ -368,4 +376,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except UnsafePath as exc:
+        raise SystemExit(f"cannot create safe artifact: {exc}") from None

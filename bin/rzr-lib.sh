@@ -24,7 +24,9 @@ RZR_BIN="$(cd "$(dirname "$RZR_LIB_SRC")" && pwd)"
 RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
 RZR_HOME="$(RZR_HOME_RAW="$RZR_HOME_RAW" python3 - <<'PY'
 import os
-print(os.path.abspath(os.path.expanduser(os.environ["RZR_HOME_RAW"])))
+raw=os.environ["RZR_HOME_RAW"]; expanded=os.path.expanduser(raw)
+if raw.startswith("~") and expanded.startswith("~"): raise SystemExit("rzr: unresolved user home path")
+print(os.path.abspath(expanded))
 PY
 )"
 export ROZORO_HOME="$RZR_HOME"
@@ -310,7 +312,11 @@ rzr_wtpreset_path() { rzr_validate_wtpreset_name "$1"; printf '%s/%s.json' "$RZR
 rzr_wtpreset_resolve() {  # <name> -> {document,sha256}
   local name="$1"; rzr_validate_wtpreset_name "$name"
   RZR_WTP_DIR="$RZR_WT_PRESETS" RZR_WTP_FILE="$name.json" python3 - <<'PY'
-import hashlib, json, math, os, stat
+import hashlib, json, math, os, stat, sys
+def controlled_excepthook(kind, value, trace):
+    if issubclass(kind, OSError): print("rzr: watchtower preset storage is unsafe",file=sys.stderr); return
+    sys.__excepthook__(kind, value, trace)
+sys.excepthook=controlled_excepthook
 path=os.environ["RZR_WTP_DIR"]; nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0)
 def die(family): raise SystemExit("rzr: watchtower preset "+family)
 try: before=os.stat(path,follow_symlinks=False)
@@ -383,51 +389,56 @@ rzr_wtpreset_validate() { rzr_wtpreset_resolve "$1" >/dev/null 2>&1; }
 # links; policy bytes and identities come from those validated descriptors.
 rzr_watchtower_policy_resolve() {  # <checkout> <effective-home> <mission>
   RZR_POLICY_ROOT="$1" RZR_POLICY_HOME="$2" RZR_POLICY_MISSION="$3" python3 - <<'PY'
-import hashlib, json, os, stat
+import hashlib, json, os, stat, sys
+def die(message): raise SystemExit("rzr: "+message)
+def controlled_excepthook(kind, value, trace):
+    if issubclass(kind, OSError): print("rzr: watchtower policy source is unsafe or unreadable",file=sys.stderr); return
+    sys.__excepthook__(kind, value, trace)
+sys.excepthook=controlled_excepthook
 nofollow=getattr(os,"O_NOFOLLOW",0); directory=getattr(os,"O_DIRECTORY",0); nonblock=getattr(os,"O_NONBLOCK",0)
 uid=os.geteuid(); mission=os.environ["RZR_POLICY_MISSION"]
 safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
 if not (1 <= len(mission) <= 120) or mission in (".","..") or any(c not in safe for c in mission):
-    raise SystemExit("unsafe mission name")
+    die("unsafe mission name")
 def root(path, private, label):
     try: before=os.stat(path,follow_symlinks=False)
     except FileNotFoundError: return None
     if not stat.S_ISDIR(before.st_mode) or before.st_uid!=uid or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
-        raise SystemExit(f"unsafe {label}")
+        die(f"unsafe {label}")
     try: fd=os.open(path,os.O_RDONLY|directory|nofollow)
-    except OSError: raise SystemExit(f"unsafe {label}")
+    except OSError: die(f"unsafe {label}")
     now=os.fstat(fd)
-    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); raise SystemExit(f"changed {label}")
+    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); die(f"changed {label}")
     return fd
 def child(parent,name,private,label,missing=False):
     try: before=os.stat(name,dir_fd=parent,follow_symlinks=False)
     except FileNotFoundError:
         if missing:return None
-        raise SystemExit(f"missing {label}")
+        die(f"missing {label}")
     if not stat.S_ISDIR(before.st_mode) or before.st_uid!=uid or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
-        raise SystemExit(f"unsafe {label}")
+        die(f"unsafe {label}")
     try: fd=os.open(name,os.O_RDONLY|directory|nofollow,dir_fd=parent)
-    except OSError: raise SystemExit(f"unsafe {label}")
+    except OSError: die(f"unsafe {label}")
     now=os.fstat(fd)
-    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); raise SystemExit(f"changed {label}")
+    if (before.st_dev,before.st_ino)!=(now.st_dev,now.st_ino): os.close(fd); die(f"changed {label}")
     return fd
 def text(raw,label):
     try: value=raw.decode("utf-8","strict")
-    except UnicodeError: raise SystemExit(f"invalid UTF-8 {label}")
-    if not value or value.startswith("\ufeff") or not any(not c.isspace() for c in value): raise SystemExit(f"empty or whitespace-only {label}")
-    if any((ord(c)<32 and c not in "\t\n\r") or 0x7f<=ord(c)<=0x9f for c in value): raise SystemExit(f"forbidden control in {label}")
+    except UnicodeError: die(f"invalid UTF-8 {label}")
+    if not value or value.startswith("\ufeff") or not any(not c.isspace() for c in value): die(f"empty or whitespace-only {label}")
+    if any((ord(c)<32 and c not in "\t\n\r") or 0x7f<=ord(c)<=0x9f for c in value): die(f"forbidden control in {label}")
 def file(parent,name,private,label,missing=False):
     try: before=os.stat(name,dir_fd=parent,follow_symlinks=False)
     except FileNotFoundError:
         if missing:return None
-        raise SystemExit(f"missing {label}")
+        die(f"missing {label}")
     if not stat.S_ISREG(before.st_mode) or before.st_uid!=uid or before.st_nlink!=1 or (stat.S_IMODE(before.st_mode)&(0o077 if private else 0o022)):
-        raise SystemExit(f"unsafe {label}")
+        die(f"unsafe {label}")
     try: fd=os.open(name,os.O_RDONLY|nofollow|nonblock,dir_fd=parent)
-    except OSError: raise SystemExit(f"unsafe {label}")
+    except OSError: die(f"unsafe {label}")
     try:
         info=os.fstat(fd)
-        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit(f"changed {label}")
+        if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): die(f"changed {label}")
         chunks=[]
         while True:
             chunk=os.read(fd,65536)
@@ -437,7 +448,7 @@ def file(parent,name,private,label,missing=False):
         return raw,f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}:{hashlib.sha256(raw).hexdigest()}"
     finally: os.close(fd)
 checkout=root(os.environ["RZR_POLICY_ROOT"],False,"checkout root")
-if checkout is None: raise SystemExit("missing checkout root")
+if checkout is None: die("missing checkout root")
 try:
     templates=child(checkout,"templates",False,"templates directory")
     try:
@@ -455,9 +466,9 @@ if home is not None:
             try: operator=file(md,mission+".md",True,"operator mission",True)
             finally: os.close(md)
     finally: os.close(home)
-if shipped is not None and operator is not None: raise SystemExit("ambiguous mission")
+if shipped is not None and operator is not None: die("ambiguous mission")
 selected=shipped or operator
-if selected is None: raise SystemExit("missing mission")
+if selected is None: die("missing mission")
 source="shipped" if shipped is not None else "operator"; cbytes,cid=core; mbytes,mid=selected
 print(json.dumps({"core_identity":cid,"mission_identity":mid,"core_sha256":hashlib.sha256(cbytes).hexdigest(),
  "mission_sha256":hashlib.sha256(mbytes).hexdigest(),"policy_sha256":hashlib.sha256(cbytes+mbytes).hexdigest(),
@@ -553,8 +564,11 @@ try:
                 present=[key in data for key in policy_keys]
                 # Legacy targets may carry only policy_sha256; new complete tuples
                 # are validated strictly while remaining readable for dispatch.
+                if present[0] and not any(present[1:]) and not data["policy_sha256"]: continue
                 if any(present[1:]) and not all(present): continue
-                if all(present) and (any(len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")) or data["policy_mission_source"] not in ("shipped","operator")): continue
+                if all(present):
+                    mission=data["policy_mission_name"]; allowed="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+                    if data.get("harness")!="pi" or any(len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")) or data["policy_mission_source"] not in ("shipped","operator") or not mission or mission in (".","..") or any(c not in allowed for c in mission): continue
                 if data.get("schema") == 1 and (not safe(data.get("registration_id")) or not data["registration_id"]): continue
                 if "preset" in data:
                     preset=data["preset"]

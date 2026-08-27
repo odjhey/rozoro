@@ -48,6 +48,19 @@ load test_helper/common
   [ "$(jq -r '.policy_mission_source' "$log")" = shipped ]
 }
 
+@test "policy tuple ingress is Pi-only and fails before writes" {
+  export HERDR_PANE_ID=driver-pane
+  export ROZORO_WT_POLICY_SHA256="$(printf 'a%.0s' $(seq 1 64))" ROZORO_WT_POLICY_CORE_SHA256="$(printf 'b%.0s' $(seq 1 64))"
+  export ROZORO_WT_POLICY_MISSION_NAME=delivery ROZORO_WT_POLICY_MISSION_SOURCE=shipped ROZORO_WT_POLICY_MISSION_SHA256="$(printf 'c%.0s' $(seq 1 64))"
+  for harness in claude codex copilot; do
+    fake_pane driver-pane idle "$harness" true
+    run rzr-register.sh --harness "$harness" --backend herdr
+    assert_failure
+    [ "$output" = "rzr: Pi policy attribution is valid only for harness pi" ]
+    [ ! -e "$ROZORO_HOME/watchtowers" ]
+  done
+}
+
 @test "registration without watchtower env preserves legacy target shape" {
   export HERDR_PANE_ID=driver-pane
   fake_pane driver-pane idle claude true

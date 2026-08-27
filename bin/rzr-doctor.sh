@@ -15,7 +15,17 @@ set -uo pipefail   # deliberately not -e: run all checks, then summarize
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RZR_HOME_RAW="${ROZORO_HOME:-${RZR_HOME:-$HOME/.rozoro}}"
-case "$RZR_HOME_RAW" in '~') RZR_HOME="$HOME" ;; '~/'*) RZR_HOME="$HOME/${RZR_HOME_RAW#\~/}" ;; /*) RZR_HOME="$RZR_HOME_RAW" ;; *) RZR_HOME="$PWD/$RZR_HOME_RAW" ;; esac
+if command -v python3 >/dev/null 2>&1; then
+  RZR_HOME="$(RZR_HOME_RAW="$RZR_HOME_RAW" python3 - <<'PY' 2>/dev/null
+import os
+raw=os.environ["RZR_HOME_RAW"]; expanded=os.path.expanduser(raw)
+if raw.startswith("~") and expanded.startswith("~"): raise SystemExit(2)
+print(os.path.abspath(expanded))
+PY
+)" || RZR_HOME="<unresolved:$RZR_HOME_RAW>"
+else
+  case "$RZR_HOME_RAW" in '~') RZR_HOME="$HOME" ;; '~/'*) RZR_HOME="$HOME/${RZR_HOME_RAW#\~/}" ;; /*) RZR_HOME="$RZR_HOME_RAW" ;; *) RZR_HOME="$PWD/$RZR_HOME_RAW" ;; esac
+fi
 bad=0; ok=0
 pass() { printf '  \033[32m ok \033[0m %s\n' "$1"; ok=$((ok + 1)); }
 warn() { printf '  \033[33mwarn\033[0m %s\n' "$1"; }

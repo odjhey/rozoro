@@ -158,6 +158,19 @@ PY
   done
 }
 
+@test "legacy opaque SHA-only target recovers exactly once" {
+  export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
+  run rzr-register.sh --harness pi --quiet; assert_success
+  target="$ROZORO_HOME/watchtowers/herdr-driver-pane/target.json"; log="${target%/target.json}/registrations.jsonl"
+  jq 'del(.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256) | .policy_sha256="opaque-old-policy" | .registration_id="legacy-ahead" | .harness="claude"' "$target" > "$target.tmp"
+  mv "$target.tmp" "$target"; chmod 600 "$target"
+  run rzr-register.sh --harness pi --quiet; assert_success
+  run rzr-register.sh --harness pi --quiet; assert_success
+  [ "$(jq -c 'select(.registration_id=="legacy-ahead" and .recovered==true)' "$log" | wc -l | tr -d ' ')" = 1 ]
+  [ "$(jq -r 'select(.registration_id=="legacy-ahead") | .policy_sha256' "$log")" = opaque-old-policy ]
+  [ "$(jq -r 'select(.registration_id=="legacy-ahead") | has("policy_core_sha256")' "$log")" = false ]
+}
+
 @test "target-ahead recovery accepts absent owner and preset and projects empty preset" {
   export HERDR_PANE_ID=driver-pane; fake_pane driver-pane idle pi true
   run rzr-register.sh --harness pi --quiet; assert_success

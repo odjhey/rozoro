@@ -72,7 +72,7 @@ Example metadata shape:
   },
   "harness_coverage": {
     "validation": "exact-shipped-pi-launcher-sha256-plus-grammar-v2",
-    "expected_pi_launcher_sha256": "cdbf70bf0e0ccdae43fdd1fa2184d81a9ba46fb8d2c211517566590751fe14fd",
+    "expected_pi_launcher_sha256": "4f63ae862ed3332d21e244562316b9a36dbe7fdece82c977d2912c5de6386763",
     "option": "--append-system-prompt",
     "value": "$ROOT/templates/watchtower.md",
     "mission_value": "$MISSION_FILE",

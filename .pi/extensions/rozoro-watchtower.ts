@@ -27,7 +27,12 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 
 export default function (pi: ExtensionAPI) {
 	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-	const rozoroHome = resolve(process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro"));
+	const selectedHome = process.env.ROZORO_HOME || process.env.RZR_HOME || join(homedir(), ".rozoro");
+	const expandedHome = selectedHome === "~" ? homedir()
+		: selectedHome.startsWith("~/") ? join(homedir(), selectedHome.slice(2))
+		: selectedHome;
+	if (expandedHome.startsWith("~")) throw new Error(`unresolved user home path: ${selectedHome}`);
+	const rozoroHome = resolve(expandedHome);
 
 	let busClient: RozoroEventBusClient | undefined;
 	let startup: AbortController | undefined;

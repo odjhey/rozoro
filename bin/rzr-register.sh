@@ -100,6 +100,9 @@ rzr_validate_wt_metadata "$IDENTITY" "wake target identity"
 rzr_validate_task_component "$DRIVER_ID" "driver id"
 [ -z "${ROZORO_WT_NAME:-}" ] || rzr_validate_wt_metadata "$ROZORO_WT_NAME" "watchtower name"
 POLICY_FIELDS="${ROZORO_WT_POLICY_SHA256:-}|${ROZORO_WT_POLICY_CORE_SHA256:-}|${ROZORO_WT_POLICY_MISSION_NAME:-}|${ROZORO_WT_POLICY_MISSION_SOURCE:-}|${ROZORO_WT_POLICY_MISSION_SHA256:-}"
+if [ "$HARNESS" != pi ] && [ "$POLICY_FIELDS" != '||||' ]; then
+  rzr_die "Pi policy attribution is valid only for harness pi"
+fi
 case "$POLICY_FIELDS" in '||||') ;; *'|'*'|'*'|'*'|'*)
   for digest in "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}"; do
     printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || rzr_die "invalid watchtower policy digest"
@@ -192,6 +195,24 @@ def valid_version(value):
         return False
     return abs(value) <= 2**53 - 1 and len(str(value)) <= 120
 
+def validate_existing_policy(data):
+    keys=("policy_sha256","policy_core_sha256","policy_mission_name","policy_mission_source","policy_mission_sha256")
+    components=keys[1:]
+    present=[key in data for key in keys]
+    if not any(present): return
+    if present[0] and not any(present[1:]):
+        if not safe_string(data["policy_sha256"]) or not data["policy_sha256"]:
+            raise SystemExit("invalid legacy policy attribution")
+        return
+    if not all(present): raise SystemExit("partial existing policy attribution")
+    if data.get("harness") != "pi": raise SystemExit("non-Pi complete policy attribution")
+    if any(not isinstance(data[key],str) or len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")):
+        raise SystemExit("invalid existing policy digest")
+    if data["policy_mission_source"] not in ("shipped","operator"): raise SystemExit("invalid existing mission source")
+    name=data["policy_mission_name"]; allowed="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    if not isinstance(name,str) or not name or len(name)>120 or name in (".","..") or any(c not in allowed for c in name):
+        raise SystemExit("invalid existing mission name")
+
 def write_all(fd, payload):
     view = memoryview(payload)
     while view:
@@ -209,15 +230,7 @@ def record_from_target(data, *, recovered=False):
     copied = ("created", "driver_id", "harness", "backend", "identity", "watchtower_name", "policy_sha256", "policy_core_sha256", "policy_mission_name", "policy_mission_source", "policy_mission_sha256")
     if any(key in data and not safe_string(data[key]) for key in copied):
         raise SystemExit("invalid existing registration metadata")
-    policy_keys=("policy_sha256","policy_core_sha256","policy_mission_name","policy_mission_source","policy_mission_sha256")
-    present=[key in data for key in policy_keys]
-    if any(present) and not all(present): raise SystemExit("partial existing policy attribution")
-    if all(present):
-        if any(len(data[key])!=64 or any(c not in "0123456789abcdef" for c in data[key]) for key in ("policy_sha256","policy_core_sha256","policy_mission_sha256")):
-            raise SystemExit("invalid existing policy digest")
-        if data["policy_mission_source"] not in ("shipped","operator"): raise SystemExit("invalid existing mission source")
-        name=data["policy_mission_name"]; allowed="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
-        if not name or len(name)>120 or name in (".","..") or any(c not in allowed for c in name): raise SystemExit("invalid existing mission name")
+    validate_existing_policy(data)
     if "owner_pid" in data:
         owner_pid = data["owner_pid"]
         if not isinstance(owner_pid, str) or not owner_pid.isdigit() or not 1 <= int(owner_pid) <= 2**63 - 1:
@@ -265,6 +278,8 @@ def last_history_registration_id(logfd):
                 raise SystemExit("invalid registrations history")
             if not isinstance(item, dict) or not valid_registration_id(item.get("registration_id")):
                 raise SystemExit("invalid registrations history")
+            try: validate_existing_policy(item)
+            except SystemExit: raise SystemExit("invalid registrations history")
             last = item["registration_id"]
     finally:
         stream.close()

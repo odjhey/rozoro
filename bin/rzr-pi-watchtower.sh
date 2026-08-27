@@ -42,7 +42,7 @@ if [ -n "$PRESET" ]; then
   PRESET_MISSION="$(printf '%s' "$RESOLVED" | jq -r '.document.mission // empty')"
   [ -z "$PRESET_MISSION" ] || MISSION="$PRESET_MISSION"
 fi
-POLICY="$(rzr_watchtower_policy_resolve "$ROOT" "$EFFECTIVE_HOME" "$MISSION")" || rzr_die "watchtower core or mission '$MISSION' is missing or unsafe"
+POLICY="$(rzr_watchtower_policy_resolve "$ROOT" "$EFFECTIVE_HOME" "$MISSION")" || exit $?
 SOURCE="$(printf '%s' "$POLICY" | jq -r .mission_source)"
 if [ "$SOURCE" = shipped ]; then MISSION_FILE="$ROOT/templates/missions/$MISSION.md"
 else MISSION_FILE="$EFFECTIVE_HOME/watchtower-missions/$MISSION.md"; fi
@@ -61,6 +61,6 @@ args+=(--append-system-prompt "$MISSION_FILE")
 [ -z "$RESUME" ] || args+=(--session "$RESUME")
 [ -z "$MODEL" ] || args+=(--model "$MODEL")
 [ -z "$EFFORT" ] || args+=(--thinking "$EFFORT")
-FINAL_POLICY="$(rzr_watchtower_policy_resolve "$ROOT" "$EFFECTIVE_HOME" "$MISSION")" || rzr_die "watchtower policy changed during launch"
+FINAL_POLICY="$(rzr_watchtower_policy_resolve "$ROOT" "$EFFECTIVE_HOME" "$MISSION" 2>/dev/null)" || rzr_die "watchtower policy changed during launch"
 [ "$FINAL_POLICY" = "$POLICY" ] || rzr_die "watchtower policy changed during launch"
 exec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"

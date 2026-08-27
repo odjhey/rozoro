@@ -72,6 +72,9 @@ contracts only; they intentionally name no models).
   Claude unnamed/unpreset has none, Claude named/unpreset has only a name, and
   Claude presets have name/preset/model attribution but never the Pi tuple.
   `target.json` is current attribution; `registrations.jsonl` is history.
+  Schema-1 history may retain an opaque legacy top-level `policy_sha256` without
+  mission components; it is compatibility data, not current non-Pi policy
+  attribution. New tuple ingress is accepted only for Pi.
 - `watchtower-policy-snapshot` captures the core plus shipped missions with
   per-mission composed hashes; operator missions are noted as not-captured.
 

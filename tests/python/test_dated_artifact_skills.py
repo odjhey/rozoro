@@ -207,14 +207,28 @@ class DatedArtifactSkillTests(unittest.TestCase):
             "writable-directory": lambda checkout: (checkout / "templates/missions").chmod(0o777),
             "invalid-mission-name": lambda checkout: (checkout / "templates/missions/bad name.md").write_text("bad\n"),
             "hardlinked-launcher": lambda checkout: os.link(checkout / "bin/rzr-pi-watchtower.sh", checkout / "launcher-link"),
+            "fifo-mission": lambda checkout: ((checkout / "templates/missions/delivery.md").unlink(), os.mkfifo(checkout / "templates/missions/delivery.md")),
+            "fifo-core": lambda checkout: ((checkout / "templates/watchtower.md").unlink(), os.mkfifo(checkout / "templates/watchtower.md")),
         }
         for label, mutate in mutations.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); checkout = fixture(root); mutate(checkout)
                 result = subprocess.run(["python3", str(POLICY_SCRIPT), "--repo-root", str(checkout),
                                          "--artifact-root", str(root / "artifacts")],
-                                        capture_output=True, text=True, check=False)
+                                        capture_output=True, text=True, check=False, timeout=3)
                 self.assertNotEqual(result.returncode, 0, label)
+
+    def test_policy_pair_grammar_matrix(self) -> None:
+        import runpy
+        checker = runpy.run_path(str(POLICY_SCRIPT))["pi_launcher_contract_has_policy"]
+        def source(values: list[str]) -> bytes:
+            rendered=" ".join(f'--append-system-prompt "{value}"' for value in values)
+            return (f'args=({rendered})\nexec env ROZORO_WATCHTOWER=1 pi "${{args[@]}}" "$@"\n').encode()
+        core="$ROOT/templates/watchtower.md"; mission="$MISSION_FILE"
+        self.assertTrue(checker(source([core, mission])))
+        for values in ([mission,core],[core,core],[mission,mission],[core,mission,mission],[core],[mission],[]):
+            with self.subTest(values=values): self.assertFalse(checker(source(list(values))))
+        self.assertFalse(checker(b'args=(--approve)\ndecoy=(--append-system-prompt "$ROOT/templates/watchtower.md" --append-system-prompt "$MISSION_FILE")\nexec env ROZORO_WATCHTOWER=1 pi "${args[@]}" "$@"\n'))
 
     def test_policy_coverage_requires_policy_on_array_consumed_by_pi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
