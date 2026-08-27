@@ -7,6 +7,7 @@ setup_pi() {
 #!/bin/sh
 printf 'role=%s\n' "${ROZORO_WATCHTOWER:-}" > "$PI_LOG"
 printf 'wt=%s preset=%s version=%s driver=%s preset_sha=%s policy_sha=%s\n' "${ROZORO_WT_NAME:-}" "${ROZORO_WT_PRESET:-}" "${ROZORO_WT_PRESET_VERSION:-}" "${ROZORO_WT_DRIVER:-}" "${ROZORO_WT_PRESET_SHA256:-}" "${ROZORO_WT_POLICY_SHA256:-}" >> "$PI_LOG"
+printf 'tuple=%s:%s:%s:%s:%s\n' "${ROZORO_WT_POLICY_SHA256:-}" "${ROZORO_WT_POLICY_CORE_SHA256:-}" "${ROZORO_WT_POLICY_MISSION_NAME:-}" "${ROZORO_WT_POLICY_MISSION_SOURCE:-}" "${ROZORO_WT_POLICY_MISSION_SHA256:-}" >> "$PI_LOG"
 printf '%s\n' "$@" >> "$PI_LOG"
 SH
   chmod +x "$TEST_ROOT/pi"
@@ -119,6 +120,36 @@ SH
   grep -F "policy_sha=$expected" "$PI_LOG"
 }
 
+@test "four Pi launch forms deliver exactly core then one mission with exact attribution" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"; chmod 700 "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi"}' > "$ROZORO_HOME/watchtower-presets/base.json"
+  printf '%s\n' '{"harness":"pi","mission":"operator"}' > "$ROZORO_HOME/watchtower-presets/op.json"
+  printf '%s\n' 'operator policy' > "$ROZORO_HOME/watchtower-missions/operator.md"; chmod 600 "$ROZORO_HOME/watchtower-missions/operator.md"
+  core="$REPO_ROOT/templates/watchtower.md"
+  for row in 'unnamed||delivery|shipped' 'named|--wt-name north|delivery|shipped' 'preset|--preset base|delivery|shipped' 'operator|--preset op --wt-name north|operator|operator'; do
+    IFS='|' read -r label options mission source <<< "$row"; : > "$PI_LOG"
+    # shellcheck disable=SC2086
+    run rzr-pi-watchtower.sh $options --cwd "$TEST_ROOT" -- --model passthrough
+    assert_success
+    mission_file="$REPO_ROOT/templates/missions/$mission.md"; [ "$source" = operator ] && mission_file="$ROZORO_HOME/watchtower-missions/operator.md"
+    [ "$(grep -Fx -e "$core" -e "$mission_file" "$PI_LOG" | wc -l | tr -d ' ')" = 2 ]
+    [ "$(grep -nFx -e "$core" -e "$mission_file" "$PI_LOG" | cut -d: -f2-)" = "$(printf '%s\n%s' "$core" "$mission_file")" ]
+    core_sha="$(sha256sum "$core" | awk '{print $1}')"; mission_sha="$(sha256sum "$mission_file" | awk '{print $1}')"
+    composed="$(cat "$core" "$mission_file" | sha256sum | awk '{print $1}')"
+    grep -Fx "tuple=$composed:$core_sha:$mission:$source:$mission_sha" "$PI_LOG"
+    [ "$(grep -cFx passthrough "$PI_LOG")" = 1 ]
+  done
+  : > "$PI_LOG"
+  run rzr-pi-watchtower.sh --cwd "$TEST_ROOT" -- --append-system-prompt caller-policy
+  assert_failure; [ "$output" = 'rzr: Pi policy prompt options are launcher-owned' ]; [ ! -s "$PI_LOG" ]
+  printf '%s\n' '{"harness":"pi","mission":""}' > "$ROZORO_HOME/watchtower-presets/empty.json"
+  rm -f "$PI_LOG"; run rzr-pi-watchtower.sh --preset empty --cwd "$TEST_ROOT"
+  assert_success
+  grep -Fx "$REPO_ROOT/templates/missions/delivery.md" "$PI_LOG"
+  grep -Fx "tuple=$(cat "$REPO_ROOT/templates/watchtower.md" "$REPO_ROOT/templates/missions/delivery.md" | sha256sum | awk '{print $1}'):$(sha256sum "$REPO_ROOT/templates/watchtower.md" | awk '{print $1}'):delivery:shipped:$(sha256sum "$REPO_ROOT/templates/missions/delivery.md" | awk '{print $1}')" "$PI_LOG"
+}
+
 @test "Pi mission defined by both shipped and operator files fails closed" {
   setup_pi
   mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
@@ -181,6 +212,30 @@ SH
   [ "$(jq 'has("watchtower_name") or has("preset")' "$target")" = false ]
 }
 
+@test "named operator launcher provenance reaches real registration without absolute source path" {
+  setup_pi
+  mkdir -p "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"; chmod 700 "$ROZORO_HOME/watchtower-presets" "$ROZORO_HOME/watchtower-missions"
+  printf '%s\n' '{"harness":"pi","mission":"operator"}' > "$ROZORO_HOME/watchtower-presets/op.json"
+  printf '%s\n' 'operator mission' > "$ROZORO_HOME/watchtower-missions/operator.md"; chmod 600 "$ROZORO_HOME/watchtower-missions/operator.md"
+  fake_pane manual:p1 idle pi true
+  export RZR_REGISTER="$REPO_ROOT/bin/rzr-register.sh" DRIVER_LOG="$TEST_ROOT/driver"
+  cat > "$TEST_ROOT/pi" <<'SH'
+#!/bin/sh
+"$RZR_REGISTER" --harness pi > "$DRIVER_LOG"
+SH
+  chmod +x "$TEST_ROOT/pi"
+  run rzr-pi-watchtower.sh --preset op --wt-name north --cwd "$TEST_ROOT"; assert_success
+  driver="$(cat "$DRIVER_LOG")"; target="$ROZORO_HOME/watchtowers/$driver/target.json"; history="${target%/target.json}/registrations.jsonl"
+  core_sha="$(sha256sum "$REPO_ROOT/templates/watchtower.md" | awk '{print $1}')"
+  mission_sha="$(sha256sum "$ROZORO_HOME/watchtower-missions/operator.md" | awk '{print $1}')"
+  policy_sha="$(cat "$REPO_ROOT/templates/watchtower.md" "$ROZORO_HOME/watchtower-missions/operator.md" | sha256sum | awk '{print $1}')"
+  for file in "$target" "$history"; do
+    [ "$(jq -r '.watchtower_name' "$file")" = north ]
+    [ "$(jq -r '[.policy_sha256,.policy_core_sha256,.policy_mission_name,.policy_mission_source,.policy_mission_sha256] | join(":")' "$file")" = "$policy_sha:$core_sha:operator:operator:$mission_sha" ]
+    [ "$(jq -r '.policy_mission_source' "$file")" != "$ROZORO_HOME/watchtower-missions/operator.md" ]
+  done
+}
+
 @test "relative effective home is anchored before cwd and exported absolute" {
   setup_pi
   initial="$TEST_ROOT/initial"; destination="$TEST_ROOT/destination"; mkdir -p "$initial/rel/watchtower-presets" "$destination"
@@ -226,6 +281,60 @@ SH
   rm "$dir/ok.json"; printf '{bad\n' > "$dir/ok.json"
   run rzr-pi-watchtower.sh --preset ok; assert_failure
   [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" -eq 1 ]; ! printf '%s' "$output" | grep -q Traceback
+}
+
+@test "actual initial and final resolver filesystem failures have exact single diagnostics" {
+  setup_pi
+  copy="$TEST_ROOT/copy"; mkdir -p "$copy/bin" "$copy/templates/missions" "$copy/.pi/extensions"
+  cp "$REPO_ROOT/bin/rzr-lib.sh" "$REPO_ROOT/bin/rzr-pi-watchtower.sh" "$copy/bin/"
+  cp "$REPO_ROOT/templates/watchtower.md" "$copy/templates/watchtower.md"
+  cp "$REPO_ROOT/templates/missions/delivery.md" "$copy/templates/missions/delivery.md"
+  : > "$copy/.pi/extensions/rozoro-watchtower.ts"
+  check_one_line() { [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]; [[ "$output" = rzr:* ]]; ! printf '%s' "$output" | grep -Eq 'Traceback|File ".*", line|OSError'; }
+  rm "$copy/templates/watchtower.md"
+  run "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"; assert_failure; check_one_line; [ "$output" = 'rzr: missing watchtower core' ]
+  mkdir "$copy/templates/watchtower.md"
+  run "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"; assert_failure; check_one_line; [ "$output" = 'rzr: unsafe watchtower core' ]
+  rmdir "$copy/templates/watchtower.md"; cp "$REPO_ROOT/templates/watchtower.md" "$copy/templates/watchtower.md"; rm "$copy/templates/missions/delivery.md"
+  run "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"; assert_failure; check_one_line; assert_output_contains 'missing mission'
+  cp "$REPO_ROOT/templates/missions/delivery.md" "$copy/templates/missions/delivery.md"
+  mkdir "$TEST_ROOT/wrap"; real_jq="$(command -v jq)"
+  cat > "$TEST_ROOT/wrap/jq" <<'SH'
+#!/bin/sh
+"$REAL_JQ" "$@"; code=$?
+if [ "$*" = '-r .policy_sha256' ] && [ ! -e "$SWAPPED" ]; then : > "$SWAPPED"; rm "$CORE"; mkdir "$CORE"; fi
+exit "$code"
+SH
+  chmod +x "$TEST_ROOT/wrap/jq"
+  run env PATH="$TEST_ROOT/wrap:$PATH" REAL_JQ="$real_jq" SWAPPED="$TEST_ROOT/swapped" CORE="$copy/templates/watchtower.md" HERDR_PANE_ID="$HERDR_PANE_ID" ROZORO_HOME="$ROZORO_HOME" PI_LOG="$PI_LOG" "$copy/bin/rzr-pi-watchtower.sh" --cwd "$TEST_ROOT"
+  assert_failure; [ "$output" = 'rzr: watchtower policy changed during launch' ]; [ ! -e "$PI_LOG" ]
+}
+
+@test "preset failure families are exact controlled and create no state" {
+  setup_pi
+  assert_controlled() {
+    name="$1" expected="$2"
+    run rzr-pi-watchtower.sh --preset "$name" --cwd "$TEST_ROOT"
+    assert_failure
+    [ "$(printf '%s\n' "$output" | grep -c '^rzr:')" = 1 ]
+    printf '%s\n' "$output" | grep -Eq "^$expected$"
+    ! printf '%s' "$output" | grep -Eq 'Traceback|File ".*", line|Error:'
+    [ ! -e "$ROZORO_HOME/state" ]; [ ! -e "$PI_LOG" ]
+  }
+  rm -rf "$ROZORO_HOME/state" "$ROZORO_HOME/watchtower-presets"
+  assert_controlled missing 'rzr: watchtower preset not found'
+  mkdir "$ROZORO_HOME/watchtower-presets"; chmod 700 "$ROZORO_HOME/watchtower-presets"
+  assert_controlled missing 'rzr: watchtower preset not found'
+  for name in '../escape' '/absolute' 'bad=name'; do assert_controlled "$name" 'rzr: watchtower preset name .* is unsafe; use letters, digits, .*'; done
+  printf '{bad\n' > "$ROZORO_HOME/watchtower-presets/bad.json"; assert_controlled bad 'rzr: watchtower preset content is invalid'
+  printf '%s\n' '{"harness":"claude"}' > "$ROZORO_HOME/watchtower-presets/wrong.json"; assert_controlled wrong "rzr: watchtower preset 'wrong' is not for harness pi"
+  printf '%s\n' '{"harness":"pi"}' > "$ROZORO_HOME/watchtower-presets/unsafe.json"
+  ln -s "$ROZORO_HOME/watchtower-presets" "$TEST_ROOT/preset-link"
+  mv "$ROZORO_HOME/watchtower-presets" "$TEST_ROOT/private-presets"; ln -s "$TEST_ROOT/private-presets" "$ROZORO_HOME/watchtower-presets"
+  assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  rm "$ROZORO_HOME/watchtower-presets"; printf x > "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  rm "$ROZORO_HOME/watchtower-presets"; mv "$TEST_ROOT/private-presets" "$ROZORO_HOME/watchtower-presets"; chmod 755 "$ROZORO_HOME/watchtower-presets"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
+  chmod 700 "$ROZORO_HOME/watchtower-presets"; rm "$ROZORO_HOME/watchtower-presets/unsafe.json"; mkfifo "$ROZORO_HOME/watchtower-presets/unsafe.json"; assert_controlled unsafe 'rzr: watchtower preset storage is unsafe'
 }
 
 @test "watchtower launcher refuses outside an owning Herdr pane" {
