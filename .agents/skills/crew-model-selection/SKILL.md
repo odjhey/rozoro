@@ -12,8 +12,10 @@ Use this immediately before every **fresh** Rozoro crew dispatch.
 
 ## 1. Choose the task kind
 
-Read `templates/watchtower-crew-dispatch-guidelines.md` for current role intent and
-preferred model/effort defaults.
+Read `templates/watchtower-crew-dispatch-guidelines.md` for current role intent
+and dispatch semantics. Concrete model/effort assignments per role come from
+durable operator policy under `$ROZORO_HOME/watchtower-policies/` (for example
+`roles-and-models.md`), not from the repository template (ADR-0012).
 
 Choose among the roles that fit the next bounded action:
 
@@ -64,10 +66,12 @@ selected harness/profile can actually run. Keep these identities separate:
 - reasoning effort; and
 - optional fast/priority tier.
 
-Preferred role defaults from the dispatch guide are the starting point. When the
-preferred target is unavailable, select a compatible available target described by
-the machine profile or current Rozoro crew presets. Explicit operator requirements
-and repository-local constraints take precedence.
+Role assignments from the durable operator policy
+(`$ROZORO_HOME/watchtower-policies/`) are the starting point. When the assigned
+target is unavailable, or no durable policy exists on this machine, select a
+compatible available target described by the machine profile or current Rozoro
+crew presets. Explicit operator requirements and repository-local constraints
+take precedence.
 
 For no-mistakes, the selected Rozoro crew model is the model used by the thin
 No-Mistakes Runner itself. The no-mistakes pipeline's own agent/model/fallback is

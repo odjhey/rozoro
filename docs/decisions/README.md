@@ -46,9 +46,10 @@ If an approved decision changes, prefer a new ADR that `supersedes` the old one 
 - [ADR-0003: Events, projections, and delivery acknowledgements stay separate](0003-events-projections-delivery.md)
 - [ADR-0004: Require first-class watchtower attention identity](0004-watchtower-mailbox.md)
 - [ADR-0005: Keep repository workflow policy above Rozoro core](0005-workflow-boundary.md)
-- [ADR-0006: Resolve cross-machine Watchtower policy differences](0006-cross-machine-watchtower-policy-resolution.md) — superseded by ADR-0009
+- [ADR-0006: Resolve cross-machine Watchtower policy differences](0006-cross-machine-watchtower-policy-resolution.md) — superseded by ADR-0009 and ADR-0012
 - [ADR-0007: Select no-mistakes auto model through the invoking harness](0007-no-mistakes-auto-harness-selection.md) — superseded by ADR-0008 and ADR-0009
 - [ADR-0008: Treat no-mistakes as an external gate](0008-no-mistakes-external-gate.md) — superseded by ADR-0009
 - [ADR-0009: Use workset mergers, runner crews, and machine-local routing profiles](0009-workset-merger-runner-and-machine-profile.md)
 - [ADR-0010: CLI reconcile delivers the changed-task delta of a generation window](0010-cli-reconcile-changed-task-delta.md)
 - [ADR-0011: Named Watchtowers and versioned presets](0011-named-watchtowers-and-versioned-presets.md)
+- [ADR-0012: Role model assignments live in durable operator policy](0012-durable-role-model-policy.md)

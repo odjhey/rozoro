@@ -19,11 +19,14 @@ narrow/waive note in the handoff.
 
 ## 2. Crew policy
 
-- planning/design: `{{harness/model/effort, e.g. pi sol high}}`
-- coding: `{{e.g. pi sol low}}`
-- review/gates: `{{e.g. pi sol high}}`
-- Escalate coding effort to `{{e.g. high}}` for concurrency, persistence, and
-  protocol slices — one expensive coder turn beats six review rounds.
+Role model/effort assignments come from the durable operator policy under
+`$ROZORO_HOME/watchtower-policies/` (ADR-0012); do not restate them here. Use
+this section only for run-specific deviations:
+
+- deviations from durable policy for this run: `{{none, or role: override}}`
+- Escalate coding effort by `{{one tier, or "none"}}` for concurrency,
+  persistence, and protocol slices — one expensive coder turn beats six review
+  rounds.
 
 ## 3. Autonomy
 

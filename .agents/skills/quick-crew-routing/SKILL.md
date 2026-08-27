@@ -30,9 +30,11 @@ be quick when its impact is certain and low-risk. When impact is uncertain, that
 uncertainty is itself the disqualifier — route to a standard role that can
 settle it.
 
-The preferred Quick Crew target is `gpt-5.3-codex-spark` at low effort when this
-machine can run it. If the fast target is unavailable, route the task to the
-appropriate standard role instead of inventing another quick tier.
+The Quick Crew model/effort target comes from durable operator policy
+(`$ROZORO_HOME/watchtower-policies/`) and machine availability, like every other
+role (ADR-0012). If no eligible fast target is named there or the named target is
+unavailable, route the task to the appropriate standard role instead of inventing
+another quick tier.
 
 ### Quick Scout
 
