@@ -7,6 +7,9 @@
     "bin/rzr-doctor.sh": {
       "kind": "shell_default"
     },
+    "bin/rzr-lineage.py": {
+      "kind": "python_default"
+    },
     "bin/rzr-monitor.py": {
       "kind": "python_default"
     },
@@ -91,6 +94,8 @@
     "bin/rzr-event-bus-client.py",
     "bin/rzr-handoff.py",
     "bin/rzr-lib.sh",
+    "bin/rzr-lineage.py",
+    "bin/rzr-lineage.sh",
     "bin/rzr-link.sh",
     "bin/rzr-list.sh",
     "bin/rzr-lock.sh",

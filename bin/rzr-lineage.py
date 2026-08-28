@@ -32,8 +32,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib.rozoro_monitor.handoff import parse as parse_handoff
 
-HOME = Path(os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME")
-            or Path.home() / ".rozoro")
+_home_raw = os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or "~/.rozoro"
+HOME = Path(os.path.expanduser(_home_raw))
 TASKS = HOME / "tasks"
 ATTENTION = HOME / "watchtowers" / "attention" / "items"
 DB = HOME / "monitor.db"
