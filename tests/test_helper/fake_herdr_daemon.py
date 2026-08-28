@@ -103,8 +103,14 @@ def serve(conn):
             continue
         if method == "agent.prompt":
             target, text = params.get("target"), params.get("text", "")
-            if pane_status(target) is None:
+            status = pane_status(target)
+            if status is None:
                 not_found(conn, request_id)
+                continue
+            if status == "blocked":
+                # Real Herdr refuses a blocked agent before sending any input.
+                send(conn, {"id": request_id,
+                            "error": {"code": "agent_blocked", "message": "agent_blocked"}})
                 continue
             with _log_lock, open(PROMPT_LOG, "a") as handle:
                 handle.write(f"{target}\t{text}\n")

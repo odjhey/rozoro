@@ -32,7 +32,10 @@ PENDING_SEND_SWEEP_INTERVAL = float(
 if MAX_CLIENTS < 2 or READ_TIMEOUT <= 0 or SPOOL_INTERVAL <= 0 or PENDING_SEND_SWEEP_INTERVAL <= 0:
     raise RuntimeError("invalid monitor resource limits")
 # Pane states in which an agent can receive a follow-up without losing a turn.
-DELIVERABLE_STATUS = frozenset({"idle", "blocked", "done"})
+# `blocked` is deliberately absent: Herdr rejects a prompt to a blocked agent
+# outright (agent_blocked), so claiming one would burn the follow-up on a
+# guaranteed rejection. A blocked crew keeps its follow-up until it frees up.
+DELIVERABLE_STATUS = frozenset({"idle", "done"})
 # asyncio pauses each transport at twice its StreamReader limit. The client cap
 # therefore makes aggregate userspace input buffering finite and auditable.
 MAX_BUFFERED_BYTES = MAX_CLIENTS * 2 * (protocol.MAX_FRAME_BYTES + 1)

@@ -262,6 +262,19 @@ class PendingSendDaemonTests(unittest.TestCase):
         self.assertEqual(reply["error"], "timeout")
         self.assertEqual(self.prompts(), [])
 
+    def test_a_blocked_crew_keeps_its_follow_up_until_it_frees_up(self):
+        # Herdr refuses a prompt to a blocked agent outright, so delivering to
+        # one would burn the follow-up on a guaranteed rejection.
+        self.write_task("task-1", "p1")
+        self.set_status("p1", "blocked")
+        self.start_fake_herdr()
+        self.start_daemon()
+        self.assertEqual(self.enqueue("task-1", "look again")["state"], "pending")
+        self.assertEqual(self.prompts(), [])
+        self.set_status("p1", "idle")
+        self.wait_for_state("task-1", "delivered")
+        self.assertEqual(self.prompts(), [["p1", "look again"]])
+
     def test_enqueue_is_refused_for_a_task_with_no_pane(self):
         self.start_fake_herdr()
         self.start_daemon()
