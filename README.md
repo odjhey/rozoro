@@ -159,6 +159,15 @@ Send a follow-up to the same conversation:
 ./bin/rozoro send <task-key> "Re-check the failing macOS case."
 ```
 
+On a `pi` crew this delivers only once the agent is idle, so it never cuts into a
+turn in progress. It returns right away either way: if the agent is mid-turn the
+resident monitor holds the text and delivers it when that turn ends. Check on it
+with:
+
+```sh
+./bin/rozoro send-status <task-key>
+```
+
 Interrupt or restart the runtime without sending chat text to the model:
 
 ```sh
@@ -186,6 +195,7 @@ List known tasks:
 | `./bin/rozoro spawn` | lower-level task and session spawn |
 | `./bin/rozoro status` | read daemon-backed lifecycle, task, and report state |
 | `./bin/rozoro send` | send DATA text to the coding agent |
+| `./bin/rozoro send-status` | state of a task's most recent follow-up |
 | `./bin/rozoro control` | interrupt, cancel, send a key, stop, or restart the runtime |
 | `./bin/rozoro resume` | reopen the exact linked conversation where supported |
 | `./bin/rozoro reconcile` | reconcile the changed-task delta since last ACK (`--full` for the complete snapshot) |

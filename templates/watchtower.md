@@ -68,9 +68,11 @@ work-product identities, and grouping state belong in a brief when they material
 constrain that crew's turn.
 
 Follow-up for the same live task/role uses `./bin/rozoro send`, which defaults to
-non-interrupting follow-up delivery (waits for the crew to be idle) on `pi`-harness
-crews; pass `--mode steer` only to interrupt a turn in progress. Dispatch a fresh
-crew when the task kind changes.
+non-interrupting delivery (only when the crew is idle) on `pi`-harness crews; pass
+`--mode steer` only to interrupt a turn in progress. It returns immediately even for
+a busy crew — the resident monitor delivers when that crew settles, and
+`./bin/rozoro send-status <id>` reports the outcome — so never hold your turn waiting
+on one. Dispatch a fresh crew when the task kind changes.
 
 ## Event-driven loop
 

@@ -20,3 +20,7 @@
 {"v":1,"type":"frame.error","code":"invalid-json"}
 {"v":1,"type":"event.error","event_id":"evt-bad","code":"invalid-event"}
 {"v":1,"type":"request.error","request_id":"req-bad","code":"invalid-message"}
+{"v":1,"type":"send.enqueue","request_id":"req-send","task_id":"task-1","payload":"Re-check the failing macOS case.","timeout_ms":120000}
+{"v":1,"type":"send.enqueue.result","request_id":"req-send","task_id":"task-1","state":"pending"}
+{"v":1,"type":"send.status","request_id":"req-send-status","task_id":"task-1"}
+{"v":1,"type":"send.status.result","request_id":"req-send-status","task_id":"task-1","found":true,"state":"delivered","error":null}

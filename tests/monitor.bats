@@ -36,7 +36,8 @@ load test_helper/common
   [ "$(cat "$ROZORO_HOME/tasks/task-1/handoff.md")" = authoritative ]
   run "$REPO_ROOT/bin/rozoro" monitor start; assert_success
   run "$REPO_ROOT/bin/rozoro" monitor status --json; assert_success
-  assert_output_contains '"schema_version":6'
+  # A reset database is rebuilt at the current schema, whatever that is now.
+  assert_output_contains "\"schema_version\":$(PYTHONPATH="$REPO_ROOT/lib" python3 -c 'from rozoro_monitor.store import SCHEMA_VERSION; print(SCHEMA_VERSION)')"
   run "$REPO_ROOT/bin/rozoro" monitor stop; assert_success
 }
 

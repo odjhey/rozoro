@@ -4,17 +4,22 @@
 # Usage:
 #   rzr-send.sh <id> <text>                  submit <text> in this task's default
 #                                             dispatch mode (see --mode below)
-#   rzr-send.sh <id> <text> --mode followup  wait for the agent to be idle, done, or
-#                                             blocked before delivering - never steals
-#                                             a turn in progress. Fails closed (nothing
-#                                             sent) if it is still working after
-#                                             --timeout.
+#   rzr-send.sh <id> <text> --mode followup  deliver only when the agent is idle, done,
+#                                             or blocked - never steals a turn in
+#                                             progress. Returns immediately: a
+#                                             mid-turn agent's follow-up is handed to
+#                                             the resident monitor, which delivers it
+#                                             on the agent's next settle. Check it
+#                                             later with `rozoro send-status <id>`.
 #   rzr-send.sh <id> <text> --mode steer     deliver immediately regardless of the
 #                                             agent's current state - the original,
-#                                             turn-interrupting behavior.
-#   rzr-send.sh <id> <text> --timeout <ms>   followup wait timeout (default 120000)
+#                                             turn-interrupting behavior. Needs no
+#                                             resident monitor.
+#   rzr-send.sh <id> <text> --timeout <ms>   how long a queued follow-up stays valid
+#                                             before the monitor gives up (default
+#                                             120000)
 #   rzr-send.sh <id> <text> --wait           ...and block until the agent settles
-#                                             after delivery
+#                                             after delivery (steer mode only)
 #
 # This is the DATA plane, and ONLY the data plane: free text that becomes part
 # of the agent's own context, via `herdr agent prompt` (types + submits
@@ -42,7 +47,7 @@ while [ $# -gt 0 ]; do
     --wait) WAIT=1; shift ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --timeout) TIMEOUT_MS="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     -*) rzr_die "unknown flag: $1 (rzr-send.sh is data-plane only - interrupt/cancel/key/stop/restart live in rzr-control.sh)" ;;
     *)  PAYLOAD="$1"; shift ;;
   esac
@@ -69,16 +74,22 @@ rzr_send_deliver() {
 
 if [ "$MODE" = steer ]; then
   rzr_send_deliver
-else
-  case "$(rzr_agent_status "$PANE")" in
-    working)
-      if rzr_wait_status "$PANE" "$TIMEOUT_MS" idle blocked "done"; then
-        rzr_send_deliver
-      else
-        rzr_die "'$ID' is still working after ${TIMEOUT_MS}ms - follow-up not sent (retry once idle, or pass --mode steer to interrupt it now)"
-      fi
-      ;;
-    gone) rzr_die "task '$ID' pane $PANE is gone - refusing to send a follow-up to a dead target" ;;
-    *) rzr_send_deliver ;;
-  esac
+  exit 0
 fi
+
+# Follow-up delivery is the resident monitor's job, not this process's. It
+# already watches every crew pane, so it can deliver the moment the agent
+# finishes its turn - and this call returns immediately either way, so a driver
+# dispatching a follow-up never blocks its own turn waiting on a busy crew.
+if ! OUT="$(python3 "$RZR_BIN/rzr-event-bus-client.py" send-enqueue \
+    --task "$ID" --payload "$PAYLOAD" --timeout-ms "$TIMEOUT_MS")"; then
+  rzr_die "could not reach the resident monitor to queue a follow-up for '$ID' - is rozorod running? (retry, or pass --mode steer to deliver now)"
+fi
+STATE="$(printf '%s' "$OUT" | jq -r '.state // "failed"')"
+case "$STATE" in
+  delivered) echo "rzr: sent to '$ID' (mode: followup)" ;;
+  pending)
+    echo "rzr: queued follow-up for '$ID' - it is mid-turn; the monitor delivers this once it goes idle (check: ./bin/rozoro send-status $ID)" ;;
+  *)
+    rzr_die "follow-up to '$ID' was not accepted: $(printf '%s' "$OUT" | jq -r '.error // "unknown error"') (pass --mode steer to deliver now)" ;;
+esac

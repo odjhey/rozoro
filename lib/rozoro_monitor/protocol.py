@@ -58,6 +58,14 @@ def _string(value: Any, field: str) -> None:
         _fail("invalid-field", f"{field} must be a non-empty string of at most 128 characters", field)
 
 
+def _bounded_string(max_length: int) -> Callable[[Any, str], None]:
+    def check(value: Any, field: str) -> None:
+        if not isinstance(value, str) or not value or len(value) > max_length:
+            _fail("invalid-field", f"{field} must be a non-empty string of at most {max_length} characters", field)
+
+    return check
+
+
 def _positive(value: Any, field: str) -> None:
     if not _is_int(value) or not 1 <= value <= MAX_INTEGER:
         _fail("invalid-field", f"{field} must be an integer from 1 through {MAX_INTEGER}", field)
@@ -117,6 +125,11 @@ _FOREGROUND = _enum("running", "stopped", "unknown")
 _BACKGROUND = _enum("active", "clear", "unknown")
 _VERDICT = _enum("done", "waiting", "needs-action", "failed", "blocked")
 _REPORT_STATE = _enum("missing", "malformed", "valid")
+# Follow-up text is a whole prompt, not an identifier, so it needs far more room
+# than _string's 128 characters while staying well inside one protocol frame.
+_SEND_PAYLOAD = _bounded_string(65_536)
+_SEND_ENQUEUE_STATE = _enum("delivered", "pending", "failed")
+_SEND_STATE = _enum("pending", "delivering", "delivered", "failed", "cancelled")
 _ACTIONABLE_REASON = _enum(
     "none", "quiescent", "missing-report", "malformed-report", "waiting-background",
     "native-turn-ended-report",
@@ -183,6 +196,13 @@ _SCHEMAS: dict[str, tuple[dict[str, Callable[[Any, str], None]], dict[str, Calla
                        "herdr_inventory_errors": _NONNEGATIVE,
                        "herdr_task_count": _NONNEGATIVE,
                        "drivers": _array}),
+    "send.enqueue": ({"request_id": _ID, "task_id": _ID, "payload": _SEND_PAYLOAD,
+                      "timeout_ms": _POSITIVE}, {}),
+    "send.enqueue.result": ({"request_id": _ID, "task_id": _ID, "state": _SEND_ENQUEUE_STATE},
+                            {"error": _nullable(_STRING)}),
+    "send.status": ({"request_id": _ID, "task_id": _ID}, {}),
+    "send.status.result": ({"request_id": _ID, "task_id": _ID, "found": _BOOL},
+                           {"state": _SEND_STATE, "error": _nullable(_STRING)}),
     "monitor.stop": ({"request_id": _ID}, {}),
     "watchtower.register": ({"request_id": _ID, "session_id": _ID, "harness": _HARNESS, "driver_id": _ID}, {}),
     "watchtower.availability": ({"request_id": _ID, "driver_id": _ID}, {}),
