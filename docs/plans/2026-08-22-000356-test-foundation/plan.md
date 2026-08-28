@@ -1,6 +1,6 @@
 # Build an isolated Bats regression harness
 
-Status: proposed implementation plan
+Status: historical — shipped and regression-tested (see docs/current-vs-target.md)
 
 Created: 2026-08-22 00:03:56 Asia/Manila
 

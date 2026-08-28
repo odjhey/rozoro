@@ -1,5 +1,7 @@
 # Product architecture
 
+> **Superseded (2026-08-28):** the canonical architecture now lives in [`docs/architecture/`](architecture/README.md), derived from the current code and tests. This file predates ADR-0012/0013/0014 (missions, presets, driver identity, the attention ledger) and is kept for historical context only.
+
 Rozoro is intentionally small, but the product needs several different kinds of truth. The architecture separates those truths so terms such as `idle`, `done`, `priority`, `task`, `session`, and `notification` do not collapse into one state machine. Where a capability is not yet shipped, these docs describe the contract without assuming Rozoro must own the implementation.
 
 ## Context map

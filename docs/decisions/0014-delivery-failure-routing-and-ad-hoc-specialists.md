@@ -1,7 +1,7 @@
 # ADR-0014: Delivery failure routing and ad-hoc specialists
 
 review: approved
-date: 2025-10-24
+date: 2026-08-24
 supersedes: ADR-0009 fixed delivery-role roster and implementation-only repair-accounting boundary
 
 ## Context
