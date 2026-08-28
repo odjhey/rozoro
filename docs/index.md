@@ -6,11 +6,12 @@ The README remains the operator-facing description of the current CLI. Implement
 
 ## Start here
 
+- [Architecture](architecture/README.md) — the canonical suite: product architecture, ubiquitous language, bounded contexts, published contracts, and rewrite seams (derived from code and tests, 2026-08-28).
 - [Current vs target](current-vs-target.md) — what has already shipped and what remains intentionally ahead of implementation.
-- [Architecture](architecture.md) — product boundaries, ownership, and integration map.
+- [Legacy architecture overview](architecture.md) — superseded by the suite above; kept for historical context.
 - [Artifact lifecycle](artifact-lifecycle.md) — when the major durable/runtime artifacts are created and what survives teardown.
 - [Dated Watchtower artifacts](dated-watchtower-artifacts.md) — immutable policy snapshots and conservative task-evidence progress reports.
-- [Ubiquitous language](ubiquitous-language.md) — canonical terms for code, prompts, issues, reviews, and docs.
+- [Ubiquitous language](ubiquitous-language.md) — canonical terms for code, prompts, issues, reviews, and docs (the code-verified superset lives in [architecture/ubiquitous-language.md](architecture/ubiquitous-language.md)).
 - [Decisions](decisions/README.md) — ADR-lite records for decisions that constrain future work.
 - [Implementation plans](plans/) — historical and active implementation sequencing.
 - [Watchtower runbooks](runbooks/README.md) — reusable operator procedures with provenance and exclusions.

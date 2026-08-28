@@ -1,6 +1,6 @@
 # Pi + Claude event-bus production cutover
 
-Status: G3 landed; G4/G5 release gate
+Status: cutover completed (G3–G5 landed); retained as the cutover/authority reference
 
 ## Authority
 
@@ -25,7 +25,7 @@ outstanding. This is the Pi analogue of the Claude rule in
 `docs/claude-hook-capability.md`, where clear is certified only from an
 authoritative empty `Stop.background_tasks` snapshot.
 
-`rzr-watch` remains available only as an explicit legacy/diagnostic observer for
+`rozoro watch` (bin/rzr-watch.sh) remains available only as an explicit legacy/diagnostic observer for
 Codex, Copilot, old releases, and manual Herdr transport diagnosis. Do not run it
 beside a managed Pi or supported-Claude driver.
 
