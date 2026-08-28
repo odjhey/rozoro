@@ -37,7 +37,7 @@ Everything below was verified against the current code and tests. These are the 
 
 ## Prose-only concepts with no code representation
 
-Candidates for real contracts in the ports/contracts work:
+Candidates for real contracts in the ports/contracts work — **status: adopted by [proposal 0001](./proposals/0001-orchestrator-primitives-alignment.md)** (worksets → work-graph contract; counters/budgets → attempts contract; `heads:` → evidence sugar; assurance/changed-head records → evidence staleness). Role rosters remain prose by design:
 
 - **Workset** — mission vocabulary ("the group of tasks producing one integrated outcome") with no file, schema, field, or verb.
 - **Attempt/replan/repair counters and lineage ids** (`attempt_count`, `replan_count`, `repair_lineage_id`, `implementation_lineage_id`, caps) — derived from durable history by the watchtower's judgment; nothing validates the arithmetic.

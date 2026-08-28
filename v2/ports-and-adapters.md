@@ -29,6 +29,9 @@ Derived from the v1 [contracts](./contracts/README.md); each port names the v1 c
 | `WakeActuator` | Deliver the fixed nudge to a driver target; report delivered/deferred/failed distinctly; confirm only after backend success. | [registration](./contracts/registration.md), wake-delivery context |
 | `RegistrationStore` | Commit-point target + append-only history + gap repair + authority marker transactions. | registration |
 | `AttentionStore` | Ledger items: strict format, supersession, locked mutations, malformed-surfacing. | [attention-ledger](./contracts/attention-ledger.md) |
+| `WorkGraphStore` | Worksets, typed edges, patch-only mutation with lineage, readiness derivation inputs. | [work-graph](./contracts/work-graph.md) |
+| `AttemptStore` | Append-only attempts/loops, cumulative-lineage budget queries. | [attempts](./contracts/attempts.md) |
+| `EvidenceStore` | Version-bound artifact refs, evidence, gate verdicts, monotonic staleness. | [artifacts-evidence](./contracts/artifacts-evidence.md) |
 | `PolicySource` | Resolve preset + exactly-one-mission, validated bytes, composed digest. | [policy-composition](./contracts/policy-composition.md) |
 
 ## Adapter guidelines
@@ -37,7 +40,7 @@ Derived from the v1 [contracts](./contracts/README.md); each port names the v1 c
 
 1. **Provider types stop here.** No provider JSON shape, SDK object, exit-code convention, or path layout crosses the port boundary. Port signatures use domain types only.
 2. **Never certify beyond the backend.** If the provider cannot prove a fact, return the port's `unknown`, not a guess. The Claude/Codex/Pi background-axis differences are the model: same port, honestly different certifications, declared via a capability descriptor the adapter exports.
-3. **Capability descriptors are data.** Each adapter declares what it can certify (background axis, session preallocation, readiness signal, version window) as a structured value the core can branch on — replacing v1's scattered per-harness special cases.
+3. **Capability descriptors are data** (schema now normative: [executor descriptors](./contracts/harness-adapters.md#executor-descriptors-v2-addition--proposal-0001-p5)). Each adapter declares what it can certify (background axis, session preallocation, readiness signal, version window) as a structured value the core can branch on — replacing v1's scattered per-harness special cases.
 4. **Validate before mutate.** Capability gates, version windows, and input validation run before the first side effect on the backend.
 5. **Fail closed, distinctly.** Distinguish transport failure / cannot-certify / backend-refused in the port's error types (v1's eventwait exit codes 2/3/4 and wake delivered/deferred/failed are the pattern). Retry only what the port contract declares retryable; never retry an operation that could double-claim a live resource (v1: `agent_not_ready` is polled, never re-started).
 6. **Idempotency at the edge.** Where a backend gives at-least-once behavior, the adapter dedups by the contract's identity (event id, edge id) before the core sees it — or passes the identity through so the store can.

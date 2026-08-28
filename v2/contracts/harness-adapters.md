@@ -51,6 +51,20 @@ Part of the [contracts index](./README.md). Each harness (Claude, Codex, Pi, Cop
 - **Lifecycle production**: none — Copilot has no hook surface; it is watched only via Herdr status (legacy path) and reported conservatively.
 - **Session discovery**: never scans private storage; the preallocated UUID is authoritative. **Resume**: `copilot --resume=<uuid>`.
 
+## Executor descriptors (v2 addition — proposal 0001, P5)
+
+Each adapter exports a typed, hashed descriptor — the machine-checked form of the capability table below plus `config/machine.md` facts:
+
+```json
+{ "schema": 1, "harness": "claude", "model": "…", "runtime": "herdr",
+  "capabilities": ["code.write", "code.review", "test.run", "repo.inspect"],
+  "certifies": { "background_axis": "snapshot", "session_preallocation": true, "readiness": "interactive_ready" },
+  "cost_class": "…", "concurrency": 1, "trust": "gated",
+  "version_window": ">=2.1.240 <2.2.0", "descriptor_sha256": "…" }
+```
+
+Dispatch judgment stays with the watchtower under ADR-0012 precedence; what changes is that the facts it judges over are validated data, and every attempt records the descriptor hash in force (see [attempts](./attempts.md)).
+
 ## Capability summary
 
 | | Claude | Codex | Pi | Copilot |

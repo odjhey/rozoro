@@ -21,6 +21,7 @@ When phase 1 is done, a test can spawn a fleet, feed lifecycle evidence, watch a
 - The **domain model** of the [ubiquitous language](./ubiquitous-language.md): task keys, briefs, handoff blocks and verdicts, turns, sessions, host bindings, drivers, registrations, incarnations, events, projections, availability, generations, offers, ACK cursors, attention items.
 - The **command set** covering the v1 verb semantics ([CLI contract](./contracts/cli.md)) minus surface concerns — see [core and commands](./core-and-commands.md).
 - The **ports** in the [catalogue](./ports-and-adapters.md#port-catalogue), each with an in-memory or fake implementation and a shared conformance suite.
+- The **work-graph model** (proposal 0001): worksets, typed edges, GraphPatch lineage, derived readiness; first-class attempts/loops with budgets and failure classes; version-bound artifact refs, evidence, and gate-verdict records.
 - The **invariant mechanics** as core logic, not adapter behavior: the acknowledgement ladder, the frozen report-tuple matrix, conservative availability derivation, generation freezing, the delivery gate algebra, handoff parsing with both cursors, the waiting triad, drift detection.
 - **Wire codec** for protocol v1 semantics (closed schemas, size limits, strict JSON) as a pure module — transport stays in adapters.
 
@@ -39,4 +40,5 @@ When phase 1 is done, a test can spawn a fleet, feed lifecycle evidence, watch a
 2. The behavioural suite covers every guarantee currently pinned by v1's bats/python tests that concerns core semantics (the mapping table lives in [test strategy](./test-strategy.md)), green against fakes only.
 3. Technical tests prove the durability orderings and concurrency invariants at the port contract level (a conforming adapter cannot violate them without failing conformance).
 4. Every port has: a docstring contract, a fake, a conformance suite, and at least one negative capability case (what happens when the backend cannot certify).
-5. No code path constructs prose destined for a resident conversation except the fixed wake constant.
+5. Graph-patch lineage integrity and evidence-binds-to-version are covered by technical tests; readiness derivation and budget arithmetic by behavioural tests — all against fakes.
+6. No code path constructs prose destined for a resident conversation except the fixed wake constant.

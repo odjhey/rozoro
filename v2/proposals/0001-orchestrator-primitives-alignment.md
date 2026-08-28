@@ -3,12 +3,14 @@ name: v2_proposal_0001_orchestrator_primitives
 description: "Alignment of the external research team's orchestrator primitive/seam catalogue against the v2 charter and mirror: convergences, gaps on both sides, divergence verdicts, and proposals P1–P14."
 type: proposal
 tags: [v2, proposal, research, primitives]
-status: proposed
+status: accepted
 generated: "Claude Fable 5, 2026-08-28"
 created_at: 2026-08-28T00:00:00+08:00
 ---
 
 # Proposal 0001 — Orchestrator primitives alignment
+
+**Accepted 2026-08-28** — dispositions executed into the mirror (work-graph context + contracts, amendments across event-protocol/attention-ledger/dated-artifacts/harness-adapters/ports/commands/language) and the charter decision log (D5–D10).
 
 Input: the research team's primitive set for "an orchestrator product intended to deliver work" (§1–§38, Goal→Lesson primitives, node states, 12 seams, minimal protocol). Compared against the [v2 charter](../charter.md), the [v2 mirror](../README.md), and the live v1 evidence base ([rewrite seams](../rewrite-seams.md)).
 

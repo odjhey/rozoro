@@ -16,6 +16,12 @@ These files document the current system's deliberate contracts — the interface
 
 Read [conventions](./conventions.md) first; every other contract assumes it.
 
+## Work-graph contracts (v2 additions — proposal 0001)
+
+- [Work graph](./work-graph.md) — worksets, typed edges, GraphPatch-only mutation, readiness derivation.
+- [Attempts](./attempts.md) — first-class attempt/loop records, budgets, failure classes beneath mission routing.
+- [Artifacts and evidence](./artifacts-evidence.md) — typed, version-bound artifact refs and evidence; gate verdicts as records.
+
 ## Storage contracts
 
 - [Home layout](./home-layout.md) — the `$ROZORO_HOME` namespace: resolution rule, directory ownership, the reset boundary.

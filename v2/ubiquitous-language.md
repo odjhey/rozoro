@@ -95,6 +95,22 @@ Use these terms consistently in code, docs, prompts, issues, and reviews. Prefer
 | **Attempt budget** **(prose-only)** | Cumulative coder-attempt/replan counters (`10 → 20 → 30`, ≤3 replans) derived from durable history by policy, not stored by Rozoro. | lifecycle field |
 | **Acceptance** | Operator decision that the result is satisfactory. | crew `done`, quiescence |
 
+## Work-graph terms (v2 additions — proposal 0001)
+
+| Term | Meaning | Research-catalogue name |
+|---|---|---|
+| **Workset** | Coherent delivery unit under one goal: member tasks, typed edges, budget, terminal state. Now core state, no longer prose-only. | Workset |
+| **Task** | (unchanged) — one durable unit of delegated work; gains graph membership. | WorkItem |
+| **GraphPatch** | The only graph mutation: lineage-carrying, transactional against an exact base version. | Replan / GraphPatch |
+| **Attempt** | One execution of a task's work; append-only; `fresh` / `follow-up` / `restart` kinds link to native sessions and turns. | Attempt (+Run) |
+| **Loop** | Bounded, progress-measured retry contract with explicit stop rules and escalation. | Loop |
+| **ArtifactRef** | Typed, version-exact reference to a produced work product; content stays in its store. | Artifact |
+| **Evidence** | Typed proof bound to an exact artifact version; staleness is derived and monotonic. | Evidence |
+| **Gate verdict** | Recorded accept/reject from an external gate, consuming evidence refs, carrying a failure class. | Gate |
+| **Failure class** | Closed factual taxonomy beneath mission routing statuses. | Failure |
+| **Executor descriptor** | Typed, hashed capability record per adapter; dispatch judgment stays with the watchtower. | Executor/Capability |
+| **Lesson** | Reusable learning persisted as a dated artifact. | Lesson |
+
 ## Non-equivalences (review checklist)
 
 ```text
@@ -110,6 +126,9 @@ host binding              != native session
 task key                  != pane != tab != herdr agent name != native session
 task                      != PR / branch / worktree
 harness-native subagent   != Rozoro crew
+workset terminal success  != gate acceptance (operator accepts)
+evidence                  != evidence at the current head (staleness)
+failure class (fact)      != routing status (mission policy)
 send (data plane)         != control (command plane)
 producer_seq              != herdr state_change_seq
 ```

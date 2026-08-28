@@ -82,6 +82,19 @@ actionable_reason   none | quiescent | missing-report | malformed-report | waiti
 
 A **frozen 14-entry whitelist** of legal `(report_state, verdict, actionable_reason)` combinations is enforced at the protocol boundary; any other combination is rejected as contradictory. The daemon cannot emit a semantically self-contradictory task row. Additional cross-field checks: every `report.generation ≤ through`; no duplicate `task_id` in a snapshot.
 
+## Work-level events (v2 addition — proposal 0001, P6)
+
+Beside — never replacing — the hosting-level lifecycle events above, v2 adds closed-schema **work-level events** emitted by commands and consumed by projections, lineage, and (later) operator-facing channels:
+
+```text
+WorksetCreated | GraphChanged | WorkItemReady
+AttemptStarted | AttemptFinished
+ArtifactRecorded | EvidenceRecorded | EvidenceStale
+GateVerdictRecorded | LoopEscalated | WorksetTerminal
+```
+
+Same envelope discipline as protocol v1: closed field sets, bounded integers, no prose payloads. The driver wake remains the fixed content-free constant — work-level events feed state, never resident conversations.
+
 ## Error frames
 
 - `frame.error {code}` — the no-safe-correlation path; may carry **no** id (an id here is itself `invalid-field`). Direction is chosen only from a recognized `type`, never from attacker-selected id presence.

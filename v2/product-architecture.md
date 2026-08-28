@@ -34,7 +34,9 @@ flowchart TB
     WT -->|CLI verbs| CLI[Application CLI]
 
     subgraph Core[Rozoro core]
-      CLI --> DT[Durable Tasks]
+      CLI --> WG[Work Graph]
+      WG --> DT[Durable Tasks]
+      CLI --> DT
       CLI --> SH[Session Hosting]
       CLI --> WD[Wake Delivery]
       SH --> DT
@@ -63,6 +65,8 @@ flowchart TB
     SH --> CREW
     CREW -->|handoff blocks| DT
 ```
+
+**v2 addition (proposal 0001):** the Work Graph context makes the plan itself durable core state — worksets, typed dependencies, patch-only mutation, derived readiness — completing the founding principle that fleet state must not live in conversational memory. Judgment (planning, dispatch, replanning) stays with the watchtower behind the graph seams.
 
 Context definitions live under [`bounded-contexts/`](./bounded-contexts/README.md); the interfaces between them under [`contracts/`](./contracts/README.md).
 

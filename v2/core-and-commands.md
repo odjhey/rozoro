@@ -65,6 +65,9 @@ Commands are the application layer's public surface; the CLI and daemon are thin
 | `RegisterDriver`, `ActivateAuthority`, `RollbackAuthority` | `register`, launcher internals, `rollback` | Validation before write; transactional authority. |
 | `LaunchWatchtower` | `pi-watchtower`, `claude-watchtower` | Policy composition + attribution; harness specifics behind the Harness port. |
 | `RecordAttention`, `UpdateAttention`, `PrimeAttention` | (ledger skill scripts) | The interim mailbox becomes a first-class command set (ADR-0004 stays the target). |
+| `CreateWorkset`, `AcceptWorkset`, `CancelWorkset`, `ApplyGraphPatch`, `QueryReady` | (new — proposal 0001) | Patch-only graph mutation; readiness derived, never stored. `AcceptWorkset` is operator-only. |
+| `RecordArtifact`, `RecordEvidence`, `RecordGateVerdict` | (new — proposal 0001) | Version-bound records; reject subject-less evidence at the schema. |
+| `OpenLoop`, `RecordAttempt`, `EscalateLoop` | (new — proposal 0001) | Append-only attempt/loop lineage; budgets checked cumulatively. |
 | `MonitorHealth`, `MonitorStop`, `MonitorReset` | `monitor …` | Reset keeps the coherent-boundary rule. |
 
 Rules:

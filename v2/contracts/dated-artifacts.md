@@ -46,6 +46,10 @@ reported-done-unverified | acknowledged-report-no-current-outcome | unknown-or-m
 
 `evidence_problem` gates every outcome category — a task with unsafe or malformed evidence can never be classified as anything stronger than its evidence supports. The handoff parser is loaded from the **validated checkout only** (`--repo-root` must resolve to the same dev/ino as the script's own repo): another checkout cannot supply executable parser code.
 
+## Lessons — `rozoro.lesson/v1` (v2 addition — proposal 0001, P8)
+
+`lessons/…/` → `lesson.md`, `metadata.json`: `{pattern, applicability, evidence_refs, confidence, recommendation}`. A lesson is reusable learning (not a run log): same immutable dated-artifact discipline, written on explicit operator or watchtower decision, consumed by the level-4 meta loop (policy edits, mission tuning) with provenance intact.
+
 ## Division of labor
 
 - Conversational status ("get me up to speed") is a separate skill and is **forbidden from persisting files**; progress reports are the persisted counterpart, generated only on explicit operator request.

@@ -20,7 +20,7 @@ Black-box over **commands**, with every port faked. They state what the product 
 - Every v1 guarantee that concerns core semantics is carried over; the port starts from v1's suites (`lifecycle.bats`, `handoff.bats`, `ledger.bats`, `cli-event-bus.bats`, `test_reducer.py`, `test_delivery_ledger.py`, `test_notify.py`, `test_protocol.py`'s semantic cases). A tracking table in the phase-1 PR maps each v1 test name → v2 test or a retirement rationale. Nothing is dropped silently.
 - Style rules: given/when/then over fakes; assertions on returned types and durable state via ports; no sleeps (fake clock); no filesystem outside the fake stores.
 
-Representative promises (from v1, non-exhaustive): teardown preserves the durable record byte-for-byte; resume refuses a tracked task; a `done` report never changes availability or implies acceptance; twenty actionable events remain twenty facts through coalescing; an edge landing mid-reconcile re-nudges; generation ACK never resolves task open items; ambiguous identity is always fatal.
+Representative promises (from v1, non-exhaustive; proposal 0001 adds the work-graph set — readiness explains every non-ready node; a stale-base patch is refused; cumulative budgets never reset on fresh worktrees; stale evidence never supports acceptance; workset success requires operator acceptance): teardown preserves the durable record byte-for-byte; resume refuses a tracked task; a `done` report never changes availability or implies acceptance; twenty actionable events remain twenty facts through coalescing; an edge landing mid-reconcile re-nudges; generation ACK never resolves task open items; ambiguous identity is always fatal.
 
 ## Capability (`<code-root>/tests/capability/`)
 
@@ -40,7 +40,8 @@ For sensitive mechanics where a plausible-looking implementation can be subtly c
 3. **Ordering domains** — producer-seq gap buffering and de-certification; replay permutations produce no false quiescence (v1: `test_reducer.py`).
 4. **Security discipline** — symlink/hardlink/traversal/FIFO/control-char/rename-swap rejection; owner-private modes; socket identity proofs; parser-differential JSON (duplicates, surrogates, NaN); frame-size-before-parse (v1: `watchtower-security.bats`, `test_server.py`, `test_protocol.py`).
 5. **Import boundary** — the AST walk enforcing the [dependency rules](./core-and-commands.md#dependency-rules-enforced-not-aspirational), plus a consumer audit in the spirit of v1's home-resolution source audit (registry + mutation-tested decoys).
-6. **Wire codec exactness** — closed-set round-trip corpus (the v1 `protocol-v1/messages.ndjson` pattern: set-equality so an unfixtured message type fails).
+6. **Graph and evidence integrity** — patch replay reproduces every graph version; staleness is monotonic; evidence without a version-bound subject is rejected at the schema; attempt lineage is acyclic and append-only.
+7. **Wire codec exactness** — closed-set round-trip corpus (the v1 `protocol-v1/messages.ndjson` pattern: set-equality so an unfixtured message type fails).
 
 ## Harness and CI
 

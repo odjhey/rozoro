@@ -12,9 +12,10 @@ created_at: 2026-08-28T00:00:00+08:00
 
 # Bounded contexts
 
-Rozoro decomposes into six bounded contexts. Each file states the context's core question, what it owns, its invariants, and its boundary rule. The [context map](../product-architecture.md#context-map) shows how they relate.
+Rozoro v2 decomposes into seven bounded contexts (six carried from v1, plus Work Graph). Each file states the context's core question, what it owns, its invariants, and its boundary rule. The [context map](../product-architecture.md#context-map) shows how they relate.
 
 - [Durable Tasks](./durable-tasks.md) — *what work exists, and what has been reported?*
+- [Work Graph](./work-graph.md) — *what work exists in relation to other work, and what is runnable now?* (v2 addition, proposal 0001)
 - [Session Hosting](./session-hosting.md) — *where is this agent running right now?*
 - [Lifecycle Evidence](./lifecycle-evidence.md) — *what is certifiably true about each session now?*
 - [Wake Delivery](./wake-delivery.md) — *when and how may the watchtower be interrupted?*

@@ -68,6 +68,20 @@ Body sections are exactly `## Snapshot`, `## Handling log`, `## Context` — any
 
 `handled` here means the watchtower dealt with its own attention — it is **not** task open-item resolution, not generation ACK, not a handoff verdict, and not operator acceptance. The ledger records routing decisions; the durable task record and delivery cursors keep their own truth.
 
+## Decision records (v2 addition — proposal 0001, P7)
+
+For genuine choice points (executor selection, retry-vs-replan, merge order, accept-despite-warning) an attention item may carry an optional `## Decision` section with structured lines:
+
+```markdown
+## Decision
+- alternatives: [send-follow-up, restart, replan]
+- selected: replan
+- rationale: same verification failure twice on unchanged head
+- evidence: [ev-01J…, ev-01K…]
+```
+
+Parsed strictly like the other sections; items without a decision section are unchanged. This keeps auditability in the ledger the watchtower already primes from, instead of a parallel store.
+
 ## Known seam
 
 The lineage view reads items with its own loose regexes rather than the canonical parser — a duplicated reader likely to diverge (see [rewrite seams](../rewrite-seams.md)).
