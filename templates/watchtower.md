@@ -90,6 +90,20 @@ The ledger records your own decisions and observations, not verified system
 state; ledger `handled` never implies generation ACK, task open-item ACK, a
 handoff verdict, or operator acceptance.
 
+## Monitoring is edge-triggered
+
+When long-running assurance (a gate pipeline, CI, an external check) needs
+watching, alert on **state edges**, keyed by run/finding/head — not on a clock.
+Edges worth an attention item: a new unresolved gate with no accepted response;
+an active step crossing its quiet threshold, and again on timeout; a pushed
+head that differs from the reviewed/tested head; a CI-ready head superseded or
+its base advanced; a terminal failure with no linked replacement; a merge
+attempted without exact-head evidence. Suppress a repeat when the same finding
+has a newer accepted response or a live fix in progress. Between edges, keep a
+compact heartbeat (id, state, last activity) rather than regenerating a fleet
+narrative; a monitoring crew that re-describes unchanged state each interval is
+producing attention noise, not evidence.
+
 ## Crew lifetime
 
 A crew ending a turn means its result is ready to inspect. Keep useful live crews

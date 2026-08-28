@@ -79,3 +79,32 @@ most-repeated review finding.
 - The suite runs in a Linux container (`tests/run.sh`, network-disabled);
   don't depend on macOS-specific behavior, and don't assume network access.
 - For a bug fix, write the test so it fails before the fix and passes after.
+
+### Contract checklist — settle these before the first gate submission
+
+Fleet timing analysis showed most review roundtrips rediscover the same
+contract classes one finding at a time. Walk the classes that apply to your
+change and state the answer in the deliverable (or your session intent)
+up front; then the gate confirms instead of discovers.
+
+- **Final topology and scope:** exact base/merge-base, allowed path set,
+  docs-only vs code-only class, exact commit count/title, whether
+  pipeline-generated fix/document commits must be folded.
+- **CLI grammar:** global option positions, presence-only vs valued options,
+  help/version combinations, unknown/duplicate option handling, context
+  (e.g. store) propagation on success and failure, exact JSON and human
+  output channels, exact errors and exit codes.
+- **Bounded output:** top-level and nested list bounds, deterministic order
+  and cursor tie-breaks, continuation commands carrying their context,
+  dangling-target terminal behavior.
+- **Ownership boundaries:** which layer owns discovery/transport vs
+  normalization/preflight vs storage atomicity; reference vs application
+  source classification; catalog/test-number ownership.
+- **Atomic creation and provenance:** create-if-absent across every creator,
+  update-only save, descriptor vs attempt semantics, crash windows,
+  cross-operation concurrency.
+- **Hostile persisted data:** admit only plain detached data, reject
+  proxies/accessors/exotics, tag trusted-but-malformed rows, map unknown
+  throws to operational failure, keep public errors exact.
+- **Authenticated human-gate evidence:** identity, authenticated platform
+  event, exact base/head/tree/date/signature tuple — never self-declared.
