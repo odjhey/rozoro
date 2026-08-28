@@ -71,7 +71,7 @@ default harness. It does not create or rewrite the optional
 |---|---|
 | **Start** a task (blessed) | `./bin/rozoro start <display-name> --body <file> --cwd <repo> [spawn flags]` — reserves and prints an immutable task key, renders a durable brief, spawns, and links the session in one unskippable step |
 | **Start** (low-level) | `./bin/rozoro spawn <id> --crew <preset> --cwd <repo> --prompt "<task>"` (or `--brief <file>`) — raw spawn; no task folder, no handoff protocol, no session link |
-| **Steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` |
+| **Follow-up / steer** (DATA — text the agent reads) | `./bin/rozoro send <id> "<text>"` — defaults to **follow-up** (waits for the crew to be idle/done/blocked before delivering; never steals a turn in progress) on `pi`-harness crews today, other harnesses still default to immediate delivery. Pass `--mode steer` to interrupt now regardless of state, or `--mode followup` to force the wait explicitly |
 | **Interrupt / cancel / key press / restart** (CONTROL — a closed verb list the harness *executes*, never text the agent might interpret as chat) | `./bin/rozoro control <id> interrupt` · `./bin/rozoro control <id> cancel` · `./bin/rozoro control <id> key <name>` · `./bin/rozoro control <id> restart` |
 | **Resume** a reaped task | `./bin/rozoro resume <id> [--prompt "<follow-up>"]` — reopens the *exact* Claude, Codex, Copilot, or Pi conversation as a fresh tab; for a task torn down before a follow-up arrived. If the crew is still live, use **send**, not resume |
 | **Stop / reap** | `./bin/rozoro teardown <id>` (≡ `./bin/rozoro control <id> stop`) — closes the tracked tab/runtime record only; durable task/session data and every repository/worktree file remain untouched |
@@ -208,9 +208,11 @@ answer itself, but whether the answer already exists.
    then `./bin/rozoro ack <id>` so it stops resurfacing. **`done` is an invitation to
    review, not a signal to reap** — a done crew sits idle at ~0 cost, so leave it
    alive (see step 6).
-5. Steer any crew that needs it with `./bin/rozoro send`; the user can also click the tab
-   and type directly. Also call `./bin/rozoro link <id> <cwd>` here if the birth-time link
-   was not yet captured (idempotent).
+5. Send any crew that needs it a follow-up with `./bin/rozoro send`; the user can also
+   click the tab and type directly. On `pi`-harness crews this defaults to waiting
+   for the crew to be idle before delivering — pass `--mode steer` only when the
+   crew genuinely needs to be interrupted mid-turn. Also call `./bin/rozoro link <id>
+   <cwd>` here if the birth-time link was not yet captured (idempotent).
 6. **Keep crews alive until the result is accepted; reap conservatively.** A `done`
    verdict is not acceptance — the user still has to review it, and review comes
    *after* a delay. Tearing down on `done` throws away the crew's live context, so

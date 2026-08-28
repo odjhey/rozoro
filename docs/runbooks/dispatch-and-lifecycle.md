@@ -19,7 +19,10 @@ The Watchtower dispatches, routes, and judges. A crew investigates the target re
 - On a notification, reconcile and inspect the named task.
 - Treat the latest valid handoff verdict as authoritative; terminal-pane state alone is not acceptance.
 - `done` means ready for verification, not accepted or merged.
-- Send follow-up to the same live task. If it was reaped, resume that context instead of creating a replacement.
+- Send follow-up to the same live task. `send` defaults to non-interrupting follow-up
+  delivery (waits for the crew to be idle) on `pi`-harness crews; use `send --mode
+  steer` only when the crew must be interrupted mid-turn. If it was reaped, resume
+  that context instead of creating a replacement.
 - A `needs-action` report must state the exact operator decision required.
 - Treat `waiting` as valid only when supported background work is currently active and no input is requested.
 
