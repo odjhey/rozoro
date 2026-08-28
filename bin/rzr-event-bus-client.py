@@ -184,7 +184,7 @@ def compat(report):
       "snapshot_folder_present":p.get("folder_present")}
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true"); ap.add_argument("--full",action="store_true")
+    ap=argparse.ArgumentParser(); ap.add_argument("operation",choices=["status","reconcile","authority-activate","authority-disable","send-enqueue","send-status"]); ap.add_argument("--task"); ap.add_argument("--driver"); ap.add_argument("--json",action="store_true"); ap.add_argument("--full",action="store_true"); ap.add_argument("--payload"); ap.add_argument("--timeout-ms",type=int,default=120000)
     a=ap.parse_args(); home_arg=os.environ.get("ROZORO_HOME") or os.environ.get("RZR_HOME") or str(Path.home()/".rozoro")
     try: home,home_fd=_open_home(home_arg,create=False)
     except (OSError,UnsafePathError) as exc: raise BridgeError(f"refusing unsafe ROZORO_HOME: {exc}") from exc
@@ -202,6 +202,16 @@ def main():
             flow.request(req("driver.disable",driver_id=a.driver))
             boundary.disable(a.driver)
             print(a.driver)
+          elif a.operation=="send-enqueue":
+            # Task-scoped: no driver ledger is involved, so the authority
+            # boundary above is inert for this path by design.
+            if not a.task: ap.error("--task is required")
+            if not a.payload: ap.error("--payload is required")
+            print(json.dumps(flow.request(req("send.enqueue",task_id=a.task,payload=a.payload,
+                                              timeout_ms=a.timeout_ms)),sort_keys=True,separators=(",",":")))
+          elif a.operation=="send-status":
+            if not a.task: ap.error("--task is required")
+            print(json.dumps(flow.request(req("send.status",task_id=a.task)),sort_keys=True,separators=(",",":")))
           elif a.operation=="status":
             if not a.task: ap.error("--task is required")
             active_drivers=[]

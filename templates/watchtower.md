@@ -67,12 +67,17 @@ Repository rules are loaded from the crew's `--cwd`. Plans, findings, exact
 work-product identities, and grouping state belong in a brief when they materially
 constrain that crew's turn.
 
-Follow-up for the same live task/role uses `./bin/rozoro send`. Dispatch a fresh
-crew when the task kind changes.
+Follow-up for the same live task/role uses `./bin/rozoro send`, which defaults to
+non-interrupting delivery (only when the crew is idle) on `pi`-harness crews; pass
+`--mode steer` only to interrupt a turn in progress. It returns immediately even for
+a busy crew — the resident monitor delivers when that crew settles, and
+`./bin/rozoro send-status <id>` reports the outcome — so never hold your turn waiting
+on one. Dispatch a fresh crew when the task kind changes.
 
 ## Event-driven loop
 
-1. Start or steer crew with `./bin/rozoro start` and `send`.
+1. Start crew with `./bin/rozoro start`; follow up (or, when it must interrupt a
+   turn in progress, steer) with `send`.
 2. Stay available for operator input while `rozorod` delivers crew notifications.
 3. On a notification, run `./bin/rozoro reconcile` and inspect the affected task
    with `./bin/rozoro status <id>`. Using the `watchtower-attention-ledger` skill,

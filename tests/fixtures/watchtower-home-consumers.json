@@ -108,6 +108,7 @@
     "bin/rzr-resume.sh",
     "bin/rzr-rollback.sh",
     "bin/rzr-runtime.py",
+    "bin/rzr-send-status.sh",
     "bin/rzr-send.sh",
     "bin/rzr-spawn.sh",
     "bin/rzr-start.sh",
@@ -157,6 +158,7 @@
     "tests/python/test_herdr.py",
     "tests/python/test_monitor_lifecycle.py",
     "tests/python/test_notify.py",
+    "tests/python/test_pending_sends.py",
     "tests/python/test_policy_contracts.py",
     "tests/python/test_projections_report.py",
     "tests/python/test_protocol.py",
@@ -174,6 +176,7 @@
     "tests/rollback-process.py",
     "tests/run.sh",
     "tests/test_helper/common.bash",
-    "tests/test_helper/event_server.py"
+    "tests/test_helper/event_server.py",
+    "tests/test_helper/fake_herdr_daemon.py"
   ]
 }

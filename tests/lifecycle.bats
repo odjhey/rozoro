@@ -234,6 +234,46 @@ JSON
   assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tsend-keys\tp1\tesc'
 }
 
+@test "send followup mode delegates delivery and never pokes the pane itself" {
+  # Follow-up delivery belongs to the resident monitor, which watches the pane
+  # and delivers when the crew settles. With no monitor running, this must fail
+  # loudly rather than fall back to interrupting a crew mid-turn.
+  write_meta task 'pane=p1' 'harness=pi'
+  fake_status p1 working
+  run rzr-send.sh task hello
+  assert_failure
+  assert_output_contains 'resident monitor'
+  assert_output_contains '--mode steer'
+  ! grep -F $'agent\tprompt\tp1' "$FAKE_HERDR_LOG"
+  ! grep -F $'agent\twait\tp1' "$FAKE_HERDR_LOG"
+}
+
+@test "send --mode steer bypasses followup even on a pi-harness task" {
+  write_meta task 'pane=p1' 'harness=pi'
+  fake_status p1 working
+  run rzr-send.sh task hello --mode steer
+  assert_success
+  ! grep -F $'agent\twait\tp1' "$FAKE_HERDR_LOG"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\thello'
+}
+
+@test "send defaults a non-pi-harness task to steer mode, unchanged" {
+  write_meta task 'pane=p1' 'harness=claude'
+  fake_status p1 working
+  run rzr-send.sh task hello
+  assert_success
+  ! grep -F $'agent\twait\tp1' "$FAKE_HERDR_LOG"
+  assert_file_contains "$FAKE_HERDR_LOG" $'CALL\tagent\tprompt\tp1\thello'
+}
+
+@test "send rejects an unknown --mode" {
+  write_meta task 'pane=p1' 'harness=pi'
+  fake_status p1 idle
+  run rzr-send.sh task hello --mode bogus
+  assert_failure
+  assert_output_contains "unknown --mode 'bogus'"
+}
+
 @test "control refuses a dead pane" {
   write_meta task 'pane=p1' 'tab=t1'
   run rzr-control.sh task cancel

@@ -986,6 +986,29 @@ rzr_agent_snapshot() {  # <pane> -> status<TAB>ordered-revision
 
 rzr_agent_status() { rzr_agent_snapshot "$1" | cut -f1; }
 
+# Poll for a settled pane status instead of trusting a herdr mutation's exit
+# code alone - the verified postcondition shared by rzr-control.sh (post-
+# interrupt/cancel settle) and rzr-send.sh followup mode (wait for idle before
+# delivering).
+rzr_wait_status() {  # <pane> <timeout-ms> <until-states...>
+  local pane="$1" timeout_ms="$2"; shift 2
+  local args=(agent wait "$pane" --timeout "$timeout_ms")
+  local s; for s in "$@"; do args+=(--until "$s"); done
+  rzr_herdr "${args[@]}" >/dev/null 2>&1
+}
+
+# Default rzr-send.sh dispatch mode for a task's recorded harness. `pi` crews
+# default to followup (wait for idle; never interrupt a turn in progress).
+# Every other harness still defaults to steer (today's immediate-send
+# behavior) until its followup path is validated too - extend this case as
+# each harness is ready (claude cli next).
+rzr_default_send_mode() {  # <harness>
+  case "$1" in
+    pi) printf 'followup\n' ;;
+    *)  printf 'steer\n' ;;
+  esac
+}
+
 # `herdr agent start` can return agent_not_ready after it has successfully
 # claimed the pane and launched the harness, while the harness is still crossing
 # its startup readiness gate. In that case starting it again risks colliding with

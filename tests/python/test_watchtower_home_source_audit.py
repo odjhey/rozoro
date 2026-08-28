@@ -388,14 +388,15 @@ class HomeSourceAuditTests(unittest.TestCase):
         inventory = load_fixture()
         self.assertEqual((len(inventory["direct_default"]), len(inventory["inherited_explicit_only"]), len(inventory["excluded"])), (11, 8, 1))
         self.assertEqual(
-            99, len(manifest),
-            "bound 94 + H2 monitor matrix + H3 extension matrix/child TypeScript sources + lineage pair",
+            102, len(manifest),
+            "bound 94 + H2 monitor matrix + H3 extension matrix/child TypeScript sources + lineage pair"
+            " + follow-up delivery trio (send-status verb, its tests, fake Herdr daemon)",
         )
         for names in (manifest, git_names, archive_names):
             self.assertEqual(names, sorted(set(names)))
-            self.assertEqual(len(names), 99)
+            self.assertEqual(len(names), 102)
             self.assertEqual(names, manifest)
-        self.assertEqual((len(manifest), len(git_names), len(archive_names)), (99, 99, 99))
+        self.assertEqual((len(manifest), len(git_names), len(archive_names)), (102, 102, 102))
         for mode in ("auto", "archive"):
             sources, errors = self.current(mode)
             self.assertEqual(audit(load_fixture(), sources, errors), [])

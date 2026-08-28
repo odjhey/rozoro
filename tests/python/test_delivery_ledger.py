@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.rozoro_monitor.store import ActionableChange, EventStore
+from lib.rozoro_monitor.store import SCHEMA_VERSION, ActionableChange, EventStore
 
 
 def event(number):
@@ -216,7 +216,8 @@ class DeliveryLedgerTests(unittest.TestCase):
     def test_populated_v4_generation_history_is_rejected_for_reset(self):
         with EventStore(self.db) as store:
             store.accept_event(event(1))
-            self.assertEqual(store.schema_version, 6)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("DROP TABLE delivery_offers")
@@ -229,6 +230,7 @@ class DeliveryLedgerTests(unittest.TestCase):
     def test_populated_v5_snapshots_are_rejected_instead_of_silent_empty_backfill(self):
         with EventStore(self.db) as store:
             store.accept_event(event(1))
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("PRAGMA user_version=5")
@@ -243,6 +245,7 @@ class DeliveryLedgerTests(unittest.TestCase):
             store._connection.execute(
                 "INSERT INTO task_projections(task_id,last_event_seq,projection_json) VALUES('zero',0,'{}')"
             )
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("PRAGMA user_version=5")
@@ -254,6 +257,7 @@ class DeliveryLedgerTests(unittest.TestCase):
             store._connection.execute(
                 "INSERT INTO task_projections(task_id,last_event_seq,projection_json) VALUES('zero',0,'{}')"
             )
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("DROP TABLE delivery_offers")
@@ -265,16 +269,18 @@ class DeliveryLedgerTests(unittest.TestCase):
 
     def test_empty_v5_upgrades_with_explicit_complete_marker(self):
         with EventStore(self.db) as store:
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("PRAGMA user_version=5")
         with EventStore(self.db) as store:
-            self.assertEqual(store.schema_version, 6)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
             columns = {row[1] for row in store._connection.execute("PRAGMA table_info(generation_task_snapshots)")}
             self.assertIn("compat_complete", columns)
 
     def test_empty_v4_migration_and_transaction_rollback(self):
         with EventStore(self.db) as store:
+            store._connection.execute("DROP TABLE pending_sends")
             store._connection.execute("ALTER TABLE generation_task_snapshots DROP COLUMN compat_complete")
             store._connection.execute("DROP TABLE disabled_drivers")
             store._connection.execute("DROP TABLE delivery_offers")
@@ -282,7 +288,7 @@ class DeliveryLedgerTests(unittest.TestCase):
             store._connection.execute("DROP TABLE generation_membership_snapshots")
             store._connection.execute("PRAGMA user_version=4")
         with EventStore(self.db) as store:
-            self.assertEqual(store.schema_version, 6)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
             original = store._commit
             store._commit = lambda: (_ for _ in ()).throw(RuntimeError("crash"))
             with self.assertRaises(RuntimeError):

@@ -271,3 +271,58 @@ PY
 )"
   [ "$before" = "$after" ]
 }
+
+# Bring up a fake Herdr socket and point the monitor at it, so a crew pane's
+# state is a file this test controls. `seed_task` alone leaves the daemon with
+# no members, which cannot exercise delivery.
+start_herdr_and_monitor() {  # <pane-status>
+  export FAKE_HERDR_SOCKET_PATH="$TEST_ROOT/fake-herdr.sock"
+  export FAKE_HERDR_PROMPTS="$TEST_ROOT/prompts.log"
+  : > "$FAKE_HERDR_PROMPTS"
+  printf '%s\n' "$1" > "$FAKE_HERDR_ROOT/status.p1"
+  write_meta task-1 'pane=p1' 'harness=pi'
+  python3 "$REPO_ROOT/tests/test_helper/fake_herdr_daemon.py" \
+    "$FAKE_HERDR_SOCKET_PATH" "$FAKE_HERDR_ROOT" "$FAKE_HERDR_PROMPTS" 3>&- &
+  register_pid "$!"
+  for _ in $(seq 1 100); do [ -S "$FAKE_HERDR_SOCKET_PATH" ] && break; sleep 0.05; done
+  [ -S "$FAKE_HERDR_SOCKET_PATH" ] || return 1
+  export ROZORO_HERDR_SOCKET="$FAKE_HERDR_SOCKET_PATH"
+  export ROZORO_STATE_DIR="$ROZORO_HOME/state"
+  export ROZORO_MONITOR_PENDING_SEND_SWEEP_INTERVAL=0.2
+  start_monitor
+}
+
+@test "send delivers to an idle crew and reports it delivered" {
+  seed_task; start_herdr_and_monitor idle
+  run "$REPO_ROOT/bin/rozoro" send task-1 'look again'
+  assert_success
+  assert_output_contains 'sent to'
+  assert_file_contains "$FAKE_HERDR_PROMPTS" $'p1\tlook again'
+  run "$REPO_ROOT/bin/rozoro" send-status task-1
+  assert_success
+  assert_output_contains 'delivered'
+}
+
+@test "send returns immediately for a working crew and delivers once it settles" {
+  seed_task; start_herdr_and_monitor working
+  run "$REPO_ROOT/bin/rozoro" send task-1 'look again'
+  assert_success
+  assert_output_contains 'queued follow-up'
+  # Nothing may reach a crew that is mid-turn.
+  [ ! -s "$FAKE_HERDR_PROMPTS" ]
+  run "$REPO_ROOT/bin/rozoro" send-status task-1
+  assert_output_contains 'pending'
+
+  printf 'idle\n' > "$FAKE_HERDR_ROOT/status.p1"
+  for _ in $(seq 1 100); do [ -s "$FAKE_HERDR_PROMPTS" ] && break; sleep 0.1; done
+  assert_file_contains "$FAKE_HERDR_PROMPTS" $'p1\tlook again'
+  run "$REPO_ROOT/bin/rozoro" send-status task-1
+  assert_output_contains 'delivered'
+}
+
+@test "send-status reports nothing for a task never sent to" {
+  seed_task; start_herdr_and_monitor idle
+  run "$REPO_ROOT/bin/rozoro" send-status task-1
+  assert_success
+  assert_output_contains 'no follow-up on record'
+}
