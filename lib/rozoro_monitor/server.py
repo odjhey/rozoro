@@ -11,6 +11,7 @@ import resource
 import socket
 import stat
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -19,15 +20,19 @@ from .notify import Coalescer, DeliveryResult, DeliveryStatus
 from .client import _open_home
 from .store import EventStore
 from .herdr import (
-    EmptySubscription, MembershipMonitor, PaneLevel, UnixHerdrSubscription,
-    read_pane_level,
+    EmptySubscription, HerdrAPIError, MembershipMonitor, PaneLevel,
+    UnixHerdrSubscription, herdr_rpc, read_pane_level,
 )
 
 MAX_CLIENTS = int(os.environ.get("ROZORO_MONITOR_MAX_CLIENTS", "64"))
 READ_TIMEOUT = float(os.environ.get("ROZORO_MONITOR_READ_TIMEOUT", "5.0"))
 SPOOL_INTERVAL = float(os.environ.get("ROZORO_MONITOR_SPOOL_INTERVAL", "2.0"))
-if MAX_CLIENTS < 2 or READ_TIMEOUT <= 0 or SPOOL_INTERVAL <= 0:
+PENDING_SEND_SWEEP_INTERVAL = float(
+    os.environ.get("ROZORO_MONITOR_PENDING_SEND_SWEEP_INTERVAL", "5.0"))
+if MAX_CLIENTS < 2 or READ_TIMEOUT <= 0 or SPOOL_INTERVAL <= 0 or PENDING_SEND_SWEEP_INTERVAL <= 0:
     raise RuntimeError("invalid monitor resource limits")
+# Pane states in which an agent can receive a follow-up without losing a turn.
+DELIVERABLE_STATUS = frozenset({"idle", "blocked", "done"})
 # asyncio pauses each transport at twice its StreamReader limit. The client cap
 # therefore makes aggregate userspace input buffering finite and auditable.
 MAX_BUFFERED_BYTES = MAX_CLIENTS * 2 * (protocol.MAX_FRAME_BYTES + 1)
@@ -56,8 +61,11 @@ class MonitorServer:
         self._listener: socket.socket | None = None
         self._accept_task: asyncio.Task[None] | None = None
         self._spool_task: asyncio.Task[None] | None = None
+        self._pending_send_task: asyncio.Task[None] | None = None
         self._herdr: MembershipMonitor | None = None
+        self._herdr_socket: str | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
+        self._delivery_tasks: set[asyncio.Task[None]] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._capacity = asyncio.Event()
         self._capacity.set()
@@ -240,6 +248,8 @@ class MonitorServer:
                 except (OSError, ValueError, TimeoutError):
                     herdr_socket = None
             if herdr_socket:
+                self._herdr_socket = herdr_socket
+
                 async def level_reader(pane_id: str) -> PaneLevel:
                     return await read_pane_level(
                         herdr_socket, pane_id,
@@ -248,7 +258,15 @@ class MonitorServer:
                 async def reconcile(task_id: str, level: PaneLevel) -> None:
                     assert self._store is not None
                     self._store.reconcile_herdr_liveness(task_id, pane_exists=level.exists)
+                    # Runs under MembershipMonitor's monitor-wide apply lock, so
+                    # only the local claim happens here; the Herdr round trip is
+                    # handed to a background task rather than stalling every
+                    # other pane's reconciliation behind one slow RPC.
+                    row = self._claim_deliverable(task_id, level)
+                    if row is not None:
+                        self._track_delivery(self._deliver(row, level.pane_id))
 
+                self._pending_send_task = asyncio.create_task(self._pending_send_loop())
                 self._herdr = MembershipMonitor(
                     state_dir, lambda panes: (UnixHerdrSubscription(herdr_socket, panes)
                                               if panes else EmptySubscription()),
@@ -346,6 +364,79 @@ class MonitorServer:
         except asyncio.CancelledError:
             pass
 
+    # --- pending follow-up delivery ----------------------------------------
+
+    def _track_delivery(self, coroutine: Any) -> None:
+        task = asyncio.create_task(coroutine)
+        self._delivery_tasks.add(task)
+        task.add_done_callback(self._delivery_tasks.discard)
+
+    def _claim_deliverable(self, task_id: str, level: PaneLevel) -> dict[str, Any] | None:
+        """Take ownership of this task's follow-up if its pane can receive it.
+
+        A gone pane retires the follow-up here rather than leaving it to expire,
+        so the driver learns the real reason instead of a timeout. Claiming is a
+        local write, safe to call from a lock-held caller.
+        """
+        assert self._store is not None
+        if level.exists is False:
+            row = self._store.claim_pending_send(task_id)
+            if row is not None:
+                self._store.resolve_pending_send(row["send_id"], "failed", "pane is gone")
+            return None
+        if level.status not in DELIVERABLE_STATUS:
+            return None
+        return self._store.claim_pending_send(task_id)
+
+    async def _deliver(self, row: dict[str, Any], pane_id: str) -> None:
+        """Submit one claimed follow-up and record its terminal outcome."""
+        assert self._store is not None and self._herdr_socket is not None
+        try:
+            await herdr_rpc(self._herdr_socket, "agent.prompt",
+                            {"target": pane_id, "text": row["payload"]},
+                            timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
+        except (OSError, TimeoutError, ConnectionError, ValueError, HerdrAPIError) as exc:
+            self._store.resolve_pending_send(row["send_id"], "failed", str(exc))
+        else:
+            self._store.resolve_pending_send(row["send_id"], "delivered")
+
+    async def _deliver_if_ready(self, task_id: str) -> None:
+        """Re-check one task's pane now and deliver its follow-up if possible."""
+        if self._herdr is None or self._herdr_socket is None:
+            return
+        member = self._herdr.members.get(task_id)
+        if member is None:
+            return
+        level = await read_pane_level(
+            self._herdr_socket, member.pane_id,
+            timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
+        row = self._claim_deliverable(task_id, level)
+        if row is not None:
+            await self._deliver(row, member.pane_id)
+
+    async def _pending_send_loop(self) -> None:
+        """Expire overdue follow-ups, but only after one last live check.
+
+        Status edges normally deliver a follow-up long before its deadline. A
+        deadline shorter than the membership rescan interval could otherwise
+        expire a follow-up whose pane had genuinely gone idle, so every overdue
+        task gets a fresh read before the blind sweep retires it.
+        """
+        try:
+            while True:
+                await asyncio.sleep(PENDING_SEND_SWEEP_INTERVAL)
+                assert self._store is not None
+                try:
+                    for task_id in self._store.expired_pending_send_tasks():
+                        await self._deliver_if_ready(task_id)
+                    self._store.sweep_expired_pending_sends()
+                except (OSError, TimeoutError, ConnectionError, ValueError, HerdrAPIError):
+                    # A transient Herdr outage must not kill the sweep; the next
+                    # tick retries and the deadline still bounds the wait.
+                    pass
+        except asyncio.CancelledError:
+            pass
+
     async def _accept_loop(self) -> None:
         assert self._listener is not None
         loop = asyncio.get_running_loop()
@@ -407,7 +498,8 @@ class MonitorServer:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "event.error", "event_id": raw["event_id"], "code": code}
         elif message_type in {"health", "task.status", "driver.snapshot", "driver.disable", "driver.authority", "reconcile.pending", "reconcile.ack",
-                              "monitor.stop", "watchtower.register", "watchtower.availability", "notification.pending", "notification.delivered", "reconcile", "ack-generation"}:
+                              "monitor.stop", "watchtower.register", "watchtower.availability", "notification.pending", "notification.delivered", "reconcile", "ack-generation",
+                              "send.enqueue", "send.status"}:
             if code not in {"invalid-message", "invalid-field", "unsupported-type"} or "request_id" not in raw:
                 return MonitorServer._frame_error(code)
             candidate = {"v": 1, "type": "request.error", "request_id": raw["request_id"], "code": code}
@@ -490,6 +582,52 @@ class MonitorServer:
                                           "report_state": projection["report_state"],
                                           "verdict": projection["verdict"],
                                           "actionable_reason": projection["actionable_reason"]})
+                    elif message["type"] == "send.enqueue":
+                        assert self._store is not None
+                        reply = {"v": 1, "type": "send.enqueue.result",
+                                 "request_id": message["request_id"], "task_id": message["task_id"]}
+                        member = (self._herdr.members.get(message["task_id"])
+                                  if self._herdr is not None else None)
+                        if self._herdr is None or self._herdr_socket is None:
+                            reply.update({"state": "failed",
+                                          "error": "Herdr integration is not configured"})
+                        elif member is None:
+                            reply.update({"state": "failed",
+                                          "error": "task has no known pane"})
+                        else:
+                            level = await read_pane_level(
+                                self._herdr_socket, member.pane_id,
+                                timeout=float(os.environ.get("ROZORO_HERDR_RPC_TIMEOUT", "3")))
+                            if level.exists is False:
+                                reply.update({"state": "failed", "error": "pane is gone"})
+                            elif level.status not in DELIVERABLE_STATUS and level.exists is None:
+                                reply.update({"state": "failed",
+                                              "error": "pane status is unknown"})
+                            else:
+                                self._store.enqueue_pending_send(
+                                    uuid.uuid4().hex, message["task_id"],
+                                    message["payload"], message["timeout_ms"])
+                                # Already deliverable: land it in this same round
+                                # trip so the caller gets today's steer latency.
+                                row = self._claim_deliverable(message["task_id"], level)
+                                if row is None:
+                                    reply.update({"state": "pending"})
+                                else:
+                                    await self._deliver(row, member.pane_id)
+                                    current = self._store.pending_send(message["task_id"])
+                                    if current is not None and current["state"] == "delivered":
+                                        reply.update({"state": "delivered"})
+                                    else:
+                                        reply.update({"state": "failed",
+                                                      "error": (current or {}).get("error")})
+                    elif message["type"] == "send.status":
+                        assert self._store is not None
+                        row = self._store.pending_send(message["task_id"])
+                        reply = {"v": 1, "type": "send.status.result",
+                                 "request_id": message["request_id"],
+                                 "task_id": message["task_id"], "found": row is not None}
+                        if row is not None:
+                            reply.update({"state": row["state"], "error": row["error"]})
                     elif message["type"] == "driver.snapshot":
                         assert self._store is not None
                         reply = {"v": 1, "type": "driver.snapshot.result", "request_id": message["request_id"],
@@ -608,6 +746,18 @@ class MonitorServer:
         if self._herdr is not None:
             await self._herdr.close()
             self._herdr = None
+        if self._pending_send_task is not None:
+            self._pending_send_task.cancel()
+            await asyncio.gather(self._pending_send_task, return_exceptions=True)
+            self._pending_send_task = None
+        # Deliveries touch the store, so they must finish before it closes. A
+        # delivery cancelled mid-RPC stays 'delivering' and is retired as
+        # abandoned on the next start rather than re-sent into a crew's context.
+        if self._delivery_tasks:
+            for task in tuple(self._delivery_tasks):
+                task.cancel()
+            await asyncio.gather(*tuple(self._delivery_tasks), return_exceptions=True)
+        self._delivery_tasks.clear()
         if self._spool_task is not None:
             self._spool_task.cancel()
             await asyncio.gather(self._spool_task, return_exceptions=True)

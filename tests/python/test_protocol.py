@@ -23,7 +23,8 @@ class ProtocolFixturesTest(unittest.TestCase):
              "background.snapshot", "turn.stop", "session.end", "health", "monitor.stop",
              "health.result", "watchtower.register", "notification.pending",
              "notification", "notification.delivered", "reconcile", "reconcile.result",
-             "ack-generation", "ok", "ack", "frame.error", "event.error", "request.error"},
+             "ack-generation", "ok", "ack", "frame.error", "event.error", "request.error",
+             "send.enqueue", "send.enqueue.result", "send.status", "send.status.result"},
         )
         for message in messages:
             with self.subTest(type=message["type"]):
@@ -120,6 +121,18 @@ class StrictValidationTest(unittest.TestCase):
         self.assertIs(validate(notification), notification)
         for prose_field in ("message", "summary", "prompt", "reports", "task_ids"):
             self.assert_code("invalid-field", {**notification, prose_field: "crew prose"})
+
+    def test_send_payload_carries_prompt_text_within_one_frame(self) -> None:
+        enqueue = {"v": 1, "type": "send.enqueue", "request_id": "req-1",
+                   "task_id": "task-1", "payload": "x", "timeout_ms": 120000}
+        self.assertIs(validate(enqueue), enqueue)
+        # Prompt text needs far more room than a 128-character identifier, but
+        # must still fit one frame with its envelope.
+        at_limit = {**enqueue, "payload": "x" * 65_536}
+        self.assertIs(validate(at_limit), at_limit)
+        self.assert_code("invalid-field", {**enqueue, "payload": "x" * 65_537})
+        self.assert_code("invalid-field", {**enqueue, "payload": ""})
+        self.assert_code("invalid-field", {**enqueue, "timeout_ms": 0})
 
     def test_error_kinds_have_strict_correlation(self) -> None:
         frame_error = {"v": 1, "type": "frame.error", "code": "invalid-json"}

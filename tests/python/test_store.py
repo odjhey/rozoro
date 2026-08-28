@@ -39,7 +39,8 @@ class StoreTests(unittest.TestCase):
             )}
             self.assertTrue({"events", "sessions", "task_projections", "watchtower_deliveries",
                              "pending_generations", "pending_generation_tasks", "task_membership",
-                             "generation_task_snapshots", "daemon_metadata"} <= names)
+                             "generation_task_snapshots", "daemon_metadata",
+                             "pending_sends"} <= names)
 
     def create_v2_database(self):
         self.home.mkdir(parents=True, exist_ok=True)

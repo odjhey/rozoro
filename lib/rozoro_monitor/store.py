@@ -28,7 +28,7 @@ from .reducer import (
     set_adapter_connected,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -194,6 +194,22 @@ _MIGRATIONS = {
             driver_id TEXT PRIMARY KEY,
             disabled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
+    """,
+    7: """
+        CREATE TABLE pending_sends (
+            send_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending'
+                CHECK(state IN ('pending','delivering','delivered','failed','cancelled')),
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            deadline_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+        CREATE INDEX pending_sends_task ON pending_sends(task_id, created_at);
+        CREATE UNIQUE INDEX pending_sends_one_open ON pending_sends(task_id)
+            WHERE state IN ('pending','delivering');
     """,
 }
 
@@ -1356,6 +1372,116 @@ class EventStore:
                    WHERE generation<=? ORDER BY generation,task_id""",
                 (through,),
             ))
+
+    # --- pending follow-up sends -------------------------------------------
+    # A follow-up is text the driver wants a crew to read once that crew is no
+    # longer mid-turn. The row is the durable handoff between the enqueueing
+    # request and whichever later observer (a Herdr status edge, or the sweep)
+    # finds the pane deliverable.
+
+    def enqueue_pending_send(self, send_id: str, task_id: str, payload: str,
+                             timeout_ms: int) -> None:
+        """Register a follow-up, superseding any still-open one for this task.
+
+        Latest-wins: a driver enqueueing twice is updating intent, not ordering
+        two messages, so the older text must never also land.
+        """
+        with self._lock, self._immediate() as connection:
+            connection.execute(
+                """UPDATE pending_sends SET state='cancelled',error='superseded',
+                   resolved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE task_id=? AND state IN ('pending','delivering')""",
+                (task_id,),
+            )
+            connection.execute(
+                """INSERT INTO pending_sends(send_id,task_id,payload,deadline_at)
+                   VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now',
+                                         printf('%+.3f seconds',?)))""",
+                (send_id, task_id, payload, timeout_ms / 1000.0),
+            )
+
+    def claim_pending_send(self, task_id: str) -> dict[str, Any] | None:
+        """Atomically take ownership of this task's pending follow-up, if any.
+
+        Selecting and claiming in one transaction is what makes delivery
+        exactly-once: the store is single-connection, so of any number of
+        racing observers (status edge, sweep) only one can win a given row.
+        """
+        with self._lock, self._immediate() as connection:
+            row = connection.execute(
+                "SELECT * FROM pending_sends WHERE task_id=? AND state='pending'",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE pending_sends SET state='delivering' WHERE send_id=?",
+                (row["send_id"],),
+            )
+            return dict(row)
+
+    def resolve_pending_send(self, send_id: str, state: str, error: str | None = None) -> None:
+        """Retire a claimed follow-up with its terminal outcome."""
+        if state not in {"delivered", "failed", "cancelled"}:
+            raise ValueError("pending send must resolve to delivered, failed, or cancelled")
+        with self._lock, self._immediate() as connection:
+            connection.execute(
+                """UPDATE pending_sends SET state=?,error=?,
+                   resolved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE send_id=?""",
+                (state, None if error is None else error[:128], send_id),
+            )
+
+    def pending_send(self, task_id: str) -> dict[str, Any] | None:
+        """Return this task's most recent follow-up row, resolved or not."""
+        with self._lock:
+            row = self._connection.execute(
+                """SELECT * FROM pending_sends WHERE task_id=?
+                   ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            return None if row is None else dict(row)
+
+    def sweep_expired_pending_sends(self, stale_delivering_seconds: int = 3600) -> list[dict[str, Any]]:
+        """Fail follow-ups past their deadline, and abandoned in-flight ones.
+
+        A row still 'delivering' long after it was claimed means the daemon died
+        mid-delivery. It is failed rather than retried: the text may already
+        have reached the pane, and re-sending it would duplicate into the crew's
+        context, which is worse than a follow-up the driver can simply reissue.
+        """
+        with self._lock, self._immediate() as connection:
+            expired = [dict(row) for row in connection.execute(
+                """SELECT * FROM pending_sends WHERE state='pending'
+                   AND deadline_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            )]
+            abandoned = [dict(row) for row in connection.execute(
+                """SELECT * FROM pending_sends WHERE state='delivering'
+                   AND created_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now',
+                                            printf('%+.3f seconds',-?))""",
+                (stale_delivering_seconds,),
+            )]
+            for row in expired:
+                connection.execute(
+                    """UPDATE pending_sends SET state='failed',error='timeout',
+                       resolved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE send_id=?""",
+                    (row["send_id"],),
+                )
+            for row in abandoned:
+                connection.execute(
+                    """UPDATE pending_sends SET state='failed',
+                       error='daemon restarted mid-delivery; text may or may not have reached the pane',
+                       resolved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE send_id=?""",
+                    (row["send_id"],),
+                )
+            return expired + abandoned
+
+    def expired_pending_send_tasks(self) -> list[str]:
+        """Tasks whose follow-up is past its deadline but not yet swept."""
+        with self._lock:
+            return [row["task_id"] for row in self._connection.execute(
+                """SELECT DISTINCT task_id FROM pending_sends WHERE state='pending'
+                   AND deadline_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            )]
 
     def close(self) -> None:
         with self._lock:
