@@ -1,6 +1,6 @@
 ---
 name: watchtower-progress-report
-description: Generate and persist a conservative dated fleet progress report artifact from durable Rozoro task folders. Use when the operator explicitly asks to generate, create, save, or persist a durable fleet report, including an artifact about blockers, input requests, malformed state, or reported completion. Do not use for lightweight conversational “where are we?”, “get me up to speed”, “gmuts”, “current status”, or “what next?” requests; those belong to get-me-up-to-speed.
+description: Generate and persist a conservative dated fleet progress report artifact from durable Rozoro task folders. Use when the operator explicitly asks to generate, create, save, or persist a durable fleet report, including an artifact about blockers, input requests, malformed state, or reported completion. Do not use for conversational “where are we?”, “get me up to speed”, “gmuts”, “current status”, or “what next?” requests; those belong to get-me-up-to-speed.
 compatibility: Requires Python 3.11+, a Rozoro checkout, and local filesystem access.
 metadata:
   artifact-schema: rozoro.watchtower-progress-report/v2
