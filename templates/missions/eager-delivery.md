@@ -60,6 +60,12 @@ tables, no evidence reconciliation, no second-guessing a crew's cited
 evidence. When a handoff says done with evidence, accept it and move on; when
 it asks for input, answer or relay to the operator.
 
+For a ship task, "done with evidence" means the handoff's head chain is
+whole: the reviewed, pushed, CI, and merged SHA are named and equal (or the
+handoff says why they differ). Checking that chain is a mechanical equality
+test, not judgment; an unexplained mismatch routes back to the crew as a
+question, never gets relayed as done.
+
 ## Dispatch eagerly
 
 Gather only enough to route, then hand the work over: the id, the `--cwd`,
@@ -67,6 +73,41 @@ the task shape, and any posture the crew cannot infer. Everything past that
 line is the crew's job. Do not pre-solve to build a brief; keep briefs to
 intent + pointer, never a dossier. Follow-up on a task a crew already worked
 is a `send` to that live crew, never a fresh start with a new id.
+
+**The delivery contract is intent, not dossier.** When the ask has an exact
+shape, the brief states it declaratively up front: exact base/merge-base,
+allowed path set, docs-only vs code-only class, exact commit count/title, and
+whether pipeline-generated fix/document commits must be folded. Fleet
+measurement showed contract constraints discovered one rereview at a time —
+instead of stated once in the brief — were the single largest source of
+review roundtrips. When briefing into a repo gated by no-mistakes, include
+the standing authoring rules from `templates/crew-guidelines.md`.
+
+## Ship discipline
+
+Doctrine for Ship Crews working a gated repo; put these in the brief.
+
+- **Preflight before the first run.** Before the repo's first gate
+  submission this session, verify the pipeline can run: `no-mistakes
+  doctor`, agent credentials, required config. A credential failure is a
+  one-time infra fix, never a per-task discovery inside a durable run.
+- **Finalize topology once.** When intent requires an exact final commit
+  topology, land all review-driven fixes first, then perform the fold/squash
+  once — proving tree equivalence, parent, and path whitelist — and submit
+  only the finalized head for one final validation run. Never rerun
+  test/docs/push/CI on a head already known to violate the required
+  topology.
+- **Single-writer custody, refresh before validating.** One crew owns the
+  candidate branch from first review through landing. Refresh to the
+  required integration base *before* expensive validation, not after; when a
+  head is superseded, cancel its queued or running gate work immediately
+  rather than letting it reach a green that will be discarded.
+- **Batch blockers and decisions.** Collect all independent blockers in a
+  bounded pass before pausing; group findings by shared invariant and raise
+  one decision packet per batch. When a semantically identical finding
+  recurs on a new head, reuse the recorded standing decision (keep it in the
+  task folder) instead of re-asking; only genuinely new product semantics
+  need a fresh decision.
 
 ## Merge early, repair later
 
@@ -87,6 +128,10 @@ product; the backlog is the pressure valve.
 ## Measurement
 
 The mission's success metric is driver hops per deliverable staying near one:
-a dispatch, a handoff relay, a landing. Rising send counts or multi-crew
-lineages on single deliverables are the signal to recommend the `delivery`
-mission for that work rather than to add process here.
+a dispatch, a handoff relay, a landing. Driver hops alone can hide cost —
+a one-hop deliverable can still burn hours in crew-side loops — so also
+watch, per deliverable lineage: gate runs until completion (first-pass
+yield), review/fix roundtrips, and validation minutes spent on heads later
+superseded. Rising send counts, multi-crew lineages, or runs-per-deliverable
+drifting past ~2 are the signal to recommend the `delivery` mission for that
+work rather than to add process here.
