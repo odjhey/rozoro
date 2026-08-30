@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rozoro fleet timeline &amp; outcomes</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7;
+    --series-1: #2a78d6; --idle: #b3b1a9;
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --border: rgba(11,11,11,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835;
+      --series-1: #3987e5; --idle: #55544f;
+      --border: rgba(255,255,255,0.10);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink-1);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 24px 64px; max-width: 1120px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; font-weight: 650; }
+  .sub { color: var(--ink-2); margin-top: 4px; margin-bottom: 24px; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+          padding: 14px 18px; flex: 1 1 180px; min-width: 160px; }
+  .tile .label { color: var(--ink-2); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .note { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+          padding: 20px 22px 16px; margin-bottom: 24px; }
+  .card h2 { font-size: 16px; font-weight: 650; }
+  .card .desc { color: var(--ink-2); font-size: 13px; margin: 2px 0 16px; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 880px) { .twocol { grid-template-columns: 1fr; } }
+  svg text { fill: var(--ink-muted); font: 11.5px system-ui, sans-serif; }
+  .cols { display: flex; align-items: flex-end; gap: 10px; height: 190px; padding-top: 18px; }
+  .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .col .cap { color: var(--ink-1); font-size: 12px; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+  .col .cbar { width: 100%; max-width: 24px; background: var(--series-1); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .col .clab { color: var(--ink-muted); font-size: 11px; margin-top: 6px; border-top: 1px solid var(--baseline);
+               padding-top: 4px; width: 100%; text-align: center; line-height: 1.35; }
+  .tl-wrap { max-height: 560px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; position: relative; }
+  .tl-axis { position: sticky; top: 0; z-index: 2; background: var(--surface-1);
+             display: grid; grid-template-columns: 210px 1fr; border-bottom: 1px solid var(--baseline); }
+  .tl-axis .ticks { position: relative; height: 26px; }
+  .tl-axis .tick { position: absolute; bottom: 4px; transform: translateX(-50%); color: var(--ink-muted);
+                   font-size: 11px; white-space: nowrap; }
+  .tl-row { display: grid; grid-template-columns: 210px 1fr; align-items: center; height: 15px; }
+  .tl-row:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+  .tl-row .name { color: var(--ink-2); font-size: 11px; padding: 0 10px 0 8px; text-align: right;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-row .lane { position: relative; height: 100%; }
+  .lane .span { position: absolute; top: 6px; height: 3px; background: var(--idle); border-radius: 2px; }
+  .lane .turn { position: absolute; top: 3px; height: 9px; background: var(--series-1); border-radius: 2px; min-width: 2px; }
+  .lane .grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+  .legend { display: flex; gap: 18px; color: var(--ink-2); font-size: 12.5px; margin-bottom: 12px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .brk { display: flex; flex-direction: column; gap: 8px; }
+  .brk .item { display: grid; grid-template-columns: 130px 1fr 40px; align-items: center; gap: 10px; font-size: 13px; }
+  .brk .lab { color: var(--ink-2); display: flex; align-items: center; gap: 7px; }
+  .brk .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .brk .track { height: 12px; display: flex; align-items: center; }
+  .brk .fill { height: 12px; border-radius: 0 3px 3px 0; min-width: 2px; }
+  .brk .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-1); }
+  .tooltip { position: fixed; z-index: 10; display: none; pointer-events: none;
+    background: var(--surface-1); color: var(--ink-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.55;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18); max-width: 420px; }
+  .tooltip .tt-id { font-weight: 600; word-break: break-all; }
+  .tooltip .tt-dim { color: var(--ink-2); }
+  .foot { color: var(--ink-muted); font-size: 12.5px; margin-top: 20px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<h1>Rozoro fleet timeline &amp; outcomes</h1>
+<div class="sub">Concurrency, routing-latency trend, and current task outcomes — from <code>~/.rozoro/monitor.db</code>. Generated __GENERATED__.</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="card">
+  <h2>Concurrent active turns</h2>
+  <div class="desc">How many crew turns ran at once. Flat-at-one stretches are serialization — work that could have fanned out but ran back-to-back.</div>
+  <div id="conc"></div>
+</div>
+
+<div class="card">
+  <h2>Driver reaction gap — trend</h2>
+  <div class="desc">Median <code>turn.stop</code> → next <code>turn.start</code> gap per 6-hour window. A rising trend means Watchtower attention is saturating as the fleet grows.</div>
+  <div class="cols" id="trend"></div>
+</div>
+
+<div class="card">
+  <h2>Fleet timeline</h2>
+  <div class="desc">One lane per task, ordered by first activity. Blue segments are matched turns; the thin gray line is the task's tracked span.</div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--series-1)"></i>Turn (active)</span>
+    <span><i class="sw" style="background:var(--idle); height:4px; vertical-align:2px;"></i>Tracked span</span>
+  </div>
+  <div class="tl-wrap" id="timeline"></div>
+</div>
+
+<div class="card">
+  <h2>Current outcomes</h2>
+  <div class="desc">Latest projection per task — where the fleet's 183 tracked tasks stand right now. The malformed-report count is a protocol-health smell worth chasing.</div>
+  <div class="twocol" style="gap: 32px;">
+    <div>
+      <h3 style="font-size:13.5px; color:var(--ink-2); margin-bottom:10px;">Verdict</h3>
+      <div class="brk" id="brk-verdict"></div>
+      <h3 style="font-size:13.5px; color:var(--ink-2); margin:18px 0 10px;">Report state</h3>
+      <div class="brk" id="brk-report"></div>
+    </div>
+    <div>
+      <h3 style="font-size:13.5px; color:var(--ink-2); margin-bottom:10px;">Runtime availability</h3>
+      <div class="brk" id="brk-avail"></div>
+      <h3 style="font-size:13.5px; color:var(--ink-2); margin:18px 0 10px;">Actionable reason</h3>
+      <div class="brk" id="brk-reason"></div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  Coverage: events since the event-bus cutover (2026-08-24). Turn lanes show only strictly matched
+  turn pairs; unpaired (interrupted/running) turns are absent. Outcome counts are current projections,
+  not history.
+</div>
+
+<div class="tooltip" id="tt"></div>
+
+<script>
+const D = __DATA__;
+const T0 = new Date(D.t0);
+const fmtMin = m => m >= 90 ? (m/60).toFixed(1) + ' h' : Math.round(m) + ' min';
+const shortName = id => id.replace(/--[0-9A-Z]{26}$/, '');
+const atMin = m => new Date(T0.getTime() + m * 60000);
+const fmtClock = m => {
+  const d = atMin(m);
+  return d.toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'UTC'});
+};
+const tt = document.getElementById('tt');
+function tip(e, html) {
+  tt.innerHTML = html; tt.style.display = 'block';
+  const pad = 14; let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + tt.offsetWidth > innerWidth - 8) x = e.clientX - tt.offsetWidth - pad;
+  if (y + tt.offsetHeight > innerHeight - 8) y = e.clientY - tt.offsetHeight - pad;
+  tt.style.left = x + 'px'; tt.style.top = y + 'px';
+}
+const hide = () => tt.style.display = 'none';
+
+const SPAN = D.span_min;
+const tickStep = 360; // 6h
+const ticks = []; for (let t = 0; t <= SPAN; t += tickStep) ticks.push(t);
+
+/* KPIs */
+const lastTrend = D.gap_trend.at(-1), firstTrend = D.gap_trend[0];
+document.getElementById('kpis').innerHTML = [
+  ['Observed window', fmtMin(SPAN), fmtClock(0) + ' → ' + fmtClock(SPAN) + ' UTC'],
+  ['Peak concurrency', D.max_concurrency + ' turns', 'crew turns running at once'],
+  ['Gap trend', firstTrend.median + ' → ' + lastTrend.median + ' min', 'median reaction gap, first vs latest 6h'],
+  ['Malformed reports', D.report_state.find(r => r.label === 'malformed')?.count ?? 0, 'of ' + D.report_state.reduce((s,r)=>s+r.count,0) + ' tracked tasks'],
+].map(([l,v,n]) =>
+  '<div class="tile"><div class="label">' + l + '</div><div class="value">' + v + '</div><div class="note">' + n + '</div></div>'
+).join('');
+
+/* Concurrency step chart (SVG) */
+(function() {
+  const W = 1020, H = 190, padL = 30, padB = 24, padT = 12;
+  const pw = W - padL - 8, ph = H - padT - padB;
+  const x = m => padL + m / SPAN * pw;
+  const y = v => padT + ph - v / D.max_concurrency * ph;
+  let path = 'M' + x(0) + ' ' + y(0);
+  let area = 'M' + x(0) + ' ' + y(0);
+  let prev = 0;
+  D.concurrency.forEach(([t, v]) => {
+    path += ' L' + x(t).toFixed(1) + ' ' + y(prev).toFixed(1) + ' L' + x(t).toFixed(1) + ' ' + y(v).toFixed(1);
+    area += ' L' + x(t).toFixed(1) + ' ' + y(prev).toFixed(1) + ' L' + x(t).toFixed(1) + ' ' + y(v).toFixed(1);
+    prev = v;
+  });
+  path += ' L' + x(SPAN).toFixed(1) + ' ' + y(prev).toFixed(1);
+  area += ' L' + x(SPAN).toFixed(1) + ' ' + y(prev).toFixed(1) + ' L' + x(SPAN).toFixed(1) + ' ' + y(0) + ' Z';
+  const gridY = [];
+  for (let v = 2; v <= D.max_concurrency; v += 2) gridY.push(v);
+  const svg =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%; display:block;" id="concsvg">' +
+    gridY.map(v => '<line x1="' + padL + '" x2="' + (W-8) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="var(--grid)" stroke-width="1"/>' +
+                   '<text x="' + (padL-6) + '" y="' + (y(v)+4) + '" text-anchor="end">' + v + '</text>').join('') +
+    '<line x1="' + padL + '" x2="' + (W-8) + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="var(--baseline)" stroke-width="1"/>' +
+    ticks.map((t,i) => '<text x="' + x(t) + '" y="' + (H-6) + '" text-anchor="' + (i === 0 ? 'start' : 'middle') + '">' + fmtClock(t) + '</text>').join('') +
+    '<path d="' + area + '" fill="var(--series-1)" opacity="0.1"/>' +
+    '<path d="' + path + '" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"/>' +
+    '<line id="ch" x1="0" x2="0" y1="' + padT + '" y2="' + y(0) + '" stroke="var(--baseline)" stroke-width="1" visibility="hidden"/>' +
+    '</svg>';
+  const el = document.getElementById('conc');
+  el.innerHTML = svg;
+  const node = document.getElementById('concsvg'), ch = document.getElementById('ch');
+  node.addEventListener('mousemove', e => {
+    const r = node.getBoundingClientRect();
+    const mx = (e.clientX - r.left) / r.width * W;
+    const t = Math.max(0, Math.min(SPAN, (mx - padL) / pw * SPAN));
+    let v = 0;
+    for (const [tm, val] of D.concurrency) { if (tm <= t) v = val; else break; }
+    ch.setAttribute('x1', x(t)); ch.setAttribute('x2', x(t)); ch.setAttribute('visibility', 'visible');
+    tip(e, '<div class="tt-id">' + fmtClock(t) + ' UTC</div><div><span class="tt-dim">concurrent turns</span> ' + v + '</div>');
+  });
+  node.addEventListener('mouseleave', () => { ch.setAttribute('visibility', 'hidden'); hide(); });
+})();
+
+/* Gap trend columns */
+(function() {
+  const el = document.getElementById('trend');
+  const max = Math.max(...D.gap_trend.map(b => b.median));
+  el.innerHTML = D.gap_trend.map(b =>
+    '<div class="col"><div class="cap">' + b.median + '</div>' +
+    '<div class="cbar" style="height:' + (b.median/max*100) + '%"></div>' +
+    '<div class="clab">' + fmtClock(b.bucket) + '<br>n=' + b.n + '</div></div>').join('');
+})();
+
+/* Timeline */
+(function() {
+  const el = document.getElementById('timeline');
+  const axis = '<div class="tl-axis"><div></div><div class="ticks">' +
+    ticks.map(t => '<div class="tick" style="left:' + (t/SPAN*100) + '%">' + fmtClock(t) + '</div>').join('') +
+    '</div></div>';
+  const rows = D.tasks.map(d => {
+    const spanW = Math.max(0.15, (d.last - d.first) / SPAN * 100);
+    return '<div class="tl-row" data-id="' + d.id + '"><div class="name" title="' + d.id + '">' + shortName(d.id) + '</div>' +
+      '<div class="lane">' +
+      ticks.slice(1).map(t => '<div class="grid" style="left:' + (t/SPAN*100) + '%"></div>').join('') +
+      '<div class="span" style="left:' + (d.first/SPAN*100) + '%; width:' + spanW + '%"></div>' +
+      d.turns.map(([s,e]) => '<div class="turn" style="left:' + (s/SPAN*100) + '%; width:' +
+        Math.max(0.12, (e-s)/SPAN*100) + '%"></div>').join('') +
+      '</div></div>';
+  }).join('');
+  el.innerHTML = axis + rows;
+  const byId = Object.fromEntries(D.tasks.map(d => [d.id, d]));
+  el.addEventListener('mousemove', e => {
+    const row = e.target.closest('.tl-row');
+    if (!row) { hide(); return; }
+    const d = byId[row.dataset.id];
+    const active = d.turns.reduce((s,[a,b]) => s + (b-a), 0);
+    tip(e, '<div class="tt-id">' + d.id + '</div>' +
+      '<div><span class="tt-dim">span</span> ' + fmtClock(d.first) + ' → ' + fmtClock(d.last) + '</div>' +
+      '<div><span class="tt-dim">turns</span> ' + d.turns.length + ' &nbsp;<span class="tt-dim">active</span> ' + fmtMin(active) + '</div>');
+  });
+  el.addEventListener('mouseleave', hide);
+})();
+
+/* Outcome breakdowns */
+const STATUS = {
+  done: 'var(--good)', valid: 'var(--good)',
+  failed: 'var(--critical)', malformed: 'var(--critical)',
+  blocked: 'var(--serious)', missing: 'var(--serious)', 'needs-action': 'var(--warning)',
+  'malformed-report': 'var(--critical)', 'missing-report': 'var(--serious)',
+};
+function renderBrk(el, rows, statusColored) {
+  const max = Math.max(...rows.map(r => r.count));
+  el.innerHTML = rows.map(r => {
+    const c = statusColored ? (STATUS[r.label] || 'var(--idle)') : 'var(--series-1)';
+    return '<div class="item">' +
+      '<div class="lab"><span class="dot" style="background:' + c + '"></span>' + r.label + '</div>' +
+      '<div class="track"><div class="fill" style="background:' + c + '; width:' + (r.count/max*100) + '%"></div></div>' +
+      '<div class="n">' + r.count + '</div></div>';
+  }).join('');
+}
+renderBrk(document.getElementById('brk-verdict'), D.verdict, true);
+renderBrk(document.getElementById('brk-report'), D.report_state, true);
+renderBrk(document.getElementById('brk-avail'), D.availability, false);
+renderBrk(document.getElementById('brk-reason'), D.actionable_reason, true);
+</script>
+</body>
+</html>

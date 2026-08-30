@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rozoro task durations</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7;
+    --series-1: #2a78d6;
+    --idle: #b3b1a9;
+    --border: rgba(11,11,11,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835;
+      --series-1: #3987e5;
+      --idle: #55544f;
+      --border: rgba(255,255,255,0.10);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink-1);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 24px 64px; max-width: 1080px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; font-weight: 650; }
+  .sub { color: var(--ink-2); margin-top: 4px; margin-bottom: 24px; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; flex: 1 1 180px; min-width: 160px;
+  }
+  .tile .label { color: var(--ink-2); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .note { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px 16px; margin-bottom: 24px;
+  }
+  .card h2 { font-size: 16px; font-weight: 650; }
+  .card .desc { color: var(--ink-2); font-size: 13px; margin: 2px 0 16px; }
+  .chart { position: relative; }
+  .row { display: grid; grid-template-columns: 230px 1fr; align-items: center; min-height: 26px; cursor: default; }
+  .row:hover { background: color-mix(in srgb, var(--series-1) 7%, transparent); border-radius: 6px; }
+  .row .name {
+    color: var(--ink-2); font-size: 13px; padding-right: 12px; text-align: right;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row .track { position: relative; height: 26px; display: flex; align-items: center; border-left: 1px solid var(--baseline); }
+  .row .bar {
+    height: 16px; background: var(--series-1);
+    border-radius: 0 4px 4px 0; min-width: 2px;
+  }
+  .row .val { color: var(--ink-1); font-size: 12.5px; margin-left: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .axis { display: grid; grid-template-columns: 230px 1fr; margin-top: 6px; }
+  .axis .ticks { position: relative; height: 18px; border-left: 1px solid var(--baseline); }
+  .axis .tick { position: absolute; top: 0; transform: translateX(-50%); color: var(--ink-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .gridlines { position: absolute; inset: 0; pointer-events: none; }
+  .gridline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+  .tooltip {
+    position: fixed; z-index: 10; display: none; pointer-events: none;
+    background: var(--surface-1); color: var(--ink-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.55;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18); max-width: 420px;
+  }
+  .tooltip .tt-id { font-weight: 600; word-break: break-all; }
+  .tooltip .tt-dim { color: var(--ink-2); }
+  .tablewrap { overflow-x: auto; max-height: 520px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--surface-1); color: var(--ink-2); font-weight: 600; cursor: pointer; user-select: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.id { max-width: 420px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); }
+  .foot { color: var(--ink-muted); font-size: 12.5px; margin-top: 20px; line-height: 1.6; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 860px) { .twocol { grid-template-columns: 1fr; } }
+  .legend { display: flex; gap: 18px; color: var(--ink-2); font-size: 12.5px; margin-bottom: 12px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .cols { display: flex; align-items: flex-end; gap: 10px; height: 190px; padding-top: 18px; }
+  .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; cursor: default; }
+  .col .cap { color: var(--ink-1); font-size: 12px; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+  .col .cbar { width: 100%; max-width: 24px; background: var(--series-1); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .col .clab { color: var(--ink-muted); font-size: 11.5px; margin-top: 6px; border-top: 1px solid var(--baseline); padding-top: 4px; width: 100%; text-align: center; }
+  .seg { height: 16px; min-width: 0; }
+  .seg.active { background: var(--series-1); }
+  .seg.idle { background: var(--idle); margin-left: 2px; }
+  .seg.rounded { border-radius: 0 4px 4px 0; }
+</style>
+</head>
+<body>
+<h1>Rozoro task durations</h1>
+<div class="sub">Which tasks took the longest — from the daemon event log (<code>~/.rozoro/monitor.db</code>, <code>events</code> table). Generated __GENERATED__.</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="card">
+  <h2>Longest wall-clock span — top 20</h2>
+  <div class="desc">First event to last event per task. Includes idle time waiting on driver routing, so a long bar can mean queueing, not work.</div>
+  <div class="chart" id="chart-wall"></div>
+</div>
+
+<div class="card">
+  <h2>Most active turn time — top 20</h2>
+  <div class="desc">Sum of matched <code>turn.start</code> → <code>turn.stop</code> pairs (exact turn id). Unpaired turns are excluded and flagged in the table.</div>
+  <div class="chart" id="chart-active"></div>
+</div>
+
+<h1 style="font-size:18px; margin: 32px 0 4px;">Where to improve</h1>
+<div class="sub">Signals derived from the same event log that point at fixable overhead.</div>
+
+<div class="kpis" id="kpis2"></div>
+
+<div class="twocol">
+  <div class="card">
+    <h2>Driver reaction gaps</h2>
+    <div class="desc">Time from <code>turn.stop</code> to the next <code>turn.start</code> on the same task — how long finished work waits for the Watchtower to route it. Shrinking this is the cheapest speedup.</div>
+    <div class="cols" id="hist-gaps"></div>
+  </div>
+  <div class="card">
+    <h2>Turn lengths</h2>
+    <div class="desc">Duration of matched turns. The 30&nbsp;min+ tail marks turns worth splitting or routing to a Quick Crew.</div>
+    <div class="cols" id="hist-turns"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Where the time goes — top 15 by wall clock</h2>
+  <div class="desc">Active work vs idle waiting per task. A mostly-gray bar means the task was queued, not slow.</div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--series-1)"></i>Active</span>
+    <span><i class="sw" style="background:var(--idle)"></i>Idle / waiting</span>
+  </div>
+  <div class="chart" id="chart-split"></div>
+</div>
+
+<div class="twocol">
+  <div class="card">
+    <h2>Active time by model profile</h2>
+    <div class="desc">Total active minutes per crew profile (from each task's <code>session.json</code>). Hover for per-turn averages — a cheaper profile with similar per-turn time is a reallocation candidate.</div>
+    <div class="chart" id="chart-profiles"></div>
+  </div>
+  <div class="card">
+    <h2>Most turns per task</h2>
+    <div class="desc">High turn counts flag rework loops — tasks that kept bouncing between crew and driver.</div>
+    <div class="chart" id="chart-churn"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>All tasks</h2>
+  <div class="desc">Every task with events, sortable — click a column header. Wall minus active ≈ time spent idle or waiting on the driver.</div>
+  <div class="tablewrap"><table id="tbl">
+    <thead><tr>
+      <th data-k="task_id">Task</th>
+      <th class="num" data-k="wall_min">Wall (min)</th>
+      <th class="num" data-k="active_min">Active (min)</th>
+      <th class="num" data-k="idle">Idle (min)</th>
+      <th class="num" data-k="paired_turns">Turns</th>
+      <th class="num" data-k="unpaired_turns">Unpaired</th>
+      <th data-k="first_seen">First seen</th>
+      <th data-k="last_seen">Last seen</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+</div>
+
+<div class="foot">
+  Coverage: tasks with events since the event-bus cutover (2026-08-24); earlier tasks have no event history.
+  Times are daemon receipt times. Active time only counts turns with exactly one start and one matching stop —
+  interrupted or still-running turns are excluded (see the Unpaired column).
+</div>
+
+<div class="tooltip" id="tt"></div>
+
+<script>
+const DATA = __DATA__;
+DATA.forEach(d => d.idle = Math.max(0, +(d.wall_min - d.active_min).toFixed(1)));
+
+const fmtMin = m => m >= 90 ? (m/60).toFixed(1) + ' h' : m.toFixed(0) + ' min';
+const shortName = id => id.replace(/--[0-9A-Z]{26}$/, '');
+const fmtTs = s => s ? s.replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '';
+
+const tt = document.getElementById('tt');
+function showTip(e, d) {
+  tt.innerHTML =
+    '<div class="tt-id">' + d.task_id + '</div>' +
+    '<div><span class="tt-dim">wall</span> ' + fmtMin(d.wall_min) +
+    ' &nbsp;<span class="tt-dim">active</span> ' + fmtMin(d.active_min) +
+    ' &nbsp;<span class="tt-dim">idle</span> ' + fmtMin(d.idle) + '</div>' +
+    '<div><span class="tt-dim">turns</span> ' + d.paired_turns +
+    (d.unpaired_turns ? ' <span class="tt-dim">(+' + d.unpaired_turns + ' unpaired)</span>' : '') + '</div>' +
+    '<div class="tt-dim">' + fmtTs(d.first_seen) + ' → ' + fmtTs(d.last_seen) + '</div>';
+  tt.style.display = 'block';
+  const pad = 14, w = tt.offsetWidth, h = tt.offsetHeight;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + w > innerWidth - 8) x = e.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = e.clientY - h - pad;
+  tt.style.left = x + 'px'; tt.style.top = y + 'px';
+}
+function hideTip() { tt.style.display = 'none'; }
+
+function niceTicks(max) {
+  const steps = [15, 30, 60, 120, 180, 240, 360, 480, 600];
+  const step = steps.find(s => max / s <= 5) || 600;
+  const ticks = [];
+  for (let v = 0; v <= max; v += step) ticks.push(v);
+  return ticks;
+}
+
+function renderChart(el, rows, key) {
+  const max = Math.max(...rows.map(d => d[key]));
+  const scaleMax = niceTicks(max).at(-1) === max ? max : Math.max(max, niceTicks(max).at(-1));
+  const ticks = niceTicks(max);
+  const frag = document.createDocumentFragment();
+  rows.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const pct = (d[key] / scaleMax * 100).toFixed(2);
+    row.innerHTML =
+      '<div class="name" title="' + d.task_id + '">' + shortName(d.task_id) + '</div>' +
+      '<div class="track">' +
+        '<div class="gridlines">' + ticks.slice(1).map(t =>
+          '<div class="gridline" style="left:' + (t/scaleMax*100) + '%"></div>').join('') + '</div>' +
+        '<div class="bar" style="width:' + pct + '%"></div>' +
+        '<div class="val">' + fmtMin(d[key]) + '</div>' +
+      '</div>';
+    row.addEventListener('mousemove', e => showTip(e, d));
+    row.addEventListener('mouseleave', hideTip);
+    frag.appendChild(row);
+  });
+  const hours = ticks.at(-1) >= 90;
+  const fmtTick = t => t === 0 ? '0' : hours ? (t/60).toFixed(t % 60 ? 1 : 0) + ' h' : t + ' min';
+  const axis = document.createElement('div');
+  axis.className = 'axis';
+  axis.innerHTML = '<div></div><div class="ticks">' + ticks.map(t =>
+    '<div class="tick" style="left:' + (t/scaleMax*100) + '%">' + fmtTick(t) + '</div>').join('') + '</div>';
+  frag.appendChild(axis);
+  el.appendChild(frag);
+}
+
+renderChart(document.getElementById('chart-wall'),
+  [...DATA].sort((a,b) => b.wall_min - a.wall_min).slice(0, 20), 'wall_min');
+renderChart(document.getElementById('chart-active'),
+  [...DATA].sort((a,b) => b.active_min - a.active_min).slice(0, 20), 'active_min');
+
+const totalActive = DATA.reduce((s,d) => s + d.active_min, 0);
+const unpaired = DATA.reduce((s,d) => s + d.unpaired_turns, 0);
+const longestWall = [...DATA].sort((a,b) => b.wall_min - a.wall_min)[0];
+const longestActive = [...DATA].sort((a,b) => b.active_min - a.active_min)[0];
+document.getElementById('kpis').innerHTML = [
+  ['Tasks tracked', DATA.length, 'with events since cutover'],
+  ['Longest wall', fmtMin(longestWall.wall_min), shortName(longestWall.task_id)],
+  ['Most active', fmtMin(longestActive.active_min), shortName(longestActive.task_id)],
+  ['Fleet active time', fmtMin(totalActive), unpaired + ' unpaired turns excluded'],
+].map(([l,v,n]) =>
+  '<div class="tile"><div class="label">' + l + '</div><div class="value">' + v + '</div><div class="note">' + n + '</div></div>'
+).join('');
+
+const IMP = __IMPROVE__;
+
+const wallShare = DATA.reduce((s,d)=>s+d.wall_min,0);
+const idleShare = DATA.reduce((s,d)=>s+d.idle,0);
+document.getElementById('kpis2').innerHTML = [
+  ['Median reaction gap', IMP.gap_stats.median + ' min', 'turn.stop → next turn.start, n=' + IMP.gap_stats.n],
+  ['p90 reaction gap', IMP.gap_stats.p90 + ' min', 'worst-decile routing wait'],
+  ['Median turn', IMP.turn_stats.median + ' min', 'p90 ' + IMP.turn_stats.p90 + ' min, n=' + IMP.turn_stats.n],
+  ['Idle share of wall time', Math.round(idleShare/wallShare*100) + '%', 'across all tracked tasks'],
+].map(([l,v,n]) =>
+  '<div class="tile"><div class="label">' + l + '</div><div class="value">' + v + '</div><div class="note">' + n + '</div></div>'
+).join('');
+
+function renderHist(el, buckets) {
+  const max = Math.max(...buckets.map(b => b.count));
+  el.innerHTML = buckets.map(b =>
+    '<div class="col"><div class="cap">' + b.count + '</div>' +
+    '<div class="cbar" style="height:' + (b.count/max*100) + '%"></div>' +
+    '<div class="clab">' + b.label + '</div></div>').join('');
+}
+renderHist(document.getElementById('hist-gaps'), IMP.gap_hist);
+renderHist(document.getElementById('hist-turns'), IMP.turn_hist);
+
+(function renderSplit() {
+  const rows = [...DATA].sort((a,b) => b.wall_min - a.wall_min).slice(0, 15);
+  const max = Math.max(...rows.map(d => d.wall_min));
+  const el = document.getElementById('chart-split');
+  rows.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const aw = (d.active_min/max*100).toFixed(2), iw = (d.idle/max*100).toFixed(2);
+    row.innerHTML =
+      '<div class="name" title="' + d.task_id + '">' + shortName(d.task_id) + '</div>' +
+      '<div class="track">' +
+        '<div class="seg active' + (d.idle < 0.05 ? ' rounded' : '') + '" style="width:' + aw + '%"></div>' +
+        '<div class="seg idle rounded" style="width:' + iw + '%"></div>' +
+        '<div class="val">' + Math.round(d.wall_min ? d.idle/d.wall_min*100 : 0) + '% idle</div>' +
+      '</div>';
+    row.addEventListener('mousemove', e => showTip(e, d));
+    row.addEventListener('mouseleave', hideTip);
+    el.appendChild(row);
+  });
+})();
+
+function renderSimpleBars(el, rows, valueKey, labelKey, fmt, tipHtml) {
+  const max = Math.max(...rows.map(r => r[valueKey]));
+  rows.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.gridTemplateColumns = '150px 1fr';
+    row.innerHTML =
+      '<div class="name" title="' + r[labelKey] + '">' + r[labelKey] + '</div>' +
+      '<div class="track">' +
+        '<div class="bar" style="width:' + (r[valueKey]/max*100).toFixed(2) + '%"></div>' +
+        '<div class="val">' + fmt(r) + '</div>' +
+      '</div>';
+    row.addEventListener('mousemove', e => {
+      tt.innerHTML = tipHtml(r); tt.style.display = 'block';
+      const pad = 14; let x = e.clientX + pad, y = e.clientY + pad;
+      if (x + tt.offsetWidth > innerWidth - 8) x = e.clientX - tt.offsetWidth - pad;
+      if (y + tt.offsetHeight > innerHeight - 8) y = e.clientY - tt.offsetHeight - pad;
+      tt.style.left = x + 'px'; tt.style.top = y + 'px';
+    });
+    row.addEventListener('mouseleave', hideTip);
+    el.appendChild(row);
+  });
+}
+renderSimpleBars(document.getElementById('chart-profiles'),
+  IMP.profiles.filter(p => p.active > 0), 'active', 'profile',
+  r => fmtMin(r.active),
+  r => '<div class="tt-id">' + r.profile + '</div><div><span class="tt-dim">tasks</span> ' + r.tasks +
+       ' &nbsp;<span class="tt-dim">turns</span> ' + r.turns +
+       ' &nbsp;<span class="tt-dim">avg/turn</span> ' + r.avg_per_turn + ' min</div>');
+renderSimpleBars(document.getElementById('chart-churn'),
+  IMP.churn.map(c => ({...c, name: shortName(c.task_id)})), 'turns', 'name',
+  r => r.turns + ' turns',
+  r => '<div class="tt-id">' + r.task_id + '</div><div><span class="tt-dim">turns</span> ' + r.turns +
+       ' &nbsp;<span class="tt-dim">active</span> ' + fmtMin(r.active_min) + '</div>');
+
+let sortKey = 'wall_min', sortDir = -1;
+function renderTable() {
+  const tbody = document.querySelector('#tbl tbody');
+  const rows = [...DATA].sort((a,b) => {
+    const x = a[sortKey], y = b[sortKey];
+    return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sortDir;
+  });
+  tbody.innerHTML = rows.map(d =>
+    '<tr><td class="id" title="' + d.task_id + '">' + shortName(d.task_id) + '</td>' +
+    '<td class="num">' + d.wall_min.toFixed(1) + '</td>' +
+    '<td class="num">' + d.active_min.toFixed(1) + '</td>' +
+    '<td class="num">' + d.idle.toFixed(1) + '</td>' +
+    '<td class="num">' + d.paired_turns + '</td>' +
+    '<td class="num">' + (d.unpaired_turns || '') + '</td>' +
+    '<td>' + fmtTs(d.first_seen) + '</td>' +
+    '<td>' + fmtTs(d.last_seen) + '</td></tr>'
+  ).join('');
+}
+document.querySelectorAll('#tbl th').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = k === 'task_id' ? 1 : -1; }
+  renderTable();
+}));
+renderTable();
+</script>
+</body>
+</html>
