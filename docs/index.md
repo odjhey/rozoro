@@ -13,6 +13,7 @@ The README remains the operator-facing description of the current CLI. Implement
 - [Dated Watchtower artifacts](dated-watchtower-artifacts.md) — immutable policy snapshots and conservative task-evidence progress reports.
 - [Ubiquitous language](ubiquitous-language.md) — canonical terms for code, prompts, issues, reviews, and docs (the code-verified superset lives in [architecture/ubiquitous-language.md](architecture/ubiquitous-language.md)).
 - [Decisions](decisions/README.md) — ADR-lite records for decisions that constrain future work.
+- [Orchestration review (2026-08-25)](orchestration-review-2026-08-25.md) — point-in-time critique, external comparisons, and prioritized options; analysis, not decisions.
 - [Implementation plans](plans/) — historical and active implementation sequencing.
 - [Watchtower runbooks](runbooks/README.md) — reusable operator procedures with provenance and exclusions.
 
